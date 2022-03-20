@@ -297,6 +297,7 @@ if(ADIOS2_HAVE_LIBPRESSIO)
 endif()
 
 if(ADIOS2_HAVE_MGARD)
+  target_sources(adios2_core PRIVATE operator/compress/LagrangeOptimizer.cpp)
   target_sources(adios2_core PRIVATE operator/compress/CompressMGARDPlus.cpp)
   target_sources(adios2_core PRIVATE operator/compress/CompressMGARD.cpp)
   target_link_libraries(adios2_core PRIVATE mgard::mgard)
