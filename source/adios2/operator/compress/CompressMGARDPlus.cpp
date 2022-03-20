@@ -8,6 +8,8 @@
  *      Author: Jason Wang jason.ruonan.wang@gmail.com
  */
 
+#include <vector>
+#include "LagrangeOptimizer.hpp"
 #include "CompressMGARDPlus.h"
 #include "CompressMGARD.h"
 #include "adios2/core/Engine.h"
@@ -29,17 +31,10 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
                                   const Dims &blockCount, const DataType type,
                                   char *bufferOut)
 {
-
-    // Read ADIOS2 files from here
-    adios2::core::ADIOS adios("C++");
-    auto &io = adios.DeclareIO("SubIO");
-    auto *engine = &io.Open(m_Parameters["MeshFile"], adios2::Mode::Read);
-    auto var = io.InquireVariable<float>(m_Parameters["MeshVariable"]);
-    std::vector<float> data(std::accumulate(var->m_Shape.begin(),
-                                            var->m_Shape.end(), sizeof(float),
-                                            std::multiplies<size_t>()));
-    engine->Get(*var, data);
+    // Instantiate LagrangeOptimizer
+    LagrangeOptimizer optim;
     // Read ADIOS2 files end, use data for your algorithm
+    optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,  reinterpret_cast<const double*>(dataIn));
 
     size_t bufferOutOffset = 0;
     const uint8_t bufferVersion = 1;
@@ -70,6 +65,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
             // TODO: use reinterpret_cast<double*>(dataIn) and
             // reinterpret_cast<double*>(tmpDecompressBuffer.data())
             // to read original data and decompressed data
+            std::vector <double> lagrangeParameters = optim.
+              computeLagrangeParameters(reinterpret_cast<const double*>(
+                    tmpDecompressBuffer.data()));
         }
         else if (type == DataType::Float || type == DataType::FloatComplex)
         {
