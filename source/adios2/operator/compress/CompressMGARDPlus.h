@@ -61,8 +61,8 @@ private:
      * @param dataOut : decompressed data buffer
      * @return : number of bytes in dataOut
      */
-    size_t DecompressV1(const char *bufferIn, const size_t bufferInOffset,
-        const size_t mgardDataSize, const size_t sizeIn, char *dataOut);
+    size_t DecompressV1(const char *bufferIn, size_t bufferInOffset,
+        const size_t sizeIn, char *dataOut);
 
     std::string m_VersionInfo;
 };
