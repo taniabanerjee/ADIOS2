@@ -1,3 +1,5 @@
+#include <time.h>
+#include <assert.h>
 #include "LagrangeOptimizer.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
@@ -17,6 +19,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
      adios2::Dims blockStart, adios2::Dims blockCount,
      const double* dataIn)
 {
+    clock_t start = clock();
     int planeIndex = 0;
     int nodeIndex = 2;
     int velXIndex = 1;
@@ -27,6 +30,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     myPlaneCount = blockCount[planeIndex];
     myVxCount = blockCount[velXIndex];
     myVyCount = blockCount[velYIndex];
+    printf("#planes: %d, #nodes: %d, #vx: %d, #vy: %d\n", myPlaneCount, myNodeCount, myVxCount, myVyCount);
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
     myDataIn = dataIn;
     readF0Params(meshFile);
@@ -34,13 +38,15 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     setVp();
     setMuQoi();
     setVth2();
+    printf ("volume: gv %d f0_nvp %d f0_nmu %d, vp: %d, vth: %d, vth2: %d, mu_qoi: %d\n", myGridVolume.size(), myF0Nvp.size(), myF0Nmu.size(), myVp.size(), myVth.size(), myVth2.size(), myMuQoi.size());
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        compute_C_qois(iphi);
+        compute_C_qois(iphi, myDensity, myUpara, myTperp, myTpara, myN0, myT0, myDataIn);
     }
     myMaxValue = 0;
     for (size_t i = 0; i < myLocalElements; ++i) {
         myMaxValue = (myMaxValue > myDataIn[i]) ? myMaxValue : myDataIn[i];
     }
+    printf ("Time Taken for QoI Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
 }
 
 std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
@@ -53,7 +59,6 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
             ((double*)reconData)[ii] = 100;
         }
     }
-    std::vector <double> lagranges;
     double* breg_recon = new double[myLocalElements];
     int count = 0;
     double gradients[4] = {0.0, 0.0, 0.0, 0.0};
@@ -168,10 +173,10 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
                         }
                         printf ("Mytperp %d\n", mytperp[0]);
                         */
-                        lagranges.push_back(lambdas[0]);
-                        lagranges.push_back(lambdas[1]);
-                        lagranges.push_back(lambdas[2]);
-                        lagranges.push_back(lambdas[3]);
+                        myLagranges.push_back(lambdas[0]);
+                        myLagranges.push_back(lambdas[1]);
+                        myLagranges.push_back(lambdas[2]);
+                        myLagranges.push_back(lambdas[3]);
 #ifdef UF_DEBUG
                         if (idx % 2000 == 0) {
                             printf ("node %d finished\n", idx);
@@ -183,10 +188,10 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
                         for (i=0; i<myVxCount*myVyCount; ++i) {
                             breg_recon[breg_index++] = recon_one[i];
                         }
-                        lagranges.push_back(lambdas[0]);
-                        lagranges.push_back(lambdas[1]);
-                        lagranges.push_back(lambdas[2]);
-                        lagranges.push_back(lambdas[3]);
+                        myLagranges.push_back(lambdas[0]);
+                        myLagranges.push_back(lambdas[1]);
+                        myLagranges.push_back(lambdas[2]);
+                        myLagranges.push_back(lambdas[3]);
                         printf ("Node %d did not converge\n", idx);
                         count_unLag = count_unLag + 1;
                         node_unconv.push_back(idx);
@@ -285,7 +290,143 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
             }
         }
     }
-    return lagranges;
+    printf ("Time Taken for Optimization Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    compareQoIs(reconData, breg_recon);
+    return myLagranges;
+}
+
+long unsigned int LagrangeOptimizer::getParameterSize()
+{
+    return myNodeCount * 4 * sizeof(double);
+}
+
+// Get the number of bytes needed to store the PQ table
+long unsigned int LagrangeOptimizer::getTableSize()
+{
+    return 0;
+}
+
+size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
+{
+    // TODO: after your algorithm is done, put the result into
+    // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
+    // double number *reinterpret_cast<double*>(bufferOut+bufferOutOff      set+8)
+    // for your second double number and so on
+
+    int count = 0;
+    for (double d : myLagranges) {
+          *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
+    }
+    int lagrangeCount = count;
+    // Access grid_vol with an offset of nodes to get to the electrons
+    int elements = 0;
+    for (double d : myGridVolume) {
+        if (elements < myNodeCount) {
+            elements++;
+            continue;
+        }
+        *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
+        if (count == lagrangeCount+myNodeCount) {
+             printf("Grid vol element %f\n", d);
+        }
+    }
+    // Access f0_t_ev with an offset of nodes to get to the electrons
+    elements = 0;
+    for (double d : myF0TEv) {
+        if (elements < myNodeCount) {
+            elements++;
+            continue;
+        }
+        *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
+    }
+    *reinterpret_cast<double*>(
+        bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dvp[0];
+    *reinterpret_cast<double*>(
+        bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dsmu[0];
+    int doubleCount = count*sizeof(double);
+    *reinterpret_cast<int*>(
+        bufferOut+bufferOutOffset+doubleCount) = myF0Nvp[0];
+    *reinterpret_cast<int*>(
+        bufferOut+bufferOutOffset+doubleCount+sizeof(int)) = myF0Nmu[0];
+    return doubleCount + 2*sizeof(int);
+}
+
+void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
+    const char* bufferIn, size_t bufferOffset, size_t totalSize)
+{
+    size_t bufferSize = totalSize - bufferOffset;
+    int i;
+    // Assuming the Lagrange parameters are stored as double numbers
+    // This will change as we add quantization
+    // Find node size
+    myNodeCount = int((bufferSize-2*sizeof(double)-2*sizeof(int))/(6*sizeof(double)));
+    int numLagrangeParameters = myNodeCount*4;
+    for (i=0; i<numLagrangeParameters; ++i) {
+        myLagranges.push_back(*reinterpret_cast<const double*>(bufferIn+bufferOffset+i*sizeof(double)));
+    }
+    bufferOffset += i*sizeof(double);
+    for (i=0; i<myNodeCount; ++i) {
+        myGridVolume.push_back(*reinterpret_cast<const double*>(bufferIn+bufferOffset+i*sizeof(double)));
+    }
+    bufferOffset += i*sizeof(double);
+    for (i=0; i<myNodeCount; ++i) {
+        myF0TEv.push_back(*reinterpret_cast<const double*>(bufferIn+bufferOffset+i*sizeof(double)));
+    }
+    bufferOffset += i*sizeof(double);
+    myF0Dvp.push_back(*reinterpret_cast<const double*>(bufferIn+bufferOffset));
+    myF0Dsmu.push_back(*reinterpret_cast<const double*>(bufferIn+bufferOffset+sizeof(double)));
+    myF0Nvp.push_back(*reinterpret_cast<const int*>(bufferIn+bufferOffset+2*sizeof(double)));
+    myF0Nmu.push_back(*reinterpret_cast<const int*>(bufferIn+bufferOffset+2*sizeof(double)+sizeof(int)));
+    setVolume();
+    setVp();
+    setMuQoi();
+    setVth2();
+}
+
+void LagrangeOptimizer::readCharBuffer(const char* bufferIn, size_t bufferOffset, size_t bufferSize)
+{
+    int i;
+    // Assuming the Lagrange parameters are stored as double numbers
+    // This will change as we add quantization
+    // Find node size
+    myNodeCount = int((bufferSize-2*sizeof(double)-2*sizeof(int))/(6*sizeof(double)));
+    int numLagrangeParameters = myNodeCount*4;
+    std::vector <double> lagranges;
+    std::vector <double> gridVol;
+    std::vector <double> f0TEv;
+    double nvp, dvp, nmu, dsmu;
+    for (i=0; i<numLagrangeParameters; ++i) {
+        lagranges.push_back(*reinterpret_cast<const double*>(bufferIn+bufferOffset+i*sizeof(double)));
+    }
+    bufferOffset += i*sizeof(double);
+    for (i=0; i<myNodeCount; ++i) {
+        gridVol.push_back(*reinterpret_cast<const double*>(bufferIn+bufferOffset+i*sizeof(double)));
+        if (i == myNodeCount-1) {
+             printf("Grid vol element %f\n", *reinterpret_cast<const double*>(bufferIn+bufferOffset+i*sizeof(double)));
+        }
+    }
+    bufferOffset += i*sizeof(double);
+    for (i=0; i<myNodeCount; ++i) {
+        f0TEv.push_back(*reinterpret_cast<const double*>(bufferIn+bufferOffset+i*sizeof(double)));
+    }
+    bufferOffset += i*sizeof(double);
+    dvp = *reinterpret_cast<const double*>(bufferIn+bufferOffset);
+    dsmu = *reinterpret_cast<const double*>(bufferIn+bufferOffset+sizeof(double));
+    nvp = *reinterpret_cast<const int*>(bufferIn+bufferOffset+2*sizeof(double));
+    nmu = *reinterpret_cast<const int*>(bufferIn+bufferOffset+2*sizeof(double)+sizeof(int));
+    double error = rmseError(myLagranges, lagranges);
+    printf ("Lagrange error %f\n", error);
+    error = rmseError2(myGridVolume, gridVol, myNodeCount);
+    printf ("Grid volume error %f\n", error);
+    error = rmseError2(myF0TEv, f0TEv, myNodeCount);
+    printf ("f0_T_ev error %f\n", error);
+    printf ("Nvp error %f\n", myF0Nvp[0] - nvp);
+    printf ("Dvp error %f\n", myF0Dvp[0] - dvp);
+    printf ("Nmu error %f\n", myF0Nmu[0] - nmu);
+    printf ("Dsmu error %f\n", myF0Dsmu[0] - dsmu);
 }
 
 void LagrangeOptimizer::readF0Params(const std::string meshFile)
@@ -301,7 +442,6 @@ void LagrangeOptimizer::readF0Params(const std::string meshFile)
 
     var->SetSelection(adios2::Box<adios2::Dims>({0, myNodeOffset}, {volumeShape[0], myNodeCount}));
     engine->Get(*var, myGridVolume);
-    printf ("{0, %d}, {%d, %d}\n", myNodeOffset, volumeShape[0], myNodeCount);
 
     // Get myF0Nvp
     auto var_nvp = io.InquireVariable<int>("f0_nvp");
@@ -350,10 +490,20 @@ void LagrangeOptimizer::setVolume()
             mu_vp_vol.push_back(mu_vol[ii] * vp_vol[jj]);
         }
     }
-    for (int ii=0; ii<myNodeCount; ++ii) {
-        for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
-        // Access myGridVolume with an offset of nnodes to get to the electrons
-            myVolume.push_back(myGridVolume[myNodeCount+ii] * mu_vp_vol[jj]);
+    if (myGridVolume.size() == 2*myNodeCount) {
+        for (int ii=0; ii<myNodeCount; ++ii) {
+            for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
+            // Access myGridVolume with an offset of nnodes to get to the electrons
+                myVolume.push_back(myGridVolume[myNodeCount+ii] * mu_vp_vol[jj]);
+            }
+        }
+    }
+    else {
+        for (int ii=0; ii<myNodeCount; ++ii) {
+            for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
+            // Access myGridVolume with an offset of nnodes to get to the electrons
+                myVolume.push_back(myGridVolume[ii] * mu_vp_vol[jj]);
+            }
         }
     }
     return;
@@ -378,16 +528,30 @@ void LagrangeOptimizer::setMuQoi()
 void LagrangeOptimizer::setVth2()
 {
     double value = 0;
-    for (int ii=0; ii<myNodeCount; ++ii) {
-        // Access f0_T_ev with an offset of myNodeCount to get to the electrons
-        value = myF0TEv[myNodeCount+ii]*mySmallElectronCharge/myParticleMass;
-        myVth2.push_back(value);
-        myVth.push_back(sqrt(value));
+    if (myF0TEv.size() == 2*myNodeCount) {
+        for (int ii=0; ii<myNodeCount; ++ii) {
+            // Access f0_T_ev with an offset of myNodeCount to get to the electrons
+            value = myF0TEv[myNodeCount+ii]*mySmallElectronCharge/myParticleMass;
+            myVth2.push_back(value);
+            myVth.push_back(sqrt(value));
+        }
+    }
+    else{
+        for (int ii=0; ii<myNodeCount; ++ii) {
+            // Access f0_T_ev with an offset of myNodeCount to get to the electrons
+            value = myF0TEv[ii]*mySmallElectronCharge/myParticleMass;
+            myVth2.push_back(value);
+            myVth.push_back(sqrt(value));
+        }
     }
     return;
 }
 
-void LagrangeOptimizer::compute_C_qois(int iphi)
+void LagrangeOptimizer::compute_C_qois(int iphi,
+      std::vector <double> &density, std::vector <double> &upara,
+      std::vector <double> &tperp, std::vector <double> &tpara,
+      std::vector <double> &n0, std::vector <double> &t0,
+      const double* dataIn)
 {
     std::vector <double> den;
     std::vector <double> upar;
@@ -396,7 +560,7 @@ void LagrangeOptimizer::compute_C_qois(int iphi)
     std::vector <double> en;
     std::vector <double> T_par;
     int i, j, k;
-    const double* f0_f = &myDataIn[iphi*myNodeCount*myVxCount*myVyCount];
+    const double* f0_f = &dataIn[iphi*myNodeCount*myVxCount*myVyCount];
     int den_index = iphi*myNodeCount;
 
     for (i=0; i<myNodeCount*myVxCount*myVyCount; ++i) {
@@ -409,7 +573,7 @@ void LagrangeOptimizer::compute_C_qois(int iphi)
         for (j=0; j<myVxCount*myVyCount; ++j) {
             value += den[myVxCount*myVyCount*i + j];
         }
-        myDensity.push_back(value);
+        density.push_back(value);
     }
     for (i=0; i<myNodeCount; ++i) {
         for (j=0; j<myVxCount; ++j)
@@ -423,10 +587,10 @@ void LagrangeOptimizer::compute_C_qois(int iphi)
         for (j=0; j<myVxCount*myVyCount; ++j) {
             value += upar[myVxCount*myVyCount*i + j];
         }
-        myUpara.push_back(value/myDensity[den_index + i]);
+        upara.push_back(value/density[den_index + i]);
     }
     for (i=0; i<myNodeCount; ++i) {
-        upar_.push_back(myUpara[den_index + i]/myVth[i]);
+        upar_.push_back(upara[den_index + i]/myVth[i]);
     }
     for (i=0; i<myNodeCount; ++i) {
         for (j=0; j<myVxCount; ++j)
@@ -441,8 +605,8 @@ void LagrangeOptimizer::compute_C_qois(int iphi)
         for (j=0; j<myVxCount*myVyCount; ++j) {
             value += tper[myVxCount*myVyCount*i + j];
         }
-        myTperp.push_back(value/myDensity[den_index + i]/mySmallElectronCharge);
-        // printf ("Tperp %g, %g, %g, %g\n", value/myDensity[den_index + i]/mySmallElectronCharge, value, myParticleMass, mySmallElectronCharge);
+        tperp.push_back(value/density[den_index + i]/mySmallElectronCharge);
+        // printf ("Tperp %g, %g, %g, %g\n", value/density[den_index + i]/mySmallElectronCharge, value, myParticleMass, mySmallElectronCharge);
     }
     for (i=0; i<myNodeCount; ++i) {
         for (j=0; j<myVxCount; ++j)
@@ -460,11 +624,11 @@ void LagrangeOptimizer::compute_C_qois(int iphi)
         for (j=0; j<myVxCount*myVyCount; ++j) {
             value += T_par[myVxCount*myVyCount*i + j];
         }
-        myTpara.push_back(2.0*value/myDensity[den_index + i]/mySmallElectronCharge);
+        tpara.push_back(2.0*value/density[den_index + i]/mySmallElectronCharge);
     }
     for (i=0; i<myNodeCount; ++i) {
-        myN0.push_back(myDensity[i]);
-        myT0.push_back((2.0*myTperp[i]+myTpara[i])/3.0);
+        n0.push_back(myDensity[i]);
+        t0.push_back((2.0*myTperp[i]+myTpara[i])/3.0);
     }
     return;
 }
@@ -527,6 +691,110 @@ bool LagrangeOptimizer::isConverged(std::vector <double> difflist, double eB)
         status = true;
     }
     return status;
+}
+
+void LagrangeOptimizer::compareQoIs(const double* reconData,
+        const double* bregData)
+{
+    int iphi;
+    std::vector <double> rdensity;
+    std::vector <double> rupara;
+    std::vector <double> rtperp;
+    std::vector <double> rtpara;
+    std::vector <double> rn0;
+    std::vector <double> rt0;
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
+    }
+    std::vector <double> bdensity;
+    std::vector <double> bupara;
+    std::vector <double> btperp;
+    std::vector <double> btpara;
+    std::vector <double> bn0;
+    std::vector <double> bt0;
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        compute_C_qois(iphi, bdensity, bupara, btperp, btpara, bn0, bt0, bregData);
+    }
+    double pd_error_b = rmseErrorPD(reconData);
+    double pd_error_a = rmseErrorPD(bregData);
+    printf ("PD errors %g, %g\n", pd_error_b, pd_error_a);
+    double density_error_b = rmseError(myDensity, rdensity);
+    double density_error_a = rmseError(myDensity, bdensity);
+    printf ("Density errors %g, %g\n", density_error_b, density_error_a);
+    double upara_error_b = rmseError(myUpara, rupara);
+    double upara_error_a = rmseError(myUpara, bupara);
+    printf ("Upara errors %g, %g\n", upara_error_b, upara_error_a);
+    double tperp_error_b = rmseError(myTperp, rtperp);
+    double tperp_error_a = rmseError(myTperp, btperp);
+    printf ("Tperp errors %g, %g\n", tperp_error_b, tperp_error_a);
+    double tpara_error_b = rmseError(myTpara, rtpara);
+    double tpara_error_a = rmseError(myTpara, btpara);
+    printf ("Tpara errors %g, %g\n", tpara_error_b, tpara_error_a);
+    double n0_error_b = rmseError(myN0, rn0);
+    double n0_error_a = rmseError(myN0, bn0);
+    printf ("n0 errors %g, %g\n", n0_error_b, n0_error_a);
+    double T0_error_b = rmseError(myT0, rt0);
+    double T0_error_a = rmseError(myT0, bt0);
+    printf ("T0 errors %g, %g\n", T0_error_b, T0_error_a);
+    return;
+}
+
+double LagrangeOptimizer::rmseErrorPD(const double* y)
+{
+    double e = 0;
+    double maxv = -99999;
+    double minv = 99999;
+    const double* x = myDataIn;
+    int nsize = myLocalElements;
+    for (int i=0; i<nsize; ++i) {
+        e += pow((x[i] - y[i]), 2);
+        if (x[i] < minv) {
+            minv = x[i];
+        }
+        if (x[i] > maxv) {
+            maxv = x[i];
+        }
+    }
+    return sqrt(e/nsize)/(maxv-minv);
+}
+
+double LagrangeOptimizer::rmseError(std::vector <double> &x, std::vector <double> &y)
+{
+    unsigned int xsize = x.size();
+    unsigned int ysize = y.size();
+    assert(xsize == ysize);
+    double e = 0;
+    double maxv = -99999;
+    double minv = 99999;
+    for (int i=0; i<xsize; ++i) {
+        e += pow((x[i] - y[i]), 2);
+        if (x[i] < minv) {
+            minv = x[i];
+        }
+        if (x[i] > maxv) {
+            maxv = x[i];
+        }
+    }
+    return sqrt(e/xsize)/(maxv-minv);
+}
+
+double LagrangeOptimizer::rmseError2(std::vector <double> &x, std::vector <double> &y, int start)
+{
+    unsigned int xsize = x.size();
+    unsigned int ysize = y.size();
+    double e = 0;
+    double maxv = -99999;
+    double minv = 99999;
+    for (int i=0; i<ysize; ++i) {
+        e += pow((x[i+start] - y[i]), 2);
+        if (x[i+start] < minv) {
+            minv = x[i+start];
+        }
+        if (x[i+start] > maxv) {
+            maxv = x[i+start];
+        }
+    }
+    return sqrt(e/ysize)/(maxv-minv);
 }
 
 double LagrangeOptimizer::determinant(double a[4][4], double k)
