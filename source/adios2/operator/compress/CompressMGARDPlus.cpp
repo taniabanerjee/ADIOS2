@@ -40,13 +40,13 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     const uint8_t bufferVersion = 1;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
-
-    bufferOutOffset += 32; // TODO: reserve memory space
+    size_t offsetForMGARDSize = bufferOutOffset;
 
     CompressMGARD mgard(m_Parameters);
     size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type,
-                                           bufferOut + bufferOutOffset);
+                            bufferOut + bufferOutOffset + sizeof(size_t));
 
+    PutParameter(bufferOut, offsetForMGARDSize, mgardBufferSize);
     if (*reinterpret_cast<OperatorType *>(bufferOut + bufferOutOffset) ==
         COMPRESS_MGARD)
     {
@@ -79,14 +79,18 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
         // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your first
         // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
         // for your second double number and so on
+        bufferOutOffset += mgardBufferSize;
+        optim.putResult(bufferOut, bufferOutOffset);
     }
-
-    bufferOutOffset += mgardBufferSize;
+    else {
+        bufferOutOffset += mgardBufferSize;
+    }
     return bufferOutOffset;
 }
 
 size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
-                                       const size_t sizeIn, char *dataOut)
+        const size_t bufferInOffset, const size_t mgardBufferSize,
+        const size_t sizeIn, char *dataOut)
 {
     // Do NOT remove even if the buffer version is updated. Data might be still
     // in lagacy formats. This function must be kept for backward compatibility.
@@ -98,16 +102,17 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
     // *reinterpret_cast<double*>(bufferIn+8) for your second double number and
     // so on
 
-    size_t bufferInOffset = 32; // this number needs to be the same as the
-                                // memory space you reserved in Operate()
-
     CompressMGARD mgard(m_Parameters);
     size_t sizeOut = mgard.InverseOperate(bufferIn + bufferInOffset,
-                                          sizeIn - bufferInOffset, dataOut);
+                                          mgardBufferSize, dataOut);
 
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
+    LagrangeOptimizer optim;
+    double* doubleData = reinterpret_cast<double*>(dataOut);
+    optim.setDataFromCharBuffer(doubleData,
+        bufferIn, bufferInOffset+mgardBufferSize, sizeIn);
 
     return sizeOut;
 }
@@ -118,12 +123,13 @@ size_t CompressMGARDPlus::InverseOperate(const char *bufferIn,
     size_t bufferInOffset = 1; // skip operator type
     const uint8_t bufferVersion =
         GetParameter<uint8_t>(bufferIn, bufferInOffset);
-    bufferInOffset += 2; // skip two reserved bytes
+    const size_t mgardBufferSize =
+        GetParameter<size_t>(bufferIn, bufferInOffset);
 
     if (bufferVersion == 1)
     {
-        return DecompressV1(bufferIn + bufferInOffset, sizeIn - bufferInOffset,
-                            dataOut);
+        return DecompressV1(bufferIn, bufferInOffset,
+            mgardBufferSize, sizeIn, dataOut);
     }
     else if (bufferVersion == 2)
     {
