@@ -40,11 +40,16 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     const uint8_t bufferVersion = 1;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
+    PutParameter(bufferOut, bufferOutOffset, optim.getPlaneCount());
+    PutParameter(bufferOut, bufferOutOffset, optim.getNodeCount());
+    PutParameter(bufferOut, bufferOutOffset, optim.getVxCount());
+    PutParameter(bufferOut, bufferOutOffset, optim.getVyCount());
     size_t offsetForMGARDSize = bufferOutOffset;
+    bufferOutOffset += sizeof(size_t);
 
     CompressMGARD mgard(m_Parameters);
     size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type,
-                            bufferOut + bufferOutOffset + sizeof(size_t));
+                            bufferOut + bufferOutOffset);
 
     PutParameter(bufferOut, offsetForMGARDSize, mgardBufferSize);
     if (*reinterpret_cast<OperatorType *>(bufferOut + bufferOutOffset) ==
@@ -89,14 +94,23 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
 }
 
 size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
-        const size_t bufferInOffset, const size_t mgardBufferSize,
-        const size_t sizeIn, char *dataOut)
+        size_t bufferInOffset, const size_t sizeIn, char *dataOut)
 {
     // Do NOT remove even if the buffer version is updated. Data might be still
     // in lagacy formats. This function must be kept for backward compatibility.
     // If a newer buffer format is implemented, create another function, e.g.
     // DecompressV2 and keep this function for decompressing lagacy data.
 
+    const long unsigned int planeCount =
+        GetParameter<long unsigned int>(bufferIn, bufferInOffset);
+    const long unsigned int nodeCount =
+        GetParameter<long unsigned int>(bufferIn, bufferInOffset);
+    const long unsigned int vxCount =
+        GetParameter<long unsigned int>(bufferIn, bufferInOffset);
+    const long unsigned int vyCount =
+        GetParameter<long unsigned int>(bufferIn, bufferInOffset);
+    const size_t mgardBufferSize =
+        GetParameter<size_t>(bufferIn, bufferInOffset);
     // TODO: read your results here from
     // *reinterpret_cast<double*>(bufferIn) for your first double number
     // *reinterpret_cast<double*>(bufferIn+8) for your second double number and
@@ -109,7 +123,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    LagrangeOptimizer optim;
+    LagrangeOptimizer optim(planeCount, nodeCount, vxCount, vyCount);
     double* doubleData = reinterpret_cast<double*>(dataOut);
     optim.setDataFromCharBuffer(doubleData,
         bufferIn, bufferInOffset+mgardBufferSize, sizeIn);
@@ -123,13 +137,10 @@ size_t CompressMGARDPlus::InverseOperate(const char *bufferIn,
     size_t bufferInOffset = 1; // skip operator type
     const uint8_t bufferVersion =
         GetParameter<uint8_t>(bufferIn, bufferInOffset);
-    const size_t mgardBufferSize =
-        GetParameter<size_t>(bufferIn, bufferInOffset);
 
     if (bufferVersion == 1)
     {
-        return DecompressV1(bufferIn, bufferInOffset,
-            mgardBufferSize, sizeIn, dataOut);
+        return DecompressV1(bufferIn, bufferInOffset, sizeIn, dataOut);
     }
     else if (bufferVersion == 2)
     {

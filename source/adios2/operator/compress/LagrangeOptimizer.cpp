@@ -11,6 +11,18 @@ LagrangeOptimizer::LagrangeOptimizer()
     myParticleMass = 3.344e-27;
 }
 
+LagrangeOptimizer::LagrangeOptimizer(long unsigned int p,
+    long unsigned int n, long unsigned int vx, long unsigned int vy)
+{
+    // Initialize charge and mass variables
+    mySmallElectronCharge = 1.6022e-19;
+    myParticleMass = 3.344e-27;
+    myPlaneCount = p;
+    myNodeCount = n;
+    myVxCount = vx;
+    myVyCount = vy;
+}
+
 LagrangeOptimizer::~LagrangeOptimizer()
 {
 }
@@ -293,6 +305,26 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
     printf ("Time Taken for Optimization Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
     compareQoIs(reconData, breg_recon);
     return myLagranges;
+}
+
+long unsigned int LagrangeOptimizer::getPlaneCount()
+{
+    return myPlaneCount;
+}
+
+long unsigned int LagrangeOptimizer::getNodeCount()
+{
+    return myNodeCount;
+}
+
+long unsigned int LagrangeOptimizer::getVxCount()
+{
+    return myVxCount;
+}
+
+long unsigned int LagrangeOptimizer::getVyCount()
+{
+    return myVyCount;
 }
 
 long unsigned int LagrangeOptimizer::getParameterSize()

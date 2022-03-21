@@ -8,6 +8,9 @@ class LagrangeOptimizer
     public:
         // Constructor
         LagrangeOptimizer();
+        LagrangeOptimizer(long unsigned int p, long unsigned int n,
+            long unsigned int vx, long unsigned int vy);
+
         // Destructor
         ~LagrangeOptimizer();
         // Compute mesh parameters and QoIs
@@ -17,6 +20,14 @@ class LagrangeOptimizer
         // Compute Lagrange Parameters
         std::vector <double> computeLagrangeParameters(
                 const double* reconstructedData);
+        // Get the number of planes
+        long unsigned int getPlaneCount();
+        // Get the number of nodes
+        long unsigned int getNodeCount();
+        // Get the vx dimensions
+        long unsigned int getVxCount();
+        // Get the vy dimensions
+        long unsigned int getVyCount();
         // Get the number of bytes needed to store the Lagrange parameters
         long unsigned int getParameterSize();
         // Get the number of bytes needed to store the PQ table
