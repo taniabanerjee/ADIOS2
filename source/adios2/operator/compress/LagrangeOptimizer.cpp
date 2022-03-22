@@ -416,6 +416,25 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     setVp();
     setMuQoi();
     setVth2();
+    std::vector <double> V2 = qoi_V2();
+    std::vector <double> V3 = qoi_V3();
+    std::vector <double> V4 = qoi_V4();
+    double K[myVxCount*myVyCount];
+    int iphi, idx;
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        for (idx = 0; idx=myNodeCount; ++idx) {
+            double* recon_one = &reconData[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            int x = 4*idx;
+            for (i=0; i<myVxCount * myVyCount; ++i) {
+                K[i] = myLagranges[x]*myVolume[myVxCount*myVyCount*idx+i]+
+                       myLagranges[x+1]*V2[myVxCount*myVyCount*idx+i] +
+                       myLagranges[x+2]*V3[myVxCount*myVyCount*idx+i] +
+                       myLagranges[x+3]*V4[myVxCount*myVyCount*idx+i];
+                recon_one[i] = recon_one[i] * exp(-K[i]);
+            }
+        }
+    }
 }
 
 void LagrangeOptimizer::readCharBuffer(const char* bufferIn, size_t bufferOffset, size_t bufferSize)
