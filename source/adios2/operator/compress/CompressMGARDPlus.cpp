@@ -85,11 +85,19 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
         // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
         // for your second double number and so on
         bufferOutOffset += mgardBufferSize;
-        optim.putResult(bufferOut, bufferOutOffset);
+        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset);
+        bufferOutOffset += ppsize;
     }
     else {
         bufferOutOffset += mgardBufferSize;
     }
+
+#ifdef UF_DEBUG
+    int arraySize = optim.getPlaneCount()*optim.getNodeCount()*
+      optim.getVxCount()*optim.getVyCount()*sizeof(double);
+    char* dataOut = new char[arraySize];
+    size_t result = InverseOperate(bufferOut, bufferOutOffset, dataOut);
+#endif
     return bufferOutOffset;
 }
 
@@ -137,6 +145,7 @@ size_t CompressMGARDPlus::InverseOperate(const char *bufferIn,
     size_t bufferInOffset = 1; // skip operator type
     const uint8_t bufferVersion =
         GetParameter<uint8_t>(bufferIn, bufferInOffset);
+    bufferInOffset += 2;
 
     if (bufferVersion == 1)
     {

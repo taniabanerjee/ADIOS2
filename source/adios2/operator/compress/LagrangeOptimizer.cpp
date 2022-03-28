@@ -1,3 +1,4 @@
+#include <math.h>
 #include <time.h>
 #include <assert.h>
 #include "LagrangeOptimizer.hpp"
@@ -42,7 +43,9 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     myPlaneCount = blockCount[planeIndex];
     myVxCount = blockCount[velXIndex];
     myVyCount = blockCount[velYIndex];
+#ifdef UF_DEBUG
     printf("#planes: %d, #nodes: %d, #vx: %d, #vy: %d\n", myPlaneCount, myNodeCount, myVxCount, myVyCount);
+#endif
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
     myDataIn = dataIn;
     readF0Params(meshFile);
@@ -50,7 +53,9 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     setVp();
     setMuQoi();
     setVth2();
+#ifdef UF_DEBUG
     printf ("volume: gv %d f0_nvp %d f0_nmu %d, vp: %d, vth: %d, vth2: %d, mu_qoi: %d\n", myGridVolume.size(), myF0Nvp.size(), myF0Nmu.size(), myVp.size(), myVth.size(), myVth2.size(), myMuQoi.size());
+#endif
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, myDensity, myUpara, myTperp, myTpara, myN0, myT0, myDataIn);
     }
@@ -73,14 +78,14 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
     }
     double* breg_recon = new double[myLocalElements];
     int count = 0;
-    double gradients[4] = {0.0, 0.0, 0.0, 0.0};
-    double hessians[4][4] = {0.0, 0.0, 0.0, 0.0,
+    long double gradients[4] = {0.0, 0.0, 0.0, 0.0};
+    long double hessians[4][4] = {0.0, 0.0, 0.0, 0.0,
                          0.0, 0.0, 0.0, 0.0,
                          0.0, 0.0, 0.0, 0.0,
                          0.0, 0.0, 0.0, 0.0};
-    double K[myVxCount*myVyCount];
-    double breg_result[myVxCount*myVyCount];
-    memset(K, 0, myVxCount*myVyCount*sizeof(double));
+    long double K[myVxCount*myVyCount];
+    long double breg_result[myVxCount*myVyCount];
+    memset(K, 0, myVxCount*myVyCount*sizeof(long double));
     std::vector <double> V2 = qoi_V2();
     std::vector <double> V3 = qoi_V3();
     std::vector <double> V4 = qoi_V4();
@@ -129,7 +134,7 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
         const double* f0_f = &myDataIn[iphi*myNodeCount*myVxCount*myVyCount];
         for (idx=0; idx<myNodeCount; ++idx) {
             const double* recon_one = &reconData[myNodeCount*myVxCount*myVyCount*iphi + myVxCount*myVyCount*idx];
-            double lambdas[4] = {0.0, 0.0, 0.0, 0.0};
+            long double lambdas[4] = {0.0, 0.0, 0.0, 0.0};
             std::vector <double> L2_den;
             std::vector <double> L2_upara;
             std::vector <double> L2_tperp;
@@ -196,10 +201,15 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
 #endif
                         break;
                     }
-                    else if (count == 20 && !converged) {
+                    else if (count == 50 && !converged) {
                         for (i=0; i<myVxCount*myVyCount; ++i) {
                             breg_recon[breg_index++] = recon_one[i];
                         }
+                        converged = (isConverged(L2_den, DeB)
+                        && isConverged(L2_upara, UeB)
+                        && isConverged(L2_tpara, TparaEB)
+                        && isConverged(L2_tperp, TperpEB))
+                        && isConverged(L2_PD, PDeB);
                         myLagranges.push_back(lambdas[0]);
                         myLagranges.push_back(lambdas[1]);
                         myLagranges.push_back(lambdas[2]);
@@ -210,11 +220,11 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
                         break;
                     }
                 }
-                double gvalue1 = D[idx], gvalue2 = U[idx]*D[idx];
-                double gvalue3 = Tperp[idx]*aD, gvalue4 = Tpara[idx]*D[idx];
-                double hvalue1 = 0, hvalue2 = 0, hvalue3 = 0, hvalue4 = 0;
-                double hvalue5 = 0, hvalue6 = 0, hvalue7 = 0;
-                double hvalue8 = 0, hvalue9 = 0, hvalue10 = 0;
+                long double gvalue1 = D[idx], gvalue2 = U[idx]*D[idx];
+                long double gvalue3 = Tperp[idx]*aD, gvalue4 = Tpara[idx]*D[idx];
+                long double hvalue1 = 0, hvalue2 = 0, hvalue3 = 0, hvalue4 = 0;
+                long double hvalue5 = 0, hvalue6 = 0, hvalue7 = 0;
+                long double hvalue8 = 0, hvalue9 = 0, hvalue10 = 0;
 
                 for (i=0; i<myVxCount*myVyCount; ++i) {
                     gvalue1 += recon_one[i]*myVolume[myVxCount*myVyCount*idx + i]*
@@ -257,6 +267,11 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
                 gradients[1] = gvalue2;
                 gradients[2] = gvalue3;
                 gradients[3] = gvalue4;
+#ifdef UF_DEBUG
+                if (idx == 5427) {
+                    printf ("Element %d, Iter %d, grad0 = %f, grad1 = %f, grad2 = %f, grad3 = %f\n", idx,count,gvalue1,gvalue2,gvalue3,gvalue4);
+                }
+#endif
                 hessians[0][0] = hvalue1;
                 hessians[0][1] = hvalue2;
                 hessians[0][2] = hvalue3;
@@ -276,17 +291,17 @@ std::vector <double> LagrangeOptimizer::computeLagrangeParameters(
                 // compute lambdas
                 int order = 4;
                 int k;
-                double d = determinant(hessians, order);
+                long double d = determinant(hessians, order);
                 if (d == 0) {
                     printf ("Need to define pesudoinverse for matrix in node %d\n", idx);
                 }
                 else{
-                    double** inverse = cofactor(hessians, order);
+                    long double** inverse = cofactor(hessians, order);
 #if UF_DEBUG
                     printf("Hessians: %g, %g, %g, %g\n", hessians[0][0], hessians[0][1], hessians[0][2], hessians[0][3]);
                     printf("Inverse: %g, %g, %g, %g\n", inverse[0][0], inverse[0][1], inverse[0][2], inverse[0][3]);
 #endif
-                    double matmul[4] = {0, 0, 0, 0};
+                    long double matmul[4] = {0, 0, 0, 0};
                     for (i=0; i<4; ++i) {
                         matmul[i] = 0;
                         for (k=0; k<4; ++k) {
@@ -360,9 +375,11 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
         }
         *reinterpret_cast<double*>(
               bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
+#ifdef UF_DEBUG
         if (count == lagrangeCount+myNodeCount) {
              printf("Grid vol element %f\n", d);
         }
+#endif
     }
     // Access f0_t_ev with an offset of nodes to get to the electrons
     elements = 0;
@@ -422,7 +439,7 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     double K[myVxCount*myVyCount];
     int iphi, idx;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        for (idx = 0; idx=myNodeCount; ++idx) {
+        for (idx = 0; idx<myNodeCount; ++idx) {
             double* recon_one = &reconData[myNodeCount*myVxCount*
                   myVyCount*iphi + myVxCount*myVyCount*idx];
             int x = 4*idx;
@@ -768,6 +785,11 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     }
     double pd_error_b = rmseErrorPD(reconData);
     double pd_error_a = rmseErrorPD(bregData);
+    if (isnan(pd_error_a)) {
+        for (int i=0; i<myLocalElements; ++i) {
+            printf ("Breg data: %d %f\n", i, bregData[i]);
+        }
+    }
     printf ("PD errors %g, %g\n", pd_error_b, pd_error_a);
     double density_error_b = rmseError(myDensity, rdensity);
     double density_error_a = rmseError(myDensity, bdensity);
@@ -848,10 +870,10 @@ double LagrangeOptimizer::rmseError2(std::vector <double> &x, std::vector <doubl
     return sqrt(e/ysize)/(maxv-minv);
 }
 
-double LagrangeOptimizer::determinant(double a[4][4], double k)
+long double LagrangeOptimizer::determinant(long double a[4][4], long double k)
 {
-  double s = 1, det = 0;
-  double b[4][4] = {{0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}};
+  long double s = 1, det = 0;
+  long double b[4][4] = {{0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}};
   int i, j, m, n, c;
   if (k == 1)
     {
@@ -890,9 +912,9 @@ double LagrangeOptimizer::determinant(double a[4][4], double k)
     return (det);
 }
 
-double** LagrangeOptimizer::cofactor(double num[4][4], double f)
+long double** LagrangeOptimizer::cofactor(long double num[4][4], long double f)
 {
- double b[4][4], fac[4][4];
+ long double b[4][4], fac[4][4];
  int p, q, m, n, i, j;
  for (q = 0;q < f; q++)
  {
@@ -923,15 +945,15 @@ double** LagrangeOptimizer::cofactor(double num[4][4], double f)
   return transpose(num, fac, f);
 }
 /*Finding transpose of matrix*/
-double** LagrangeOptimizer::transpose(double num[4][4], double fac[4][4], double r)
+long double** LagrangeOptimizer::transpose(long double num[4][4], long double fac[4][4], long double r)
 {
   int i, j;
-  double b[4][4], d;
-  double** inverse = new double* [4];
-  inverse[0] = new double[4];
-  inverse[1] = new double[4];
-  inverse[2] = new double[4];
-  inverse[3] = new double[4];
+  long double b[4][4], d;
+  long double** inverse = new long double* [4];
+  inverse[0] = new long double[4];
+  inverse[1] = new long double[4];
+  inverse[2] = new long double[4];
+  inverse[3] = new long double[4];
 
   for (i = 0;i < r; i++)
     {
