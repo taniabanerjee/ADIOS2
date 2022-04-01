@@ -57,9 +57,9 @@ class LagrangeOptimizer
         double rmseErrorPD(const double* y);
         double rmseError(std::vector <double> &x, std::vector <double> &y);
         double rmseError2(std::vector <double> &x, std::vector <double> &y, int start);
-        long double determinant(long double a[4][4], long double k);
-        long double** cofactor(long double num[4][4], long double f);
-        long double** transpose(long double num[4][4], long double fac[4][4], long double r);
+        double determinant(double a[4][4], double k);
+        double** cofactor(double num[4][4], double f);
+        double** transpose(double num[4][4], double fac[4][4], double r);
 
         // Members
         // Actual data being compressed and related parameters
