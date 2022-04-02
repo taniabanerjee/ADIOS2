@@ -70,8 +70,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
             // TODO: use reinterpret_cast<double*>(dataIn) and
             // reinterpret_cast<double*>(tmpDecompressBuffer.data())
             // to read original data and decompressed data
-            std::vector <double> lagrangeParameters = optim.
-              computeLagrangeParameters(reinterpret_cast<const double*>(
+            optim.computeLagrangeParameters(
+                    reinterpret_cast<const double*>(
                     tmpDecompressBuffer.data()));
         }
         else if (type == DataType::Float || type == DataType::FloatComplex)

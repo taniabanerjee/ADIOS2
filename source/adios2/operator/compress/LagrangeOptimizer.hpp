@@ -18,8 +18,7 @@ class LagrangeOptimizer
                 adios2::Dims blockStart, adios2::Dims blockCount,
                 const double* dataIn);
         // Compute Lagrange Parameters
-        std::vector <double> computeLagrangeParameters(
-                const double* reconstructedData);
+        void computeLagrangeParameters(const double* reconstructedData);
         // Get the number of planes
         long unsigned int getPlaneCount();
         // Get the number of nodes
@@ -41,21 +40,24 @@ class LagrangeOptimizer
         // APIs
         void readF0Params(const std::string meshFile);
         void setVolume();
+        void setVolume(std::vector <double> &vol);
         void setVp();
+        void setVp(std::vector <double> &vp);
         void setMuQoi();
+        void setMuQoi(std::vector <double> &muqoi);
         void setVth2();
+        void setVth2(std::vector <double> &vth,
+            std::vector <double> &vth2);
         void compute_C_qois(int iphi, std::vector <double> &density,
             std::vector <double> &upara, std::vector <double> &tperp,
             std::vector <double> &tpara, std::vector <double> &n0,
             std::vector <double> &t0, const double* dataIn);
-        std::vector <double> qoi_V2();
-        std::vector <double> qoi_V3();
-        std::vector <double> qoi_V4();
-        bool isConverged(std::vector <double> difflist, double eB);
+        bool isConverged(std::vector <double> difflist, double eB, int count);
         void compareQoIs(const double* reconData,
             const double* bregData);
         double rmseErrorPD(const double* y);
         double rmseError(std::vector <double> &x, std::vector <double> &y);
+        double rmseError(double* &x, std::vector <double> &y);
         double rmseError2(std::vector <double> &x, std::vector <double> &y, int start);
         double determinant(double a[4][4], double k);
         double** cofactor(double num[4][4], double f);
@@ -94,7 +96,7 @@ class LagrangeOptimizer
         std::vector <double> myN0;
         std::vector <double> myT0;
         // Lagrange Parameters
-        std::vector <double> myLagranges;
+        double* myLagranges;
         std::vector <double> myTable;
 };
 
