@@ -5,6 +5,7 @@
 #include "LagrangeOptimizer.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
+#include "FischerNaturalBreaks.hpp"
 
 LagrangeOptimizer::LagrangeOptimizer()
 {
@@ -48,6 +49,8 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     printf("#planes: %d, #nodes: %d, #vx: %d, #vy: %d\n", myPlaneCount, myNodeCount, myVxCount, myVyCount);
 #endif
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
+    printf ("#local elements %d %d %d %d\n", myPlaneCount, myNodeCount,
+        myVxCount, myVyCount);
     myDataIn = dataIn;
     readF0Params(meshFile);
     setVolume();
@@ -101,9 +104,6 @@ void LagrangeOptimizer::computeLagrangeParameters(
     setVp(vp);
     setMuQoi(muqoi);
     setVth2(vth, vth2);
-    for (i=0; i<2*myF0Nvp[0] + 1; ++i) {
-        printf ("Vp %d %5.3g %5.3g\n", i, vp[i], vp[i]);
-    }
     for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
         i = int(k/(myVxCount*myVyCount));
         j = int (k%myVxCount);
@@ -142,6 +142,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
             en = 0.5*pow((vp[j]-U[i]/vth[i]),2);
             Tpara[i] += 2*(f0_f[k] * volume[k] * en *
                 vth2[i] * myParticleMass)/D[i]/mySmallElectronCharge;
+        }
+        for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
+            i = int(k/(myVxCount*myVyCount));
             Rpara[i] = mySmallElectronCharge*Tpara[i] +
                 vth2[i] * myParticleMass *
                 pow((U[i]/vth[i]), 2);
@@ -255,10 +258,10 @@ void LagrangeOptimizer::computeLagrangeParameters(
                         && isConverged(L2_tpara, TparaEB, count)
                         && isConverged(L2_tperp, TperpEB, count)
                         && isConverged(L2_PD, PDeB, count));
-                        myLagranges[idx*4] = lambdas[0];
-                        myLagranges[idx*4 + 1] = lambdas[1];
-                        myLagranges[idx*4 + 2] = lambdas[2];
-                        myLagranges[idx*4 + 3] = lambdas[3];
+                        myLagranges[idx*4] = 0;
+                        myLagranges[idx*4 + 1] = 0;
+                        myLagranges[idx*4 + 2] = 0;
+                        myLagranges[idx*4 + 3] = 0;
                         printf ("Node %d did not converge\n", idx);
                         count_unLag = count_unLag + 1;
                         node_unconv.push_back(idx);
@@ -363,7 +366,84 @@ void LagrangeOptimizer::computeLagrangeParameters(
         }
     }
     printf ("Time Taken for Optimization Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
-    compareQoIs(reconData, breg_recon);
+#if 0
+    FILE* fp1 = fopen("dL.txt", "a");
+    FILE* fp2 = fopen("uL.txt", "a");
+    FILE* fp3 = fopen("tL.txt", "a");
+    FILE* fp4 = fopen("rL.txt", "a");
+    for (i=0; i<myNodeCount; ++i) {
+        fprintf (fp1, "%f\n", myLagranges[4*i]);
+        fprintf (fp2, "%f\n", myLagranges[4*i + 1]);
+        fprintf (fp3, "%f\n", myLagranges[4*i + 2]);
+        fprintf (fp4, "%f\n", myLagranges[4*i + 3]);
+    }
+    double* new_recon = new double[myLocalElements];
+    double nK[myVxCount*myVyCount];
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            const double* recon_one = &reconData[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            double* new_recon_one = &new_recon[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            int x = 4*idx;
+            for (i=0; i<myVxCount * myVyCount; ++i) {
+                nK[i] = myLagranges[x]*myVolume[myVxCount*myVyCount*idx+i]+
+                       myLagranges[x+1]*V2[myVxCount*myVyCount*idx+i] +
+                       myLagranges[x+2]*V3[myVxCount*myVyCount*idx+i] +
+                       myLagranges[x+3]*V4[myVxCount*myVyCount*idx+i];
+                new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+            }
+        }
+    }
+#endif
+    memset(breg_recon, 0, myLocalElements*sizeof(double));
+    double* new_recon = breg_recon;
+    double nK[myVxCount*myVyCount];
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        std::vector<double> values(myNodeCount);
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            values[idx] = myLagranges[4*idx];
+        }
+        // Generating sortedUniqueValueCounts ...
+        unsigned int n = myNodeCount;
+        k = 16;
+        ValueCountPairContainer sortedUniqueValueCounts;
+        GetValueCountPairs(sortedUniqueValueCounts, &values[0], n);
+        // Finding Jenks ClassBreaks...
+        LimitsContainer resultingbreaksArray;
+        ClassifyJenksFisherFromValueCountPairs(resultingbreaksArray, k, sortedUniqueValueCounts);
+        double lastValue = resultingbreaksArray[0];
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            double minValue = 1e+50;
+            double minD = 0;
+            double dist;
+            for (double d : resultingbreaksArray) {
+                // check it's not equal to d
+                dist = abs(myLagranges[4*idx] - d);
+                if (dist < minValue) {
+                    minValue = dist;
+                    minD = d;
+                }
+            }
+            printf ("Lagrange value %5.3g new value %5.3g\n", myLagranges[4*idx], minD);
+            myLagranges[4*idx] = minD;
+        }
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            const double* recon_one = &reconData[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            double* new_recon_one = &new_recon[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            int x = 4*idx;
+            for (i=0; i<myVxCount * myVyCount; ++i) {
+                nK[i] = (myLagranges[x])*myVolume[myVxCount*myVyCount*idx+i]+
+                       (myLagranges[x+1])*V2[myVxCount*myVyCount*idx+i] +
+                       (myLagranges[x+2])*V3[myVxCount*myVyCount*idx+i] +
+                       (myLagranges[x+3])*V4[myVxCount*myVyCount*idx+i];
+                new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+            }
+        }
+    }
+    compareQoIs(reconData, new_recon);
     return;
 }
 
@@ -949,11 +1029,13 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     }
     double pd_error_b = rmseErrorPD(reconData);
     double pd_error_a = rmseErrorPD(bregData);
+#if 0
     if (isnan(pd_error_a)) {
         for (int i=0; i<myLocalElements; ++i) {
             printf ("Breg data: %d %f\n", i, bregData[i]);
         }
     }
+#endif
     printf ("PD errors %g, %g\n", pd_error_b, pd_error_a);
     double density_error_b = rmseError(refdensity, rdensity);
     double density_error_a = rmseError(refdensity, bdensity);
