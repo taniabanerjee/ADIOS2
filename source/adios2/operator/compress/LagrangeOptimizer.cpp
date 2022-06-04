@@ -7,7 +7,7 @@
 #include "LagrangeOptimizer.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
-#include "Kmeans.h"
+#include "KmeansMPI.h"
 
 // int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
 

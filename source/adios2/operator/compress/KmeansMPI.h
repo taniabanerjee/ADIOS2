@@ -16,15 +16,7 @@
 
 #include <assert.h>
 
-int omp_kmeans(int, float**, int, int, int, float, int*, float**);
-int seq_kmeans(float**, int, int, int, float, int*, float**);
-
-float** file_read(int, char*, int*, int*);
-int     file_write(char*, int, int, int, float**, int*, int);
-
-int read_n_objects(int, char*, int, int, float**);
-
-int check_repeated_clusters(int, int, float**);
+int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
 
 double  wtime(void);
 
