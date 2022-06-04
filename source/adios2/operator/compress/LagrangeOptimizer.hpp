@@ -62,10 +62,14 @@ class LagrangeOptimizer
         double determinant(double a[4][4], double k);
         double** cofactor(double num[4][4], double f);
         double** transpose(double num[4][4], double fac[4][4], double r);
+        void quantizeLagrangesUsingKmeans(int offset);
+        void quantizeLagranges(int offset, int* &membership, double* &cluster);
+        void initializeClusterCenters(int numClusters, double* &clusters, int numP, int myRank, double* lagarray);
 
         // Members
         // Actual data being compressed and related parameters
         const double* myDataIn;
+        long unsigned int myPlaneOffset;
         long unsigned int myNodeOffset;
         long unsigned int myNodeCount;
         long unsigned int myPlaneCount;

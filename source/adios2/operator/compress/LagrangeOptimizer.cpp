@@ -1,11 +1,15 @@
 #include <math.h>
 #include <time.h>
 #include <assert.h>
-#include <omp.h>
+#include <mpi.h>
+#include <string.h>
+#include <map>
 #include "LagrangeOptimizer.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
-#include "FischerNaturalBreaks.hpp"
+#include "Kmeans.h"
+
+// int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
 
 LagrangeOptimizer::LagrangeOptimizer()
 {
@@ -40,6 +44,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     int velXIndex = 1;
     int velYIndex = 3;
     int iphi = 0;
+    myPlaneOffset = blockStart[planeIndex];
     myNodeOffset = blockStart[nodeIndex];
     myNodeCount = blockCount[nodeIndex];
     myPlaneCount = blockCount[planeIndex];
@@ -396,38 +401,34 @@ void LagrangeOptimizer::computeLagrangeParameters(
         }
     }
 #endif
+    char filename[100];
+    sprintf(filename, "Lag_%d_%d.csv", myPlaneOffset, myNodeOffset);
+    FILE* fp = fopen(filename, "w");
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            fprintf (fp, "%.17f, %.17f, %.17f, %.17f\n",
+                myLagranges[4*idx], myLagranges[4*idx+1],
+                myLagranges[4*idx+2], myLagranges[4*idx+3]);
+        }
+    }
+    fclose(fp);
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
     double nK[myVxCount*myVyCount];
+    double* cluster1;
+    double* cluster2;
+    double* cluster3;
+    double* cluster4;
+    int* membership0;
+    int* membership1;
+    int* membership2;
+    int* membership3;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        std::vector<double> values(myNodeCount);
-        for (idx = 0; idx<myNodeCount; ++idx) {
-            values[idx] = myLagranges[4*idx];
-        }
-        // Generating sortedUniqueValueCounts ...
-        unsigned int n = myNodeCount;
-        k = 16;
-        ValueCountPairContainer sortedUniqueValueCounts;
-        GetValueCountPairs(sortedUniqueValueCounts, &values[0], n);
-        // Finding Jenks ClassBreaks...
-        LimitsContainer resultingbreaksArray;
-        ClassifyJenksFisherFromValueCountPairs(resultingbreaksArray, k, sortedUniqueValueCounts);
-        double lastValue = resultingbreaksArray[0];
-        for (idx = 0; idx<myNodeCount; ++idx) {
-            double minValue = 1e+50;
-            double minD = 0;
-            double dist;
-            for (double d : resultingbreaksArray) {
-                // check it's not equal to d
-                dist = abs(myLagranges[4*idx] - d);
-                if (dist < minValue) {
-                    minValue = dist;
-                    minD = d;
-                }
-            }
-            printf ("Lagrange value %5.3g new value %5.3g\n", myLagranges[4*idx], minD);
-            myLagranges[4*idx] = minD;
-        }
+        quantizeLagranges(0, membership0, cluster1);
+        quantizeLagranges(1, membership1, cluster2);
+        quantizeLagranges(2, membership2, cluster3);
+        quantizeLagranges(3, membership3, cluster4);
+#if 0
         for (idx = 0; idx<myNodeCount; ++idx) {
             const double* recon_one = &reconData[myNodeCount*myVxCount*
                   myVyCount*iphi + myVxCount*myVyCount*idx];
@@ -442,8 +443,130 @@ void LagrangeOptimizer::computeLagrangeParameters(
                 new_recon_one[i] = recon_one[i] * exp(-nK[i]);
             }
         }
+#endif
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            const double* recon_one = &reconData[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            double* new_recon_one = &new_recon[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            int x = 4*idx;
+            int m1 = membership0[idx];
+            int m2 = membership1[idx];
+            int m3 = membership2[idx];
+            int m4 = membership3[idx];
+            double c1 = cluster1[m1];
+            double c2 = cluster2[m2];
+            double c3 = cluster3[m3];
+            double c4 = cluster4[m4];
+            printf ("%d, %d, %d, %d, %g, %g, %g, %g, %g, %g, %g, %g\n", m1, m2, m3, m4, c1, c2, c3, c4, myLagranges[x], myLagranges[x+1], myLagranges[x+2], myLagranges[x+3]);
+            for (i=0; i<myVxCount * myVyCount; ++i) {
+                nK[i] = (c1)*myVolume[myVxCount*myVyCount*idx+i]+
+                       (c2)*V2[myVxCount*myVyCount*idx+i] +
+                       (c3)*V3[myVxCount*myVyCount*idx+i] +
+                       (c4)*V4[myVxCount*myVyCount*idx+i];
+                new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+            }
+        }
     }
     compareQoIs(reconData, new_recon);
+    return;
+}
+
+void LagrangeOptimizer::initializeClusterCenters(int numClusters, double* &clusters, int numP, int myRank, double* lagarray)
+{
+    clusters = new double[numClusters];
+    assert(clusters != NULL);
+    int* counts = new int[numP];
+    int* disps = new int[numP];
+
+    int pertask = numClusters/numP;
+    for (int i=0; i<numP-1; i++) {
+        counts[i] = pertask;
+    }
+    counts[numP-1] = numClusters - pertask*(numP-1);
+
+    disps[0] = 0;
+    for (int i=1; i<numP; i++) {
+        disps[i] = disps[i-1] + counts[i-1];
+    }
+
+    srand(time(NULL));
+    int myNumClusters = counts[myRank];
+    double* myNumbers = new double[myNumClusters];
+    std::map <int, int> mymap;
+    for (int i=0; i<myNumClusters; ++i) {
+        int index = rand() % myNodeCount;
+        while (mymap.find(index) != mymap.end()) {
+            index = rand() % myNodeCount;
+        }
+        myNumbers[i] = lagarray[index];
+        mymap[index] = i;
+        printf ("Rank %d Index %d Center %g LagrangeI %d\n", myRank, i, myNumbers[i], index);
+    }
+    MPI_Allgatherv(myNumbers, myNumClusters, MPI_DOUBLE, clusters, counts, disps, MPI_DOUBLE, MPI_COMM_WORLD);
+    for (int i=0; i<numClusters; ++i) {
+        printf ("%d %g ", i, clusters[i]);
+    }
+    printf ("\n");
+}
+
+void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* &clusters)
+{
+    double minValue = 10^18;
+    double maxValue = -10^18;
+    // double** lagarray = (double**) malloc(myNodeCount*sizeof(double*));
+    double* lagarray = new double[myNodeCount];
+    int idx;
+    for (idx = 0; idx<myNodeCount; ++idx) {
+        // printf ("Lagrange value offset %d is %5.3g new value %5.3g\n", offset, myLagranges[4*idx+offset], round(myLagranges[4*idx + offset]));
+        // if (offset != 0) {
+            // myLagranges[4*idx+offset] = round(myLagranges[4*idx + offset]);
+        // }
+        lagarray[idx] = myLagranges[4*idx + offset];
+        if (minValue > lagarray[idx]) {
+            minValue = lagarray[idx];
+        }
+        if (maxValue < lagarray[idx]) {
+            maxValue = lagarray[idx];
+        }
+    }
+    int numClusters = 256;
+    int numObjs = myPlaneCount*myNodeCount;
+    int totalNumObjs;
+    int numCoords = 1;
+    int i, j;
+    float threshold = 0.01;
+    MPI_Allreduce(&numObjs, &totalNumObjs, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    int num_procs;
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    initializeClusterCenters(numClusters, clusters, num_procs, my_rank, lagarray);
+    // membership = (int*) malloc(numObjs * sizeof(int));
+    membership = new int [numObjs];
+    memset (membership, 0, numObjs*sizeof(int));
+    int root_rank = 0;
+    if (my_rank == root_rank) {
+        printf ("Clusters for offset %d:\n", offset);
+        for (i=0; i<numClusters; i++) {
+            printf ("%f ", clusters[i]);
+        }
+        printf ("\n");
+    }
+    mpi_kmeans(lagarray, numCoords, numObjs, numClusters,
+        threshold, membership, clusters);
+    if (my_rank == root_rank) {
+        printf ("Clusters for offset %d:\n", offset);
+        for (i=0; i<numClusters; i++) {
+            printf ("%f ", clusters[i]);
+        }
+        printf ("\n");
+    }
+    printf ("Memberships for offset %d:\n", offset);
+    for (i=0; i<10; i++) {
+        printf ("L%d ", membership[i]);
+    }
+    printf ("\n");
     return;
 }
 
