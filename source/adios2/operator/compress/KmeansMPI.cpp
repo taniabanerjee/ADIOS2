@@ -28,7 +28,6 @@
 
 /*----< mpi_kmeans() >-------------------------------------------------------*/
 int mpi_kmeans(double     *objects,     /* in: [numObjs][numCoords] */
-               int        numCoords,   /* no. coordinates */
                int        numObjs,     /* no. objects */
                int        numClusters, /* no. clusters */
                float      threshold,   /* % objects change membership */
@@ -67,7 +66,7 @@ int mpi_kmeans(double     *objects,     /* in: [numObjs][numCoords] */
     }
 
     MPI_Allreduce(&numObjs, &total_numObjs, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    if (_debug) printf("%2d: numObjs=%d total_numObjs=%d numClusters=%d numCoords=%d\n",rank,numObjs,total_numObjs,numClusters,numCoords);
+    if (_debug) printf("%2d: numObjs=%d total_numObjs=%d numClusters=%d \n",rank,numObjs,total_numObjs,numClusters);
 
     do {
         double curT = MPI_Wtime();

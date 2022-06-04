@@ -402,16 +402,6 @@ void LagrangeOptimizer::computeLagrangeParameters(
     }
 #endif
     char filename[100];
-    sprintf(filename, "Lag_%d_%d.csv", myPlaneOffset, myNodeOffset);
-    FILE* fp = fopen(filename, "w");
-    for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        for (idx = 0; idx<myNodeCount; ++idx) {
-            fprintf (fp, "%.17f, %.17f, %.17f, %.17f\n",
-                myLagranges[4*idx], myLagranges[4*idx+1],
-                myLagranges[4*idx+2], myLagranges[4*idx+3]);
-        }
-    }
-    fclose(fp);
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
     double nK[myVxCount*myVyCount];
@@ -458,7 +448,6 @@ void LagrangeOptimizer::computeLagrangeParameters(
             double c2 = cluster2[m2];
             double c3 = cluster3[m3];
             double c4 = cluster4[m4];
-            printf ("%d, %d, %d, %d, %g, %g, %g, %g, %g, %g, %g, %g\n", m1, m2, m3, m4, c1, c2, c3, c4, myLagranges[x], myLagranges[x+1], myLagranges[x+2], myLagranges[x+3]);
             for (i=0; i<myVxCount * myVyCount; ++i) {
                 nK[i] = (c1)*myVolume[myVxCount*myVyCount*idx+i]+
                        (c2)*V2[myVxCount*myVyCount*idx+i] +
@@ -501,72 +490,28 @@ void LagrangeOptimizer::initializeClusterCenters(int numClusters, double* &clust
         }
         myNumbers[i] = lagarray[index];
         mymap[index] = i;
-        printf ("Rank %d Index %d Center %g LagrangeI %d\n", myRank, i, myNumbers[i], index);
     }
     MPI_Allgatherv(myNumbers, myNumClusters, MPI_DOUBLE, clusters, counts, disps, MPI_DOUBLE, MPI_COMM_WORLD);
-    for (int i=0; i<numClusters; ++i) {
-        printf ("%d %g ", i, clusters[i]);
-    }
-    printf ("\n");
 }
 
 void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* &clusters)
 {
-    double minValue = 10^18;
-    double maxValue = -10^18;
-    // double** lagarray = (double**) malloc(myNodeCount*sizeof(double*));
-    double* lagarray = new double[myNodeCount];
-    int idx;
-    for (idx = 0; idx<myNodeCount; ++idx) {
-        // printf ("Lagrange value offset %d is %5.3g new value %5.3g\n", offset, myLagranges[4*idx+offset], round(myLagranges[4*idx + offset]));
-        // if (offset != 0) {
-            // myLagranges[4*idx+offset] = round(myLagranges[4*idx + offset]);
-        // }
-        lagarray[idx] = myLagranges[4*idx + offset];
-        if (minValue > lagarray[idx]) {
-            minValue = lagarray[idx];
-        }
-        if (maxValue < lagarray[idx]) {
-            maxValue = lagarray[idx];
-        }
-    }
     int numClusters = 256;
     int numObjs = myPlaneCount*myNodeCount;
-    int totalNumObjs;
-    int numCoords = 1;
-    int i, j;
     float threshold = 0.01;
-    MPI_Allreduce(&numObjs, &totalNumObjs, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     int num_procs;
-    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
     int my_rank;
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    double* lagarray = new double[myNodeCount];
+    for (int idx = 0; idx<myNodeCount; ++idx) {
+        lagarray[idx] = myLagranges[4*idx + offset];
+    }
     initializeClusterCenters(numClusters, clusters, num_procs, my_rank, lagarray);
-    // membership = (int*) malloc(numObjs * sizeof(int));
     membership = new int [numObjs];
     memset (membership, 0, numObjs*sizeof(int));
-    int root_rank = 0;
-    if (my_rank == root_rank) {
-        printf ("Clusters for offset %d:\n", offset);
-        for (i=0; i<numClusters; i++) {
-            printf ("%f ", clusters[i]);
-        }
-        printf ("\n");
-    }
-    mpi_kmeans(lagarray, numCoords, numObjs, numClusters,
+    mpi_kmeans(lagarray, numObjs, numClusters,
         threshold, membership, clusters);
-    if (my_rank == root_rank) {
-        printf ("Clusters for offset %d:\n", offset);
-        for (i=0; i<numClusters; i++) {
-            printf ("%f ", clusters[i]);
-        }
-        printf ("\n");
-    }
-    printf ("Memberships for offset %d:\n", offset);
-    for (i=0; i<10; i++) {
-        printf ("L%d ", membership[i]);
-    }
-    printf ("\n");
     return;
 }
 

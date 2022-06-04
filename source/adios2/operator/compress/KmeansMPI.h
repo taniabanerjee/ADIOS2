@@ -16,7 +16,7 @@
 
 #include <assert.h>
 
-int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
+int mpi_kmeans(double*, int, int, float, int*&, double*&);
 
 double  wtime(void);
 
