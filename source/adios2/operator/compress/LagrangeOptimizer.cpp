@@ -16,6 +16,7 @@ LagrangeOptimizer::LagrangeOptimizer()
     // Initialize charge and mass variables
     mySmallElectronCharge = 1.6022e-19;
     myParticleMass = 3.344e-27;
+    myNumClusters = 256;
 }
 
 LagrangeOptimizer::LagrangeOptimizer(long unsigned int p,
@@ -96,6 +97,10 @@ void LagrangeOptimizer::computeLagrangeParameters(
     double breg_result[myVxCount*myVyCount];
     memset(K, 0, myVxCount*myVyCount*sizeof(double));
     myLagranges = new double[4*myNodeCount];
+    myLagrangeIndexesDensity = new int[myPlaneCount*myNodeCount];
+    myLagrangeIndexesUpara = new int[myPlaneCount*myNodeCount];
+    myLagrangeIndexesTperp = new int[myPlaneCount*myNodeCount];
+    myLagrangeIndexesRpara = new int[myPlaneCount*myNodeCount];
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
@@ -405,18 +410,18 @@ void LagrangeOptimizer::computeLagrangeParameters(
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
     double nK[myVxCount*myVyCount];
-    double* cluster1;
-    double* cluster2;
-    double* cluster3;
-    double* cluster4;
     int* membership0;
     int* membership1;
     int* membership2;
     int* membership3;
-    quantizeLagranges(0, membership0, cluster1);
-    quantizeLagranges(1, membership1, cluster2);
-    quantizeLagranges(2, membership2, cluster3);
-    quantizeLagranges(3, membership3, cluster4);
+    quantizeLagranges(0, membership0, myDensityTable);
+    quantizeLagranges(1, membership1, myUparaTable);
+    quantizeLagranges(2, membership2, myTperpTable);
+    quantizeLagranges(3, membership3, myRparaTable);
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        for (idx = 0; idx<myNodeCount; ++idx) {
+        }
+    }
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         for (idx = 0; idx<myNodeCount; ++idx) {
             const double* recon_one = &reconData[myNodeCount*myVxCount*
@@ -424,14 +429,14 @@ void LagrangeOptimizer::computeLagrangeParameters(
             double* new_recon_one = &new_recon[myNodeCount*myVxCount*
                   myVyCount*iphi + myVxCount*myVyCount*idx];
             int x = 4*idx;
-            int m1 = membership0[idx];
-            int m2 = membership1[idx];
-            int m3 = membership2[idx];
-            int m4 = membership3[idx];
-            double c1 = cluster1[m1];
-            double c2 = cluster2[m2];
-            double c3 = cluster3[m3];
-            double c4 = cluster4[m4];
+            int m1 = membership0[iphi*myNodeCount + idx];
+            int m2 = membership1[iphi*myNodeCount + idx];
+            int m3 = membership2[iphi*myNodeCount + idx];
+            int m4 = membership3[iphi*myNodeCount + idx];
+            double c1 = myDensityTable[m1];
+            double c2 = myUparaTable[m2];
+            double c3 = myTperpTable[m3];
+            double c4 = myRparaTable[m4];
             for (i=0; i<myVxCount * myVyCount; ++i) {
                 nK[i] = (c1)*myVolume[myVxCount*myVyCount*idx+i]+
                        (c2)*V2[myVxCount*myVyCount*idx+i] +
@@ -445,18 +450,18 @@ void LagrangeOptimizer::computeLagrangeParameters(
     return;
 }
 
-void LagrangeOptimizer::initializeClusterCenters(int numClusters, double* &clusters, int numP, int myRank, double* lagarray, int numObjs)
+void LagrangeOptimizer::initializeClusterCenters(double* &clusters, int numP, int myRank, double* lagarray, int numObjs)
 {
-    clusters = new double[numClusters];
+    clusters = new double[myNumClusters];
     assert(clusters != NULL);
     int* counts = new int[numP];
     int* disps = new int[numP];
 
-    int pertask = numClusters/numP;
+    int pertask = myNumClusters/numP;
     for (int i=0; i<numP-1; i++) {
         counts[i] = pertask;
     }
-    counts[numP-1] = numClusters - pertask*(numP-1);
+    counts[numP-1] = myNumClusters - pertask*(numP-1);
 
     disps[0] = 0;
     for (int i=1; i<numP; i++) {
@@ -480,7 +485,6 @@ void LagrangeOptimizer::initializeClusterCenters(int numClusters, double* &clust
 
 void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* &clusters)
 {
-    int numClusters = 256;
     int numObjs = myPlaneCount*myNodeCount;
     float threshold = 0.01;
     int num_procs;
@@ -494,10 +498,10 @@ void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* 
         }
     }
 
-    initializeClusterCenters(numClusters, clusters, num_procs, my_rank, lagarray, numObjs);
+    initializeClusterCenters(clusters, num_procs, my_rank, lagarray, numObjs);
     membership = new int [numObjs];
     memset (membership, 0, numObjs*sizeof(int));
-    mpi_kmeans(lagarray, numObjs, numClusters,
+    mpi_kmeans(lagarray, numObjs, myNumClusters,
         threshold, membership, clusters);
     return;
 }
