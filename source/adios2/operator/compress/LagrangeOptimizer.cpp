@@ -410,18 +410,10 @@ void LagrangeOptimizer::computeLagrangeParameters(
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
     double nK[myVxCount*myVyCount];
-    int* membership0;
-    int* membership1;
-    int* membership2;
-    int* membership3;
-    quantizeLagranges(0, membership0, myDensityTable);
-    quantizeLagranges(1, membership1, myUparaTable);
-    quantizeLagranges(2, membership2, myTperpTable);
-    quantizeLagranges(3, membership3, myRparaTable);
-    for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        for (idx = 0; idx<myNodeCount; ++idx) {
-        }
-    }
+    quantizeLagranges(0, myLagrangeIndexesDensity, myDensityTable);
+    quantizeLagranges(1, myLagrangeIndexesUpara, myUparaTable);
+    quantizeLagranges(2, myLagrangeIndexesTperp, myTperpTable);
+    quantizeLagranges(3, myLagrangeIndexesRpara, myRparaTable);
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         for (idx = 0; idx<myNodeCount; ++idx) {
             const double* recon_one = &reconData[myNodeCount*myVxCount*
@@ -429,10 +421,10 @@ void LagrangeOptimizer::computeLagrangeParameters(
             double* new_recon_one = &new_recon[myNodeCount*myVxCount*
                   myVyCount*iphi + myVxCount*myVyCount*idx];
             int x = 4*idx;
-            int m1 = membership0[iphi*myNodeCount + idx];
-            int m2 = membership1[iphi*myNodeCount + idx];
-            int m3 = membership2[iphi*myNodeCount + idx];
-            int m4 = membership3[iphi*myNodeCount + idx];
+            int m1 = myLagrangeIndexesDensity[iphi*myNodeCount + idx];
+            int m2 = myLagrangeIndexesUpara[iphi*myNodeCount + idx];
+            int m3 = myLagrangeIndexesTperp[iphi*myNodeCount + idx];
+            int m4 = myLagrangeIndexesRpara[iphi*myNodeCount + idx];
             double c1 = myDensityTable[m1];
             double c2 = myUparaTable[m2];
             double c3 = myTperpTable[m3];
