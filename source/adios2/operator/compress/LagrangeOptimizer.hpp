@@ -65,7 +65,7 @@ class LagrangeOptimizer
         double** transpose(double num[4][4], double fac[4][4], double r);
         void quantizeLagrangesUsingKmeans(int offset);
         void quantizeLagranges(int offset, int* &membership, double* &cluster);
-        void initializeClusterCenters(int numClusters, double* &clusters, int numP, int myRank, double* lagarray, int numObjs);
+        void initializeClusterCenters(double* &clusters, int numP, int myRank, double* lagarray, int numObjs);
 
         // Members
         // Actual data being compressed and related parameters
@@ -102,7 +102,16 @@ class LagrangeOptimizer
         std::vector <double> myT0;
         // Lagrange Parameters
         double* myLagranges;
-        int* myLagrangeIndexes;
+        // PQ parameters
+        int myNumClusters;
+        int* myLagrangeIndexesDensity;
+        int* myLagrangeIndexesUpara;
+        int* myLagrangeIndexesTperp;
+        int* myLagrangeIndexesRpara;
+        double* myDensityTable;
+        double* myUparaTable;
+        double* myTperpTable;
+        double* myRparaTable;
         std::vector <double> myTable;
 };
 
