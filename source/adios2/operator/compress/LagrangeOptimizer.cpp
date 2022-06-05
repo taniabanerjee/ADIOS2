@@ -529,6 +529,89 @@ long unsigned int LagrangeOptimizer::getTableSize()
     return 0;
 }
 
+size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
+{
+    // TODO: after your algorithm is done, put the result into
+    // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
+    // double number *reinterpret_cast<double*>(bufferOut+bufferOutOff      set+8)
+    // for your second double number and so on
+
+    int i, intcount = 0, count = 0;
+    int numObjs = myPlaneCount*myNodeCount;
+    for (i=0; i<numObjs; ++i) {
+          *reinterpret_cast<int*>(
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
+                  myLagrangeIndexesDensity[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+          *reinterpret_cast<int*>(
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
+                  myLagrangeIndexesUpara[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+          *reinterpret_cast<int*>(
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
+                  myLagrangeIndexesTperp[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+          *reinterpret_cast<int*>(
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
+                  myLagrangeIndexesRpara[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+          *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                  myDensityTable[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+          *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                  myUparaTable[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+          *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                  myTperpTable[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+          *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                  myRparaTable[i];
+    }
+    int lagrangeCount = intcount;
+    // Access grid_vol with an offset of nodes to get to the electrons
+    int elements = 0;
+    for (double d : myGridVolume) {
+        if (elements < myNodeCount) {
+            elements++;
+            continue;
+        }
+        *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
+    }
+    // Access f0_t_ev with an offset of nodes to get to the electrons
+    elements = 0;
+    for (double d : myF0TEv) {
+        if (elements < myNodeCount) {
+            elements++;
+            continue;
+        }
+        *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
+    }
+    *reinterpret_cast<double*>(
+        bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dvp[0];
+    *reinterpret_cast<double*>(
+        bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dsmu[0];
+    int offset = count*sizeof(double) + intcount*sizeof(int);
+    *reinterpret_cast<int*>(
+        bufferOut+bufferOutOffset+offset) = myF0Nvp[0];
+    *reinterpret_cast<int*>(
+        bufferOut+bufferOutOffset+offset+sizeof(int)) = myF0Nmu[0];
+    intcount += 2;
+    return count*sizeof(double) + intcount*sizeof(int);
+}
+
 size_t LagrangeOptimizer::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset)
 {
     // TODO: after your algorithm is done, put the result into
@@ -539,7 +622,7 @@ size_t LagrangeOptimizer::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffse
     int i, count = 0;
     for (i=0; i<4*myNodeCount; ++i) {
           *reinterpret_cast<double*>(
-              bufferOut+bufferOutOffset+(count++)*sizeof(double)) = 
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
                   myLagranges[i];
     }
     int lagrangeCount = count;
@@ -572,12 +655,12 @@ size_t LagrangeOptimizer::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffse
         bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dvp[0];
     *reinterpret_cast<double*>(
         bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dsmu[0];
-    int doubleCount = count*sizeof(double);
+    int offset = count*sizeof(double);
     *reinterpret_cast<int*>(
-        bufferOut+bufferOutOffset+doubleCount) = myF0Nvp[0];
+        bufferOut+bufferOutOffset+offset) = myF0Nvp[0];
     *reinterpret_cast<int*>(
-        bufferOut+bufferOutOffset+doubleCount+sizeof(int)) = myF0Nmu[0];
-    return doubleCount + 2*sizeof(int);
+        bufferOut+bufferOutOffset+offset+sizeof(int)) = myF0Nmu[0];
+    return count*sizeof(double) + 2*sizeof(int);
 }
 
 void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
