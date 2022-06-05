@@ -85,7 +85,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
         // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
         // for your second double number and so on
         bufferOutOffset += mgardBufferSize;
-        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset);
+        size_t ppsize = optim.putResultNoPQ(bufferOut, bufferOutOffset);
         bufferOutOffset += ppsize;
     }
     else {
