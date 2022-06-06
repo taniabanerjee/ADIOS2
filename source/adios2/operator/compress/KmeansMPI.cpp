@@ -1,29 +1,127 @@
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/*   File:         mpi_kmeans.c  (MPI version)                               */
-/*   Description:  Implementation of simple k-means clustering algorithm     */
-/*                 This program takes an array of N data objects, each with  */
-/*                 M coordinates and performs a k-means clustering given a   */
-/*                 user-provided value of the number of clusters (K). The    */
-/*                 clustering results are saved in 2 arrays:                 */
-/*                 1. a returned array of size [K][N] indicating the center  */
-/*                    coordinates of K clusters                              */
-/*                 2. membership[N] stores the cluster center ids, each      */
-/*                    corresponding to the cluster a data object is assigned */
-/*                                                                           */
-/*   Author:  Wei-keng Liao                                                  */
-/*            ECE Department, Northwestern University                        */
-/*            email: wkliao@ece.northwestern.edu                             */
-/*                                                                           */
-/*   Copyright (C) 2005, Northwestern University                             */
-/*   See COPYRIGHT notice in top-level directory.                            */
-/*                                                                           */
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
 #include <stdio.h>
 #include <stdlib.h>
 
 #include <mpi.h>
 #include "KmeansMPI.h"
+
+
+// C++ Implementation of the Quick Sort Algorithm.
+#include <iostream>
+using namespace std;
+
+int partition(double arr[], int start, int end)
+{
+
+	double pivot = arr[start];
+
+	int count = 0;
+	for (int i = start + 1; i <= end; i++) {
+		if (arr[i] <= pivot)
+			count++;
+	}
+
+	// Giving pivot element its correct position
+	int pivotIndex = start + count;
+  swap(arr[pivotIndex], arr[start]);
+
+	// Sorting left and right parts of the pivot element
+	int i = start, j = end;
+
+	while (i < pivotIndex && j > pivotIndex) {
+
+		while (arr[i] <= pivot) {
+			i++;
+		}
+
+		while (arr[j] > pivot) {
+			j--;
+		}
+
+		if (i < pivotIndex && j > pivotIndex) {
+      swap(arr[i++], arr[j--]);
+		}
+	}
+
+	return pivotIndex;
+}
+
+// https://www.geeksforgeeks.org/cpp-program-for-quicksort/
+void quickSort(double arr[], int start, int end)
+{
+
+	// base case
+	if (start >= end)
+		return;
+
+	// partitioning the array
+	int p = partition(arr, start, end);
+
+	// Sorting the left part
+	quickSort(arr, start, p - 1);
+
+	// Sorting the right part
+	quickSort(arr, p + 1, end);
+}
+
+// Method to compare which one is the more close.
+// We find the closest by taking the difference
+// between the target and both values. It assumes
+// that val2 is greater than val1 and target lies
+// between these two.
+int getClosest(double val1, double val2,
+			double target, int index1, int index2)
+{
+	if (target - val1 >= val2 - target)
+		return index2;
+	else
+		return index1;
+}
+
+// https://www.geeksforgeeks.org/find-closest-number-array/
+// Returns element closest to target in arr[]
+int findClosest(double arr[], int n, double target)
+{
+	// Corner cases
+	if (target <= arr[0])
+		return 0;
+	if (target >= arr[n - 1])
+		return n - 1;
+
+	// Doing binary search
+	int i = 0, j = n, mid = 0;
+	while (i < j) {
+		mid = (i + j) / 2;
+
+		if (arr[mid] == target)
+			return mid;
+
+		/* If target is less than array element,
+			then search in left */
+		if (target < arr[mid]) {
+
+			// If target is greater than previous
+			// to mid, return closest of two
+			if (mid > 0 && target > arr[mid - 1])
+				return getClosest(arr[mid - 1],
+								arr[mid], target, mid-1, mid);
+
+			/* Repeat for left half */
+			j = mid;
+		}
+
+		// If target is greater than mid
+		else {
+			if (mid < n - 1 && target < arr[mid + 1])
+				return getClosest(arr[mid],
+								arr[mid + 1], target, mid, mid+1);
+			// update i
+			i = mid + 1;
+		}
+	}
+
+	// Only single element left after search
+	return mid;
+}
 
 
 /*----< mpi_kmeans() >-------------------------------------------------------*/
@@ -43,7 +141,7 @@ int mpi_kmeans(double     *objects,     /* in: [numObjs][numCoords] */
     float    delta_tmp;
     double  *newClusters;    /* [numClusters][numCoords] where numCords==1*/
     double  *origClusters;    /* [numClusters][numCoords] where numCords==1*/
-    int _debug = 0;
+    int _debug = 1;
 
     if (_debug) MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
@@ -71,9 +169,10 @@ int mpi_kmeans(double     *objects,     /* in: [numObjs][numCoords] */
     do {
         double curT = MPI_Wtime();
         delta = 0.0;
+	      quickSort(clusters, 0, numClusters-1);
         for (i=0; i<numObjs; i++) {
             /* find the array index of nestest cluster center */
-            index = find_nearest_cluster(numClusters, objects[i], clusters);
+	          index = findClosest(clusters, numClusters, objects[i]);
 
             /* if membership changes, increase delta by 1 */
             if (membership[i] != index) delta += 1.0;
@@ -106,10 +205,10 @@ int mpi_kmeans(double     *objects,     /* in: [numObjs][numCoords] */
             double maxTime;
             curT = MPI_Wtime() - curT;
             MPI_Reduce(&curT, &maxTime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-            // if (rank == 0)
-                // printf("%2d: loop=%d time=%f sec\n",rank,loop,curT);
+            if (rank == 0)
+                printf("%2d: loop=%d time=%f sec\n",rank,loop,curT);
         }
-    } while (delta > threshold && loop++ < 500);
+    } while (delta > threshold && loop++ < 5);
     if (_debug && rank == 0)
         printf("%2d: delta=%f threshold=%f loop=%d\n",rank,delta,threshold,loop);
 

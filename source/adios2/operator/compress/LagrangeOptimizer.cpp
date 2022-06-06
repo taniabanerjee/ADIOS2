@@ -410,10 +410,12 @@ void LagrangeOptimizer::computeLagrangeParameters(
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
     double nK[myVxCount*myVyCount];
+    start = clock();
     quantizeLagranges(0, myLagrangeIndexesDensity, myDensityTable);
     quantizeLagranges(1, myLagrangeIndexesUpara, myUparaTable);
     quantizeLagranges(2, myLagrangeIndexesTperp, myTperpTable);
     quantizeLagranges(3, myLagrangeIndexesRpara, myRparaTable);
+    printf ("Time Taken for Quantization: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         for (idx = 0; idx<myNodeCount; ++idx) {
             const double* recon_one = &reconData[myNodeCount*myVxCount*
@@ -483,18 +485,24 @@ void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* 
     int my_rank;
     MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    clock_t start = clock();
     double* lagarray = new double[myNodeCount];
     for (int iphi = 0; iphi<myPlaneCount; ++iphi) {
         for (int idx = 0; idx<myNodeCount; ++idx) {
             lagarray[iphi*myNodeCount + idx] = myLagranges[iphi*myNodeCount + 4*idx + offset];
         }
     }
+    printf ("Time Taken for assigning lag array: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
 
+    start = clock();
     initializeClusterCenters(clusters, num_procs, my_rank, lagarray, numObjs);
+    printf ("Time Taken for init clusters: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    start = clock();
     membership = new int [numObjs];
     memset (membership, 0, numObjs*sizeof(int));
     mpi_kmeans(lagarray, numObjs, myNumClusters,
         threshold, membership, clusters);
+    printf ("Time Taken for KMeans: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
     return;
 }
 
