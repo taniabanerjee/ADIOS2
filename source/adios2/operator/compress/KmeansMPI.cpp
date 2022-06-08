@@ -141,7 +141,7 @@ int mpi_kmeans(double     *objects,     /* in: [numObjs][numCoords] */
     float    delta_tmp;
     double  *newClusters;    /* [numClusters][numCoords] where numCords==1*/
     double  *origClusters;    /* [numClusters][numCoords] where numCords==1*/
-    int _debug = 1;
+    int _debug = 0;
 
     if (_debug) MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
