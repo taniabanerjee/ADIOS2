@@ -40,10 +40,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     const uint8_t bufferVersion = 1;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
-    PutParameter(bufferOut, bufferOutOffset, optim.getPlaneCount());
-    PutParameter(bufferOut, bufferOutOffset, optim.getNodeCount());
-    PutParameter(bufferOut, bufferOutOffset, optim.getVxCount());
-    PutParameter(bufferOut, bufferOutOffset, optim.getVyCount());
     size_t offsetForMGARDSize = bufferOutOffset;
     bufferOutOffset += sizeof(size_t);
 
@@ -85,8 +81,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
         // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
         // for your second double number and so on
         bufferOutOffset += mgardBufferSize;
-        size_t ppsize = optim.putResultNoPQ(bufferOut, bufferOutOffset);
-        bufferOutOffset += ppsize;
+        // size_t ppsize = optim.putResultNoPQ(bufferOut, bufferOutOffset);
+        // bufferOutOffset += ppsize;
     }
     else {
         bufferOutOffset += mgardBufferSize;
@@ -101,6 +97,18 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     return bufferOutOffset;
 }
 
+Dims CompressMGARDPlus::GetBlockDims(const char *bufferIn,
+        size_t bufferInOffset)
+{
+    const size_t ndims = GetParameter<size_t, size_t>(bufferIn, bufferInOffset);
+    Dims blockCount(ndims);
+    for (size_t i = 0; i < ndims; ++i)
+    {
+        blockCount[i] = GetParameter<size_t, size_t>(bufferIn, bufferInOffset);
+    }
+    return blockCount;
+}
+
 size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
         size_t bufferInOffset, const size_t sizeIn, char *dataOut)
 {
@@ -109,16 +117,22 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
     // If a newer buffer format is implemented, create another function, e.g.
     // DecompressV2 and keep this function for decompressing lagacy data.
 
-    const long unsigned int planeCount =
-        GetParameter<long unsigned int>(bufferIn, bufferInOffset);
-    const long unsigned int nodeCount =
-        GetParameter<long unsigned int>(bufferIn, bufferInOffset);
-    const long unsigned int vxCount =
-        GetParameter<long unsigned int>(bufferIn, bufferInOffset);
-    const long unsigned int vyCount =
-        GetParameter<long unsigned int>(bufferIn, bufferInOffset);
     const size_t mgardBufferSize =
         GetParameter<size_t>(bufferIn, bufferInOffset);
+    size_t planeCount, vxCount, nodeCount, vyCount;
+    Dims blockDims = GetBlockDims(bufferIn, bufferInOffset+4);
+    if (blockDims.size() == 3) {
+         planeCount = 1;
+         vxCount = blockDims[0];
+         nodeCount = blockDims[1];
+         vyCount = blockDims[2];
+    }
+    else if (blockDims.size() == 4) {
+         planeCount = blockDims[0];
+         vxCount = blockDims[1];
+         nodeCount = blockDims[2];
+         vyCount = blockDims[3];
+    }
     // TODO: read your results here from
     // *reinterpret_cast<double*>(bufferIn) for your first double number
     // *reinterpret_cast<double*>(bufferIn+8) for your second double number and
@@ -133,8 +147,8 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
     // data somehow to improve its accuracy :)
     LagrangeOptimizer optim(planeCount, nodeCount, vxCount, vyCount);
     double* doubleData = reinterpret_cast<double*>(dataOut);
-    optim.setDataFromCharBuffer(doubleData,
-        bufferIn, bufferInOffset+mgardBufferSize, sizeIn);
+    // optim.setDataFromCharBuffer(doubleData,
+        // bufferIn, bufferInOffset+mgardBufferSize, sizeIn);
 
     return sizeOut;
 }

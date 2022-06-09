@@ -64,6 +64,7 @@ private:
     size_t DecompressV1(const char *bufferIn, size_t bufferInOffset,
         const size_t sizeIn, char *dataOut);
 
+    Dims GetBlockDims(const char *bufferIn, size_t bufferInOffset);
     std::string m_VersionInfo;
 };
 
