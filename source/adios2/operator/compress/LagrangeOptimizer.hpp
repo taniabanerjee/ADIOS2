@@ -33,7 +33,8 @@ class LagrangeOptimizer
         long unsigned int getTableSize();
         size_t putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset);
-        void setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferOffset, size_t bufferSize);
+        void setDataFromCharBuffer(double* &dataOut, const char* bufferIn);
+        void setDataFromCharBuffer2(double* &dataOut, const char* bufferIn, size_t bufferOffset, size_t bufferSize);
         void readCharBuffer(const char* bufferIn, size_t bufferOffset,
                 size_t bufferSize);
 

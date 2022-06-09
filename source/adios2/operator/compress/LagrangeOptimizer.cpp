@@ -543,7 +543,8 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
     // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
     // double number *reinterpret_cast<double*>(bufferOut+bufferOutOff      set+8)
     // for your second double number and so on
-
+    return 0;
+#if 0
     int i, intcount = 0, count = 0;
     int numObjs = myPlaneCount*myNodeCount;
     for (i=0; i<numObjs; ++i) {
@@ -618,6 +619,120 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
         bufferOut+bufferOutOffset+offset+sizeof(int)) = myF0Nmu[0];
     intcount += 2;
     return count*sizeof(double) + intcount*sizeof(int);
+#endif
+}
+
+void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
+    const char* bufferIn)
+{
+#if 0
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    int i, j, k, l, m, intcount = 0, doublecount = 0;
+    FILE* fp = fopen("./sink.txt", "a");
+    for (i=0; i<myNodeCount; ++i) {
+        myLagrangeIndexesDensity[i] = *(reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+        fprintf (fp, "%d\n", myLagrangeIndexesDensity[i]);
+    }
+    fclose(fp);
+    for (i=0; i<myNodeCount; ++i) {
+        myLagrangeIndexesUpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        myLagrangeIndexesTperp[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        myLagrangeIndexesRpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+    }
+    double* gridVolume = new double[myNodeCount];
+    double* f0TEv = new double[myNodeCount];
+    int* nvp = new int [1];
+    int* nmu = new int [1];
+    double* dvp = new double[1];
+    double* dsmu = new double[1];
+    int bufferOffset = intcount*sizeof(int);
+    if (my_rank == 0) {
+        for (i=0; i<myNumClusters; ++i) {
+            myDensityTable[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
+        }
+        for (i=0; i<myNumClusters; ++i) {
+            myUparaTable[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
+        }
+        for (i=0; i<myNumClusters; ++i) {
+            myTperpTable[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
+        }
+        for (i=0; i<myNumClusters; ++i) {
+            myRparaTable[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
+        }
+    }
+    printf ("My rank %d density %5.3g upara %5.3g tperp %5.3g rpara %5.3g\n", my_rank, myDensityTable[0], myUparaTable[0], myTperpTable[0], myRparaTable[0]);
+    MPI_Bcast(&myDensityTable[0], myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(myUparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(myTperpTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(myRparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        bufferOffset += doublecount*sizeof(double);
+        doublecount = 0;
+        for (i=0; i<myNodeCount; ++i) {
+            gridVolume[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
+        }
+        bufferOffset += i*sizeof(double);
+        for (i=0; i<myNodeCount; ++i) {
+            f0TEv[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
+        }
+        bufferOffset += doublecount*sizeof(double);
+        dvp[0] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset));
+        dsmu[0] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+sizeof(double)));
+        nvp[0] = (*reinterpret_cast<const int*>(bufferIn+bufferOffset+2*sizeof(double)));
+        nmu[0] = (*reinterpret_cast<const int*>(bufferIn+bufferOffset+2*sizeof(double)+sizeof(int)));
+    }
+    MPI_Bcast(myDensityTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(myUparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(myTperpTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(myRparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(gridVolume, myNodeCount, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    myGridVolume.insert(myGridVolume.begin(), gridVolume, gridVolume+myNodeCount);
+    MPI_Bcast(f0TEv, myNodeCount, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    myF0TEv.insert(myF0TEv.begin(), f0TEv, f0TEv+myNodeCount);
+    MPI_Bcast(dvp, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    myF0Dvp.push_back(dvp[0]);
+    MPI_Bcast(dsmu, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    myF0Dsmu.push_back(dsmu[0]);
+    MPI_Bcast(nvp, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    myF0Nvp.push_back(nvp[0]);
+    MPI_Bcast(nmu, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    myF0Nmu.push_back(nmu[0]);
+
+    setVolume();
+    setVp();
+    setMuQoi();
+    setVth2();
+    std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
+    for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
+        i = int(k/(myVxCount*myVyCount));
+        j = int (k%myVxCount);
+        V2[k] = myVolume[k] * myVth[i] * myVp[j];
+        V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
+        V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
+    }
+    double K[myVxCount*myVyCount];
+    int iphi, idx;
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            double* recon_one = &reconData[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            int x = 4*idx;
+            for (i=0; i<myVxCount * myVyCount; ++i) {
+                K[i] = myDensityTable[myLagrangeIndexesDensity[idx]]*myVolume[myVxCount*myVyCount*idx+i]+
+                       myUparaTable[myLagrangeIndexesUpara[idx]]*V2[myVxCount*myVyCount*idx+i] +
+                       myTperpTable[myLagrangeIndexesTperp[idx]]*V3[myVxCount*myVyCount*idx+i] +
+                       myRparaTable[myLagrangeIndexesRpara[idx]]*V4[myVxCount*myVyCount*idx+i];
+                recon_one[i] = recon_one[i] * exp(-K[i]);
+            }
+        }
+    }
+#endif
 }
 
 size_t LagrangeOptimizer::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset)
@@ -671,7 +786,7 @@ size_t LagrangeOptimizer::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffse
     return count*sizeof(double) + 2*sizeof(int);
 }
 
-void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
+void LagrangeOptimizer::setDataFromCharBuffer2(double* &reconData,
     const char* bufferIn, size_t bufferOffset, size_t totalSize)
 {
     size_t bufferSize = totalSize - bufferOffset;
