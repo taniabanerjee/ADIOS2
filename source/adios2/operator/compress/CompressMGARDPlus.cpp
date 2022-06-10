@@ -153,7 +153,8 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
     LagrangeOptimizer optim(planeCount, nodeCount, vxCount, vyCount);
     double* doubleData = reinterpret_cast<double*>(dataOut);
     optim.setDataFromCharBuffer(doubleData,
-        bufferIn+bufferInOffset+mgardBufferSize);
+        bufferIn+bufferInOffset+mgardBufferSize,
+        sizeIn-(bufferInOffset+mgardBufferSize));
 
     return sizeOut;
 }
