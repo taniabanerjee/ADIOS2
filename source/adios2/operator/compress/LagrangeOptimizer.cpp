@@ -574,13 +574,17 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
               bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
                   myLagrangeIndexesRpara[i];
     }
-    return intcount*sizeof(int);
-#if 0
-    for (i=0; i<numObjs; ++i) {
-          *reinterpret_cast<double*>(
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    // if (my_rank == 0) {
+        for (i=0; i<myNumClusters; ++i) {
+            *reinterpret_cast<double*>(
               bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
                   myDensityTable[i];
-    }
+        }
+    // }
+    return count*sizeof(double) + intcount*sizeof(int);
+#if 0
     for (i=0; i<numObjs; ++i) {
           *reinterpret_cast<double*>(
               bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
@@ -632,7 +636,7 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
 }
 
 void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
-    const char* bufferIn)
+    const char* bufferIn, size_t bufferTotalSize)
 {
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
@@ -649,7 +653,6 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     for (i=0; i<myNodeCount; ++i) {
         myLagrangeIndexesRpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
     }
-#if 0
     double* gridVolume = new double[myNodeCount];
     double* f0TEv = new double[myNodeCount];
     int* nvp = new int [1];
@@ -657,10 +660,17 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     double* dvp = new double[1];
     double* dsmu = new double[1];
     int bufferOffset = intcount*sizeof(int);
-    if (my_rank == 0) {
+    int bcast_rank = 0;
+    int local_rank = 0;
+    // if ((bufferTotalSize-bufferOffset) > 0) {
         for (i=0; i<myNumClusters; ++i) {
             myDensityTable[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
         }
+        // local_rank = my_rank;
+    // }
+    // MPI_Allreduce(&local_rank, &bcast_rank, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    // MPI_Bcast(myDensityTable, myNumClusters, MPI_DOUBLE, bcast_rank, MPI_COMM_WORLD);
+#if 0
         for (i=0; i<myNumClusters; ++i) {
             myUparaTable[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
         }
@@ -672,7 +682,6 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
         }
     }
     printf ("My rank %d density %5.3g upara %5.3g tperp %5.3g rpara %5.3g\n", my_rank, myDensityTable[0], myUparaTable[0], myTperpTable[0], myRparaTable[0]);
-    MPI_Bcast(&myDensityTable[0], myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     MPI_Bcast(myUparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     MPI_Bcast(myTperpTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     MPI_Bcast(myRparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
