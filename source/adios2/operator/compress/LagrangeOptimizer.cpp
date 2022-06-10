@@ -29,6 +29,15 @@ LagrangeOptimizer::LagrangeOptimizer(long unsigned int p,
     myNodeCount = n;
     myVxCount = vx;
     myVyCount = vy;
+    myNumClusters = 256;
+    myLagrangeIndexesDensity = new int[myNodeCount];
+    myLagrangeIndexesUpara = new int[myNodeCount];
+    myLagrangeIndexesTperp = new int[myNodeCount];
+    myLagrangeIndexesRpara = new int[myNodeCount];
+    myDensityTable = new double[myNumClusters];
+    myUparaTable = new double[myNumClusters];
+    myTperpTable = new double[myNumClusters];
+    myRparaTable = new double[myNumClusters];
 }
 
 LagrangeOptimizer::~LagrangeOptimizer()
@@ -543,30 +552,30 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
     // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
     // double number *reinterpret_cast<double*>(bufferOut+bufferOutOff      set+8)
     // for your second double number and so on
-    return 0;
-#if 0
     int i, intcount = 0, count = 0;
     int numObjs = myPlaneCount*myNodeCount;
     for (i=0; i<numObjs; ++i) {
-          *reinterpret_cast<int*>(
+        *reinterpret_cast<int*>(
               bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
                   myLagrangeIndexesDensity[i];
     }
     for (i=0; i<numObjs; ++i) {
-          *reinterpret_cast<int*>(
+        *reinterpret_cast<int*>(
               bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
                   myLagrangeIndexesUpara[i];
     }
     for (i=0; i<numObjs; ++i) {
-          *reinterpret_cast<int*>(
+        *reinterpret_cast<int*>(
               bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
                   myLagrangeIndexesTperp[i];
     }
     for (i=0; i<numObjs; ++i) {
-          *reinterpret_cast<int*>(
+        *reinterpret_cast<int*>(
               bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
                   myLagrangeIndexesRpara[i];
     }
+    return intcount*sizeof(int);
+#if 0
     for (i=0; i<numObjs; ++i) {
           *reinterpret_cast<double*>(
               bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
@@ -625,16 +634,12 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
 void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     const char* bufferIn)
 {
-#if 0
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     int i, j, k, l, m, intcount = 0, doublecount = 0;
-    FILE* fp = fopen("./sink.txt", "a");
     for (i=0; i<myNodeCount; ++i) {
         myLagrangeIndexesDensity[i] = *(reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
-        fprintf (fp, "%d\n", myLagrangeIndexesDensity[i]);
     }
-    fclose(fp);
     for (i=0; i<myNodeCount; ++i) {
         myLagrangeIndexesUpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
     }
@@ -644,6 +649,7 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     for (i=0; i<myNodeCount; ++i) {
         myLagrangeIndexesRpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
     }
+#if 0
     double* gridVolume = new double[myNodeCount];
     double* f0TEv = new double[myNodeCount];
     int* nvp = new int [1];

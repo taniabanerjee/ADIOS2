@@ -85,8 +85,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
         // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
         // for your second double number and so on
         bufferOutOffset += mgardBufferSize;
-        // size_t ppsize = optim.putResult(bufferOut, bufferOutOffset);
-        // bufferOutOffset += ppsize;
+        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset);
+        bufferOutOffset += ppsize;
     }
     else {
         bufferOutOffset += mgardBufferSize;
@@ -125,7 +125,6 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
         GetParameter<size_t>(bufferIn, bufferInOffset);
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-    printf ("My decompress rank %d, MGARD size %zu\n", my_rank, mgardBufferSize);
     size_t planeCount, vxCount, nodeCount, vyCount;
     Dims blockDims = GetBlockDims(bufferIn, bufferInOffset+4);
     if (blockDims.size() == 3) {
@@ -151,10 +150,10 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    // LagrangeOptimizer optim(planeCount, nodeCount, vxCount, vyCount);
-    // double* doubleData = reinterpret_cast<double*>(dataOut);
-    // optim.setDataFromCharBuffer(doubleData,
-        // bufferIn+bufferInOffset+mgardBufferSize);
+    LagrangeOptimizer optim(planeCount, nodeCount, vxCount, vyCount);
+    double* doubleData = reinterpret_cast<double*>(dataOut);
+    optim.setDataFromCharBuffer(doubleData,
+        bufferIn+bufferInOffset+mgardBufferSize);
 
     return sizeOut;
 }
@@ -162,8 +161,6 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
 size_t CompressMGARDPlus::InverseOperate(const char *bufferIn,
                                          const size_t sizeIn, char *dataOut)
 {
-    static int entered = 0;
-    printf ("InverseOperate entered %d times\n", ++entered);
     size_t bufferInOffset = 1; // skip operator type
     const uint8_t bufferVersion =
         GetParameter<uint8_t>(bufferIn, bufferInOffset);
