@@ -33,6 +33,8 @@ class LagrangeOptimizer
         long unsigned int getTableSize();
         size_t putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset);
+        size_t putResultV1(char* &bufferOut, size_t &bufferOutOffset);
+        char* setDataFromCharBufferV1(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
         void setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
         void setDataFromCharBuffer2(double* &dataOut, const char* bufferIn, size_t bufferOffset, size_t bufferSize);
         void readCharBuffer(const char* bufferIn, size_t bufferOffset,
@@ -67,6 +69,8 @@ class LagrangeOptimizer
         void quantizeLagrangesUsingKmeans(int offset);
         void quantizeLagranges(int offset, int* &membership, double* &cluster);
         void initializeClusterCenters(double* &clusters, int numP, int myRank, double* lagarray, int numObjs);
+        size_t putPQIndexes(char* &bufferOut, size_t &bufferOutOffset);
+        size_t getPQIndexes(const char* bufferIn);
 
         // Members
         // Actual data being compressed and related parameters
@@ -83,6 +87,7 @@ class LagrangeOptimizer
         double mySmallElectronCharge;
         double myParticleMass;
         // Mesh Parameters
+        std::string myMeshFile;
         std::vector <double> myGridVolume;
         std::vector <int> myF0Nvp;
         std::vector <int> myF0Nmu;
