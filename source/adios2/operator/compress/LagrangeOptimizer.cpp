@@ -48,6 +48,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
      adios2::Dims blockStart, adios2::Dims blockCount,
      const double* dataIn)
 {
+    myMeshFile = meshFile;
     clock_t start = clock();
     int planeIndex = 0;
     int nodeIndex = 2;
@@ -546,6 +547,94 @@ long unsigned int LagrangeOptimizer::getTableSize()
     return 0;
 }
 
+size_t LagrangeOptimizer::putPQIndexes(char* &bufferOut, size_t &bufferOutOffset)
+{
+    int i, intcount = 0, count = 0;
+    int numObjs = myPlaneCount*myNodeCount;
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<int*>(
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
+                  myLagrangeIndexesDensity[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<int*>(
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
+                  myLagrangeIndexesUpara[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<int*>(
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
+                  myLagrangeIndexesTperp[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<int*>(
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
+                  myLagrangeIndexesRpara[i];
+    }
+    return intcount * sizeof(int);
+}
+
+size_t LagrangeOptimizer::getPQIndexes(const char* bufferIn)
+{
+    int i, intcount = 0;
+    for (i=0; i<myNodeCount; ++i) {
+        myLagrangeIndexesDensity[i] = *(reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        myLagrangeIndexesUpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        myLagrangeIndexesTperp[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        myLagrangeIndexesRpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+    }
+    return intcount*sizeof(int);
+}
+
+size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
+{
+    // TODO: after your algorithm is done, put the result into
+    // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
+    // double number *reinterpret_cast<double*>(bufferOut+bufferOutOff      set+8)
+    // for your second double number and so on
+    int intbytes = putPQIndexes(bufferOut, bufferOutOffset);
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    if (my_rank == 0) {
+        FILE* fp = fopen("PqMeshInfo.bin", "wb");
+        // write out the PQ table and the mesh parameters
+        fwrite(&myNumClusters, sizeof(int), 1, fp);
+        fwrite(myDensityTable, sizeof(double), myNumClusters, fp);
+        fwrite(myUparaTable, sizeof(double), myNumClusters, fp);
+        fwrite(myTperpTable, sizeof(double), myNumClusters, fp);
+        fwrite(myRparaTable, sizeof(double), myNumClusters, fp);
+        int str_length = myMeshFile.length();
+        fwrite(&str_length, sizeof(int), 1, fp);
+        fwrite(myMeshFile.c_str(), sizeof(char), str_length, fp);
+        fclose(fp);
+    }
+    return intbytes;
+}
+
+char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
+    const char* bufferIn, size_t bufferTotalSize)
+{
+    size_t bufferOffset = getPQIndexes(bufferIn);
+    FILE* fp = fopen("PqMeshInfo.bin", "rb");
+    fread(&myNumClusters, sizeof(int), 1, fp);
+    fread(myDensityTable, sizeof(double), myNumClusters, fp);
+    fread(myUparaTable, sizeof(double), myNumClusters, fp);
+    fread(myTperpTable, sizeof(double), myNumClusters, fp);
+    fread(myRparaTable, sizeof(double), myNumClusters, fp);
+    int str_length = 0;
+    fread(&str_length, sizeof(int), 1, fp);
+    char meshFile[str_length];
+    fread(meshFile, sizeof(char), str_length, fp);
+    fclose(fp);
+    return reinterpret_cast<char*>(reconData);
+}
+
 size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
 {
     // TODO: after your algorithm is done, put the result into
@@ -576,63 +665,66 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
     }
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-    // if (my_rank == 0) {
-        for (i=0; i<myNumClusters; ++i) {
-            *reinterpret_cast<double*>(
-              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
-                  myDensityTable[i];
-        }
-    // }
-    return count*sizeof(double) + intcount*sizeof(int);
+    if (my_rank == 0) {
+        FILE* fp = fopen("PqMeshInfo.bin", "wb");
+        // write out the PQ table and the mesh parameters
+        fwrite(&myNumClusters, sizeof(int), 1, fp);
+        fwrite(myDensityTable, sizeof(double), myNumClusters, fp);
+        fwrite(myUparaTable, sizeof(double), myNumClusters, fp);
+        fwrite(myTperpTable, sizeof(double), myNumClusters, fp);
+        fwrite(myRparaTable, sizeof(double), myNumClusters, fp);
+        fwrite(&myNodeCount, sizeof(int), 1, fp);
+        fwrite(myGridVolume.data()+myNodeCount, sizeof(double), myNodeCount, fp);
+        fwrite(myF0TEv.data()+myNodeCount, sizeof(double), myNodeCount, fp);
+        fwrite(&myF0Dvp, sizeof(double), 1, fp);
+        fwrite(&myF0Dsmu, sizeof(double), 1, fp);
+        fwrite(&myF0Nvp, sizeof(int), 1, fp);
+        fwrite(&myF0Nmu, sizeof(int), 1, fp);
+        fclose(fp);
 #if 0
-    for (i=0; i<numObjs; ++i) {
-          *reinterpret_cast<double*>(
-              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
-                  myUparaTable[i];
-    }
-    for (i=0; i<numObjs; ++i) {
-          *reinterpret_cast<double*>(
-              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
-                  myTperpTable[i];
-    }
-    for (i=0; i<numObjs; ++i) {
-          *reinterpret_cast<double*>(
-              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
-                  myRparaTable[i];
-    }
-    int lagrangeCount = intcount;
-    // Access grid_vol with an offset of nodes to get to the electrons
-    int elements = 0;
-    for (double d : myGridVolume) {
-        if (elements < myNodeCount) {
-            elements++;
-            continue;
+        // for (i=0; i<myNumClusters; ++i) {
+            //*reinterpret_cast<double*>(
+               // bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+               // myDensityTable[i];
+            // fwrite(myDensityTable[i], sizeof(double), 1, fp);
+        // }
+        double* gridVolume = new double[myNodeCount];
+        double* f0tev = new double[myNodeCount];
+        int elements = 0;
+        i = 0;
+        for (double d : myGridVolume) {
+            if (elements < myNodeCount) {
+                elements++;
+                continue;
+            }
+            // *reinterpret_cast<double*>(
+                  // bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
+            gridVolume[i++] = d;
+        }
+        // Access f0_t_ev with an offset of nodes to get to the electrons
+        elements = 0;
+        for (double d : myF0TEv) {
+            if (elements < myNodeCount) {
+                elements++;
+                continue;
+            }
+            *reinterpret_cast<double*>(
+                  bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
         }
         *reinterpret_cast<double*>(
-              bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
-    }
-    // Access f0_t_ev with an offset of nodes to get to the electrons
-    elements = 0;
-    for (double d : myF0TEv) {
-        if (elements < myNodeCount) {
-            elements++;
-            continue;
-        }
+            bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dvp[0];
         *reinterpret_cast<double*>(
-              bufferOut+bufferOutOffset+(count++)*sizeof(double)) = d;
-    }
-    *reinterpret_cast<double*>(
-        bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dvp[0];
-    *reinterpret_cast<double*>(
-        bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dsmu[0];
-    int offset = count*sizeof(double) + intcount*sizeof(int);
-    *reinterpret_cast<int*>(
-        bufferOut+bufferOutOffset+offset) = myF0Nvp[0];
-    *reinterpret_cast<int*>(
-        bufferOut+bufferOutOffset+offset+sizeof(int)) = myF0Nmu[0];
-    intcount += 2;
-    return count*sizeof(double) + intcount*sizeof(int);
+            bufferOut+bufferOutOffset+(count++)*sizeof(double)) = myF0Dsmu[0];
+
+        int offset = count*sizeof(double) + intcount*sizeof(int);
+        *reinterpret_cast<int*>(
+            bufferOut+bufferOutOffset+offset) = myF0Nvp[0];
+        *reinterpret_cast<int*>(
+            bufferOut+bufferOutOffset+offset+sizeof(int)) = myF0Nmu[0];
+        intcount += 2;
 #endif
+    }
+    return intcount*sizeof(int);
 }
 
 void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
@@ -653,6 +745,31 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     for (i=0; i<myNodeCount; ++i) {
         myLagrangeIndexesRpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
     }
+    FILE* fp = fopen("PqMeshInfo.bin", "rb");
+    fread(&myNumClusters, sizeof(int), 1, fp);
+    fread(myDensityTable, sizeof(double), myNumClusters, fp);
+    fread(myUparaTable, sizeof(double), myNumClusters, fp);
+    fread(myTperpTable, sizeof(double), myNumClusters, fp);
+    fread(myRparaTable, sizeof(double), myNumClusters, fp);
+    fread(&myNodeCount, sizeof(int), 1, fp);
+    double* gridVolume = new double[myNodeCount];
+    double* f0TEv = new double[myNodeCount];
+    fread(gridVolume, sizeof(double), myNodeCount, fp);
+    fread(f0TEv, sizeof(double), myNodeCount, fp);
+    fread(&myF0Dvp, sizeof(double), 1, fp);
+    fread(&myF0Dsmu, sizeof(double), 1, fp);
+    fread(&myF0Nvp, sizeof(int), 1, fp);
+    fread(&myF0Nmu, sizeof(int), 1, fp);
+    fclose(fp);
+    for (i=0; i<myNodeCount; ++i) {
+        myGridVolume.push_back(0.0);
+        myF0TEv.push_back(0.0);
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        myGridVolume.push_back(gridVolume[i]);
+        myF0TEv.push_back(f0TEv[i]);
+    }
+#if 0
     double* gridVolume = new double[myNodeCount];
     double* f0TEv = new double[myNodeCount];
     int* nvp = new int [1];
@@ -670,7 +787,6 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     // }
     // MPI_Allreduce(&local_rank, &bcast_rank, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     // MPI_Bcast(myDensityTable, myNumClusters, MPI_DOUBLE, bcast_rank, MPI_COMM_WORLD);
-#if 0
         for (i=0; i<myNumClusters; ++i) {
             myUparaTable[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
         }
@@ -680,11 +796,7 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
         for (i=0; i<myNumClusters; ++i) {
             myRparaTable[i] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+(doublecount++)*sizeof(double)));
         }
-    }
-    printf ("My rank %d density %5.3g upara %5.3g tperp %5.3g rpara %5.3g\n", my_rank, myDensityTable[0], myUparaTable[0], myTperpTable[0], myRparaTable[0]);
-    MPI_Bcast(myUparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(myTperpTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Bcast(myRparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    // printf ("My rank %d density %5.3g upara %5.3g tperp %5.3g rpara %5.3g\n", my_rank, myDensityTable[0], myUparaTable[0], myTperpTable[0], myRparaTable[0]);
         bufferOffset += doublecount*sizeof(double);
         doublecount = 0;
         for (i=0; i<myNodeCount; ++i) {
@@ -699,7 +811,6 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
         dsmu[0] = (*reinterpret_cast<const double*>(bufferIn+bufferOffset+sizeof(double)));
         nvp[0] = (*reinterpret_cast<const int*>(bufferIn+bufferOffset+2*sizeof(double)));
         nmu[0] = (*reinterpret_cast<const int*>(bufferIn+bufferOffset+2*sizeof(double)+sizeof(int)));
-    }
     MPI_Bcast(myDensityTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     MPI_Bcast(myUparaTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     MPI_Bcast(myTperpTable, myNumClusters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
