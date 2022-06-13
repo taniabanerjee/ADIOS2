@@ -8,8 +8,8 @@ class LagrangeOptimizer
     public:
         // Constructor
         LagrangeOptimizer();
-        LagrangeOptimizer(long unsigned int p, long unsigned int n,
-            long unsigned int vx, long unsigned int vy);
+        LagrangeOptimizer(size_t planeOffset, size_t nodeOffset,
+            size_t p, size_t n, size_t vx, size_t vy);
 
         // Destructor
         ~LagrangeOptimizer();
@@ -19,18 +19,22 @@ class LagrangeOptimizer
                 const double* dataIn);
         // Compute Lagrange Parameters
         void computeLagrangeParameters(const double* reconstructedData);
+        // Get the plane offset
+        size_t getPlaneOffset();
+        // Get the node offset
+        size_t getNodeOffset();
         // Get the number of planes
-        long unsigned int getPlaneCount();
+        size_t getPlaneCount();
         // Get the number of nodes
-        long unsigned int getNodeCount();
+        size_t getNodeCount();
         // Get the vx dimensions
-        long unsigned int getVxCount();
+        size_t getVxCount();
         // Get the vy dimensions
-        long unsigned int getVyCount();
+        size_t getVyCount();
         // Get the number of bytes needed to store the Lagrange parameters
-        long unsigned int getParameterSize();
+        size_t getParameterSize();
         // Get the number of bytes needed to store the PQ table
-        long unsigned int getTableSize();
+        size_t getTableSize();
         size_t putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResultV1(char* &bufferOut, size_t &bufferOutOffset);

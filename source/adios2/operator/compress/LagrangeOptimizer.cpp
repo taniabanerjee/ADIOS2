@@ -19,12 +19,14 @@ LagrangeOptimizer::LagrangeOptimizer()
     myNumClusters = 256;
 }
 
-LagrangeOptimizer::LagrangeOptimizer(long unsigned int p,
-    long unsigned int n, long unsigned int vx, long unsigned int vy)
+LagrangeOptimizer::LagrangeOptimizer(size_t planeOffset,
+    size_t nodeOffset, size_t p, size_t n, size_t vx, size_t vy)
 {
     // Initialize charge and mass variables
     mySmallElectronCharge = 1.6022e-19;
     myParticleMass = 3.344e-27;
+    myPlaneOffset = planeOffset;
+    myNodeOffset = nodeOffset;
     myPlaneCount = p;
     myNodeCount = n;
     myVxCount = vx;
@@ -516,33 +518,43 @@ void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* 
     return;
 }
 
-long unsigned int LagrangeOptimizer::getPlaneCount()
+size_t LagrangeOptimizer::getPlaneOffset()
+{
+    return myPlaneOffset;
+}
+
+size_t LagrangeOptimizer::getNodeOffset()
+{
+    return myNodeOffset;
+}
+
+size_t LagrangeOptimizer::getPlaneCount()
 {
     return myPlaneCount;
 }
 
-long unsigned int LagrangeOptimizer::getNodeCount()
+size_t LagrangeOptimizer::getNodeCount()
 {
     return myNodeCount;
 }
 
-long unsigned int LagrangeOptimizer::getVxCount()
+size_t LagrangeOptimizer::getVxCount()
 {
     return myVxCount;
 }
 
-long unsigned int LagrangeOptimizer::getVyCount()
+size_t LagrangeOptimizer::getVyCount()
 {
     return myVyCount;
 }
 
-long unsigned int LagrangeOptimizer::getParameterSize()
+size_t LagrangeOptimizer::getParameterSize()
 {
     return myNodeCount * 4 * sizeof(double);
 }
 
 // Get the number of bytes needed to store the PQ table
-long unsigned int LagrangeOptimizer::getTableSize()
+size_t LagrangeOptimizer::getTableSize()
 {
     return 0;
 }
@@ -610,6 +622,7 @@ size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
         fwrite(myTperpTable, sizeof(double), myNumClusters, fp);
         fwrite(myRparaTable, sizeof(double), myNumClusters, fp);
         int str_length = myMeshFile.length();
+        printf("Mesh file %d %s\n", str_length, myMeshFile.c_str());
         fwrite(&str_length, sizeof(int), 1, fp);
         fwrite(myMeshFile.c_str(), sizeof(char), str_length, fp);
         fclose(fp);
@@ -618,7 +631,7 @@ size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
 }
 
 char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
-    const char* bufferIn, size_t bufferTotalSize)
+    const char* bufferIn, size_t sizeOut)
 {
     size_t bufferOffset = getPQIndexes(bufferIn);
     FILE* fp = fopen("PqMeshInfo.bin", "rb");
@@ -632,6 +645,51 @@ char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
     char meshFile[str_length];
     fread(meshFile, sizeof(char), str_length, fp);
     fclose(fp);
+    readF0Params(meshFile);
+    setVolume();
+    setVp();
+    setMuQoi();
+    setVth2();
+    std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
+    double nK[myVxCount*myVyCount];
+    int i, j, k, m;
+    for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
+        i = int(k/(myVxCount*myVyCount));
+        j = int (k%myVxCount);
+        V2[k] = myVolume[k] * myVth[i] * myVp[j];
+        V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
+        V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
+    }
+    double K[myVxCount*myVyCount];
+    int iphi, idx;
+    double* new_recon = new double[sizeOut];
+    memset (new_recon, 0, sizeOut*sizeof(double));
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            const double* recon_one = &reconData[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            double* new_recon_one = &new_recon[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            int x = 4*idx;
+            int m1 = myLagrangeIndexesDensity[iphi*myNodeCount + idx];
+            int m2 = myLagrangeIndexesUpara[iphi*myNodeCount + idx];
+            int m3 = myLagrangeIndexesTperp[iphi*myNodeCount + idx];
+            int m4 = myLagrangeIndexesRpara[iphi*myNodeCount + idx];
+            double c1 = myDensityTable[m1];
+            double c2 = myUparaTable[m2];
+            double c3 = myTperpTable[m3];
+            double c4 = myRparaTable[m4];
+            for (i=0; i<myVxCount * myVyCount; ++i) {
+                nK[i] = (c1)*myVolume[myVxCount*myVyCount*idx+i]+
+                       (c2)*V2[myVxCount*myVyCount*idx+i] +
+                       (c3)*V3[myVxCount*myVyCount*idx+i] +
+                       (c4)*V4[myVxCount*myVyCount*idx+i];
+                new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+            }
+        }
+    }
     return reinterpret_cast<char*>(reconData);
 }
 
