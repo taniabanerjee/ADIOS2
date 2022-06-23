@@ -10,9 +10,12 @@
 
 #include <vector>
 #include <mpi.h>
+#include <stdlib.h>
 #include "LagrangeOptimizer.hpp"
 #include "CompressMGARDPlus.h"
 #include "CompressMGARD.h"
+#include "CompressSZ.h"
+#include "CompressZFP.h"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 
@@ -36,63 +39,94 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     LagrangeOptimizer optim;
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,  reinterpret_cast<const double*>(dataIn));
-
+    int compression_method = atoi(m_Parameters["compression_method"].c_str());
     size_t bufferOutOffset = 0;
     const uint8_t bufferVersion = 1;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getPlaneOffset());
     PutParameter(bufferOut, bufferOutOffset, optim.getNodeOffset());
-    size_t offsetForMGARDSize = bufferOutOffset;
+    size_t offsetForDecompresedData = bufferOutOffset;
     bufferOutOffset += sizeof(size_t);
 
-    CompressMGARD mgard(m_Parameters);
-    size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type,
-                            bufferOut + bufferOutOffset);
+    if (compression_method == 0) {
+        CompressMGARD mgard(m_Parameters);
+        size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type,
+                                bufferOut + bufferOutOffset);
 
-    PutParameter(bufferOut, offsetForMGARDSize, mgardBufferSize);
-    if (*reinterpret_cast<OperatorType *>(bufferOut + bufferOutOffset) ==
-        COMPRESS_MGARD)
-    {
+        PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
         std::vector<char> tmpDecompressBuffer(
-            helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+                helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
 
         mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize,
                              tmpDecompressBuffer.data());
+        optim.computeLagrangeParameters(
+                reinterpret_cast<const double*>(
+                tmpDecompressBuffer.data()));
+        bufferOutOffset += mgardBufferSize;
+    }
+    else if (compression_method == 1) {
+        CompressSZ sz(m_Parameters);
+        size_t szBufferSize = sz.Operate(dataIn, blockStart, blockCount, type,
+                                bufferOut + bufferOutOffset);
 
-        int my_rank;
-        MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-        printf ("My compress rank %d, MGARD size %zu\n", my_rank, mgardBufferSize);
-        // TODO: now the original data is in dataIn, the compressed and then
-        // decompressed data is in tmpDecompressBuffer.data(). However, these
-        // are char pointers, you will need to convert them into right types as
-        // follows:
-        if (type == DataType::Double || type == DataType::DoubleComplex)
-        {
-            // TODO: use reinterpret_cast<double*>(dataIn) and
-            // reinterpret_cast<double*>(tmpDecompressBuffer.data())
-            // to read original data and decompressed data
-            optim.computeLagrangeParameters(
-                    reinterpret_cast<const double*>(
-                    tmpDecompressBuffer.data()));
-        }
-        else if (type == DataType::Float || type == DataType::FloatComplex)
-        {
-            // TODO: use reinterpret_cast<float*>(dataIn) and
-            // reinterpret_cast<double*>(tmpDecompressBuffer.data())
-            // to read original data and decompressed data
-        }
-        // TODO: after your algorithm is done, put the result into
-        // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your first
-        // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
-        // for your second double number and so on
-        bufferOutOffset += mgardBufferSize;
-        size_t ppsize = optim.putResultV1(bufferOut, bufferOutOffset);
-        bufferOutOffset += ppsize;
+        PutParameter(bufferOut, offsetForDecompresedData, szBufferSize);
+        std::vector<char> tmpDecompressBuffer(
+                helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+
+        sz.InverseOperate(bufferOut + bufferOutOffset, szBufferSize,
+                             tmpDecompressBuffer.data());
+        optim.computeLagrangeParameters(
+                reinterpret_cast<const double*>(
+                tmpDecompressBuffer.data()));
+        bufferOutOffset += szBufferSize;
     }
-    else {
-        bufferOutOffset += mgardBufferSize;
+    else if (compression_method == 2) {
+        CompressZFP zfp(m_Parameters);
+        size_t zfpBufferSize = zfp.Operate(dataIn, blockStart, blockCount, type,
+                                bufferOut + bufferOutOffset);
+
+        PutParameter(bufferOut, offsetForDecompresedData, zfpBufferSize);
+        std::vector<char> tmpDecompressBuffer(
+                helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+
+        zfp.InverseOperate(bufferOut + bufferOutOffset, zfpBufferSize,
+                             tmpDecompressBuffer.data());
+        optim.computeLagrangeParameters(
+                reinterpret_cast<const double*>(
+                tmpDecompressBuffer.data()));
+        bufferOutOffset += zfpBufferSize;
     }
+    // int my_rank;
+    // MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    // printf ("My compress rank %d, MGARD size %zu\n", my_rank, mgardBufferSize);
+    // TODO: now the original data is in dataIn, the compressed and then
+    // decompressed data is in tmpDecompressBuffer.data(). However, these
+    // are char pointers, you will need to convert them into right types as
+    // follows:
+#if 0
+    if (type == DataType::Double || type == DataType::DoubleComplex)
+    {
+        // TODO: use reinterpret_cast<double*>(dataIn) and
+        // reinterpret_cast<double*>(tmpDecompressBuffer.data())
+        // to read original data and decompressed data
+        optim.computeLagrangeParameters(
+                reinterpret_cast<const double*>(
+                tmpDecompressBuffer.data()));
+    }
+    else if (type == DataType::Float || type == DataType::FloatComplex)
+    {
+        // TODO: use reinterpret_cast<float*>(dataIn) and
+        // reinterpret_cast<double*>(tmpDecompressBuffer.data())
+        // to read original data and decompressed data
+    }
+    // TODO: after your algorithm is done, put the result into
+    // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your first
+    // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
+    // for your second double number and so on
+#endif
+    size_t ppsize = optim.putResultV1(bufferOut, bufferOutOffset);
+    bufferOutOffset += ppsize;
 
 #ifdef UF_DEBUG
     int arraySize = optim.getPlaneCount()*optim.getNodeCount()*

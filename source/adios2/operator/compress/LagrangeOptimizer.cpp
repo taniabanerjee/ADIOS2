@@ -116,16 +116,11 @@ void LagrangeOptimizer::computeLagrangeParameters(
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
-    // readF0Params(meshFile);
-    std::vector <double> volume (myNodeCount*myVxCount*myVyCount, 0);
-    std::vector <double> vp (2*myF0Nvp[0] + 1, 0);
-    std::vector <double> muqoi (myF0Nmu[0]+1, 0);
-    std::vector <double> vth (myNodeCount, 0);
-    std::vector <double> vth2 (myNodeCount, 0);
-    setVolume(volume);
-    setVp(vp);
-    setMuQoi(muqoi);
-    setVth2(vth, vth2);
+    std::vector <double> volume = myVolume;
+    std::vector <double> vp = myVp;
+    std::vector <double> muqoi = myMuQoi;
+    std::vector <double> vth = myVth;
+    std::vector <double> vth2 = myVth2;
     for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
         i = int(k/(myVxCount*myVyCount));
         j = int (k%myVxCount);
@@ -645,33 +640,55 @@ char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
     char meshFile[str_length];
     fread(meshFile, sizeof(char), str_length, fp);
     fclose(fp);
-    readF0Params(meshFile);
-    setVolume();
-    setVp();
-    setMuQoi();
-    setVth2();
+    readF0Params(std::string(meshFile, 0, str_length));
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
     double nK[myVxCount*myVyCount];
-    int i, j, k, m;
+    int i, j, k, l, m;
+    // std::vector <double> volume (myNodeCount*myVxCount*myVyCount, 0);
+    // std::vector <double> vp (2*myF0Nvp[0] + 1, 0);
+    // std::vector <double> muqoi (myF0Nmu[0]+1, 0);
+    // std::vector <double> vth (myNodeCount, 0);
+    // std::vector <double> vth2 (myNodeCount, 0);
+    // setVolume(volume);
+    // setVp(vp);
+    // setMuQoi(muqoi);
+    // setVth2(vth, vth2);
+    myLocalElements = myNodeCount*myPlaneCount*myVxCount*myVyCount;
+    for (i=0; i<myLocalElements; ++i) {
+        if (!(reconData[i] > 0)) {
+            ((double*)reconData)[i] = 100;
+        }
+    }
+    setVolume();
+    setVp();
+    setMuQoi();
+    setVth2();
+    std::vector <double> volume = myVolume;
+    std::vector <double> vp = myVp;
+    std::vector <double> muqoi = myMuQoi;
+    std::vector <double> vth = myVth;
+    std::vector <double> vth2 = myVth2;
     for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
         i = int(k/(myVxCount*myVyCount));
         j = int (k%myVxCount);
-        V2[k] = myVolume[k] * myVth[i] * myVp[j];
-        V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
-        V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
+        l = int(k%(myVyCount*myVyCount));
+        m = int(l/myVyCount);
+        V2[k] = volume[k] * vth[i] * vp[j];
+        V3[k] = volume[k] * 0.5 * muqoi[m] * vth2[i] * myParticleMass;
+        V4[k] = volume[k] * pow(vp[j],2) * vth2[i] * myParticleMass;
     }
     double K[myVxCount*myVyCount];
     int iphi, idx;
-    double* new_recon = new double[sizeOut];
-    memset (new_recon, 0, sizeOut*sizeof(double));
+    // double* new_recon = new double[sizeOut];
+    // memset (new_recon, 0, sizeOut*sizeof(double));
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         for (idx = 0; idx<myNodeCount; ++idx) {
             const double* recon_one = &reconData[myNodeCount*myVxCount*
                   myVyCount*iphi + myVxCount*myVyCount*idx];
-            double* new_recon_one = &new_recon[myNodeCount*myVxCount*
-                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            // double* new_recon_one = &new_recon[myNodeCount*myVxCount*
+                  // myVyCount*iphi + myVxCount*myVyCount*idx];
             int x = 4*idx;
             int m1 = myLagrangeIndexesDensity[iphi*myNodeCount + idx];
             int m2 = myLagrangeIndexesUpara[iphi*myNodeCount + idx];
@@ -682,12 +699,53 @@ char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
             double c3 = myTperpTable[m3];
             double c4 = myRparaTable[m4];
             for (i=0; i<myVxCount * myVyCount; ++i) {
-                nK[i] = (c1)*myVolume[myVxCount*myVyCount*idx+i]+
+                nK[i] = (c1)*volume[myVxCount*myVyCount*idx+i]+
                        (c2)*V2[myVxCount*myVyCount*idx+i] +
                        (c3)*V3[myVxCount*myVyCount*idx+i] +
                        (c4)*V4[myVxCount*myVyCount*idx+i];
-                new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+                ((double*)recon_one)[i] = recon_one[i] * exp(-nK[i]);
             }
+#if 0
+            int my_rank;
+            MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+            if (my_rank == 0 && idx == 683) {
+                for (i=0; i<myVxCount * myVyCount; ++i) {
+                    double v = (c1)*volume[myVxCount*myVyCount*idx+i]+
+                           (c2)*V2[myVxCount*myVyCount*idx+i] +
+                           (c3)*V3[myVxCount*myVyCount*idx+i] +
+                           (c4)*V4[myVxCount*myVyCount*idx+i];
+                    // printf ("(%d, %d) m1=%d m2=%d m3=%d m4=%d c1=%5.3g, c2=%5.3g, c3=%5.3g, c4=%5.3g, V1=%5.3g V2=%5.3g V3=%5.3g V4=%5.3g nK=%5.3g exp=%5.3g recon=%5.3g\n", i/39, i%39, m1, m2, m3, m4, c1, c2, c3, c4, volume[myVxCount*myVyCount*idx+i], V2[myVxCount*myVyCount*idx+i], V3[myVxCount*myVyCount*idx+i], V4[myVxCount*myVyCount*idx+i], v, exp(-v), recon_one[i]);
+                }
+            }
+#endif
+        }
+    }
+    std::vector <double> bdensity;
+    std::vector <double> bupara;
+    std::vector <double> btperp;
+    std::vector <double> btpara;
+    std::vector <double> bn0;
+    std::vector <double> bt0;
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        compute_C_qois(iphi, bdensity, bupara, btperp, btpara, bn0, bt0, reconData);
+        if (myPlaneOffset == 0 && myNodeOffset == 0) {
+            FILE* fp = fopen("PartialOutputBregQoI.txt", "w");
+            for (int i=0; i<bdensity.size(); ++i) {
+                fprintf (fp, "(%d %d) density %5.3g upara %5.3g tperp %5.3g tpara %5.3g n0 %5.3g t0 %5.3g vth %5.3g vp %5.3g fof %5.3g\n", myPlaneOffset, i, bdensity[i], bupara[i], btperp[i], btpara[i], bn0[i], bt0[0], myVth[i], myVp[i%39], reconData[i]);
+                if (i==0) {
+                    for (int j=0; j<1521; ++j) {
+                        fprintf (fp, "(%d %d) volume %5.3g grid volume %5.3g nvp %d nmu %d\n", myPlaneOffset, j, myVolume[j], myGridVolume[j+myNodeCount], myF0Nvp[0], myF0Nmu[0]);
+                    }
+                }
+            }
+            fclose (fp);
+            fp = fopen("PartialOutputF0F.txt", "w");
+            for (int i=0; i<10*39*39; ++i) {
+                fprintf (fp, "(%d %d) %5.3g\n", i/1521, i%1521, reconData[i]);
+            }
+            fclose (fp);
         }
     }
     return reinterpret_cast<char*>(reconData);
@@ -1441,6 +1499,8 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
         const double* bregData)
 {
     int iphi;
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     std::vector <double> rdensity;
     std::vector <double> rupara;
     std::vector <double> rtperp;
@@ -1449,6 +1509,24 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     std::vector <double> rt0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
+        if (my_rank == 0) {
+            FILE* fp = fopen("PartialOrigQoI.txt", "w");
+            for (int i=0; i<rdensity.size(); ++i) {
+                fprintf (fp, "(%d %d) density %5.3g upara %5.3g tperp %5.3g tpara %5.3g n0 %5.3g t0 %5.3g vth %5.3g vp %5.3g\n fof %5.3g", myPlaneOffset, i, rdensity[i], rupara[i], rtperp[i], rtpara[i], rn0[i], rt0[0], myVth[i], myVp[i%39], reconData[i]);
+                if (i==0) {
+                    for (int j=0; j<1521; ++j) {
+                        // fprintf (fp, "(%d %d) f0f %5.3g volume %5.3g\n", myPlaneOffset, j, reconData[j], myVolume[j]);
+                        fprintf (fp, "(%d %d) volume %5.3g grid volume %5.3g nvp %d nmu %d\n", myPlaneOffset, j, myVolume[j], myGridVolume[j+myNodeCount], myF0Nvp[0], myF0Nmu[0]);
+                    }
+                }
+            }
+            fclose (fp);
+            fp = fopen("PartialOrigF0F.txt", "w");
+            for (int i=0; i<10*39*39; ++i) {
+                fprintf (fp, "(%d %d) %5.3g\n", i/1521, i%1521, reconData[i]);
+            }
+            fclose (fp);
+        }
     }
     std::vector <double> bdensity;
     std::vector <double> bupara;
@@ -1458,6 +1536,24 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     std::vector <double> bt0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, bdensity, bupara, btperp, btpara, bn0, bt0, bregData);
+        if (my_rank == 0) {
+            FILE* fp = fopen("PartialBregQoI.txt", "w");
+            for (int i=0; i<bdensity.size(); ++i) {
+                fprintf (fp, "(%d %d) density %5.3g upara %5.3g tperp %5.3g tpara %5.3g n0 %5.3g t0 %5.3g vth %5.3g vp %5.3g fof %5.3g\n", myPlaneOffset, i, bdensity[i], bupara[i], btperp[i], btpara[i], bn0[i], bt0[0], myVth[i], myVp[i%39], bregData[i]);
+                if (i==0) {
+                    for (int j=0; j<1521; ++j) {
+                        // fprintf (fp, "(%d %d) f0f %5.3g volume %5.3g\n", myPlaneOffset, j, bregData[j], myVolume[j]);
+                        fprintf (fp, "(%d %d) volume %5.3g grid volume %5.3g nvp %d nmu %d\n", myPlaneOffset, j, myVolume[j], myGridVolume[j+myNodeCount], myF0Nvp[0], myF0Nmu[0]);
+                    }
+                }
+            }
+            fclose (fp);
+            fp = fopen("PartialBregF0F.txt", "w");
+            for (int i=0; i<10*39*39; ++i) {
+                fprintf (fp, "(%d %d) %5.3g\n", i/1521, i%1521, bregData[i]);
+            }
+            fclose (fp);
+        }
     }
     std::vector <double> refdensity;
     std::vector <double> refupara;
