@@ -123,6 +123,7 @@ class LagrangeOptimizer
         double* myTperpTable;
         double* myRparaTable;
         std::vector <double> myTable;
+        double myEpsilon;
 };
 
 #endif
