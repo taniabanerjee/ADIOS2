@@ -39,11 +39,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     LagrangeOptimizer optim;
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,  reinterpret_cast<const double*>(dataIn));
-    int compression_method = atoi(m_Parameters["compression_method"].c_str());
+    uint8_t compression_method = atoi(m_Parameters["compression_method"].c_str());
     size_t bufferOutOffset = 0;
     const uint8_t bufferVersion = 1;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
+    PutParameter(bufferOut, bufferOutOffset, compression_method);
     PutParameter(bufferOut, bufferOutOffset, optim.getPlaneOffset());
     PutParameter(bufferOut, bufferOutOffset, optim.getNodeOffset());
     size_t offsetForDecompresedData = bufferOutOffset;
@@ -157,6 +158,8 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn,
     // If a newer buffer format is implemented, create another function, e.g.
     // DecompressV2 and keep this function for decompressing lagacy data.
 
+    const uint8_t compression_method =
+        GetParameter<uint8_t>(bufferIn, bufferInOffset);
     const size_t planeOffset =
         GetParameter<size_t>(bufferIn, bufferInOffset);
     const size_t nodeOffset =
