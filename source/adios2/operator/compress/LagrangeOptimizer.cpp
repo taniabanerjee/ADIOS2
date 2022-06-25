@@ -100,7 +100,6 @@ void LagrangeOptimizer::computeLagrangeParameters(
             ((double*)reconData)[ii] = myEpsilon;
         }
     }
-    double* breg_recon = new double[myLocalElements];
     int count = 0;
     double gradients[4] = {0.0, 0.0, 0.0, 0.0};
     double hessians[4][4] = {0.0, 0.0, 0.0, 0.0,
@@ -118,19 +117,14 @@ void LagrangeOptimizer::computeLagrangeParameters(
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
-    std::vector <double> volume = myVolume;
-    std::vector <double> vp = myVp;
-    std::vector <double> muqoi = myMuQoi;
-    std::vector <double> vth = myVth;
-    std::vector <double> vth2 = myVth2;
     for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
         i = int(k/(myVxCount*myVyCount));
         j = int (k%myVxCount);
         l = int(k%(myVxCount*myVyCount));
         m = int(l/myVyCount);
-        V2[k] = volume[k] * vth[i] * vp[j];
-        V3[k] = volume[k] * 0.5 * muqoi[m] * vth2[i] * myParticleMass;
-        V4[k] = volume[k] * pow(vp[j],2) * vth2[i] * myParticleMass;
+        V2[k] = myVolume[k] * myVth[i] * myVp[j];
+        V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
+        V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
     }
     int breg_index = 0;
     int iphi, idx;
@@ -139,7 +133,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
         std::vector<double> D(myNodeCount, 0);
         for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
             i = int(k/(myVxCount*myVyCount));
-            D[i] += f0_f[k] * volume[k];
+            D[i] += f0_f[k] * myVolume[k];
         }
         std::vector<double> U(myNodeCount, 0);
         std::vector<double> Tperp(myNodeCount, 0);
@@ -148,9 +142,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
             j = int(k%myVyCount);
             l = int(k%(myVxCount*myVyCount));
             m = int(l/myVyCount);
-            U[i] += (f0_f[k] * volume[k] * vth[i] * vp[j])/D[i];
-            Tperp[i] += (f0_f[k] * volume[k] * 0.5 * muqoi[m] *
-                vth2[i] * myParticleMass)/D[i]/mySmallElectronCharge;
+            U[i] += (f0_f[k] * myVolume[k] * myVth[i] * myVp[j])/D[i];
+            Tperp[i] += (f0_f[k] * myVolume[k] * 0.5 * myMuQoi[m] *
+                myVth2[i] * myParticleMass)/D[i]/mySmallElectronCharge;
         }
         std::vector<double> Tpara(myNodeCount, 0);
         std::vector<double> Rpara(myNodeCount, 0);
@@ -158,15 +152,15 @@ void LagrangeOptimizer::computeLagrangeParameters(
         for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
             i = int(k/(myVxCount*myVyCount));
             j = int(k%myVyCount);
-            en = 0.5*pow((vp[j]-U[i]/vth[i]),2);
-            Tpara[i] += 2*(f0_f[k] * volume[k] * en *
-                vth2[i] * myParticleMass)/D[i]/mySmallElectronCharge;
+            en = 0.5*pow((myVp[j]-U[i]/myVth[i]),2);
+            Tpara[i] += 2*(f0_f[k] * myVolume[k] * en *
+                myVth2[i] * myParticleMass)/D[i]/mySmallElectronCharge;
         }
         for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
             i = int(k/(myVxCount*myVyCount));
             Rpara[i] = mySmallElectronCharge*Tpara[i] +
-                vth2[i] * myParticleMass *
-                pow((U[i]/vth[i]), 2);
+                myVth2[i] * myParticleMass *
+                pow((U[i]/myVth[i]), 2);
         }
         int count_unLag = 0;
         std::vector <int> node_unconv;
@@ -211,7 +205,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
             double aD = D[idx]*mySmallElectronCharge;
             while (1) {
                 for (i=0; i<myVxCount*myVyCount; ++i) {
-                    K[i] = lambdas[0]*volume[myVxCount*myVyCount*idx + i] +
+                    K[i] = lambdas[0]*myVolume[myVxCount*myVyCount*idx + i] +
                            lambdas[1]*V2[myVxCount*myVyCount*idx + i] +
                            lambdas[2]*V3[myVxCount*myVyCount*idx + i] +
                            lambdas[3]*V4[myVxCount*myVyCount*idx + i];
@@ -224,7 +218,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
                     for (i=0; i<myVxCount*myVyCount; ++i) {
                         breg_result[i] = recon_one[i]*
                             exp(-K[i]);
-                        update_D += breg_result[i]*volume[
+                        update_D += breg_result[i]*myVolume[
                             myVxCount*myVyCount*idx + i];
                         update_U += breg_result[i]*V2[
                             myVxCount*myVyCount*idx + i]/D[idx];
@@ -246,9 +240,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
                         && isConverged(L2_tperp, TperpEB, count))
                         && isConverged(L2_PD, PDeB, count);
                     if (converged) {
-                        for (i=0; i<myVxCount*myVyCount; ++i) {
-                            breg_recon[breg_index++] = breg_result[i];
-                        }
+                        // for (i=0; i<myVxCount*myVyCount; ++i) {
+                            // breg_recon[breg_index++] = breg_result[i];
+                        // }
                         /*
                         double mytperp[1521];
                         for (i=0; i<myVxCount*myVyCount; ++i) {
@@ -269,9 +263,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
                         break;
                     }
                     else if (count == maxIter && !converged) {
-                        for (i=0; i<myVxCount*myVyCount; ++i) {
-                            breg_recon[breg_index++] = recon_one[i];
-                        }
+                        // for (i=0; i<myVxCount*myVyCount; ++i) {
+                            // breg_recon[breg_index++] = recon_one[i];
+                        // }
                         converged = (isConverged(L2_den, DeB, count)
                         && isConverged(L2_upara, UeB, count)
                         && isConverged(L2_tpara, TparaEB, count)
@@ -294,7 +288,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
                 double hvalue8 = 0, hvalue9 = 0, hvalue10 = 0;
 
                 for (i=0; i<myVxCount*myVyCount; ++i) {
-                    gvalue1 += recon_one[i]*volume[myVxCount*myVyCount*idx + i]*
+                    gvalue1 += recon_one[i]*myVolume[myVxCount*myVyCount*idx + i]*
                       exp(-K[i])*-1.0;
                     gvalue2 += recon_one[i]*
                       V2[myVxCount*myVyCount*idx + i]*exp(-K[i])*-1.0;
@@ -304,14 +298,14 @@ void LagrangeOptimizer::computeLagrangeParameters(
                       V4[myVxCount*myVyCount*idx + i]*exp(-K[i])*-1.0;
 
                     hvalue1 += recon_one[i]*pow(
-                        volume[myVxCount*myVyCount*idx + i], 2)*exp(-K[i]);
-                    hvalue2 += recon_one[i]* volume[
+                        myVolume[myVxCount*myVyCount*idx + i], 2)*exp(-K[i]);
+                    hvalue2 += recon_one[i]* myVolume[
                         myVxCount*myVyCount*idx + i]*V2[myVxCount*myVyCount*idx + i]*
                         exp(-K[i]);
-                    hvalue3 += recon_one[i]* volume[
+                    hvalue3 += recon_one[i]* myVolume[
                         myVxCount*myVyCount*idx + i]*V3[myVxCount*myVyCount*idx + i]*
                         exp(-K[i]);
-                    hvalue4 += recon_one[i]* volume[
+                    hvalue4 += recon_one[i]* myVolume[
                         myVxCount*myVyCount*idx + i]*V4[myVxCount*myVyCount*idx + i]*
                         exp(-K[i]);
                     hvalue5 += recon_one[i]*pow(
@@ -361,6 +355,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
                 double d = determinant(hessians, order);
                 if (d == 0) {
                     printf ("Need to define pesudoinverse for matrix in node %d\n", idx);
+                    break;
                 }
                 else{
                     double** inverse = cofactor(hessians, order);
@@ -415,6 +410,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
         }
     }
 #endif
+    double* breg_recon = new double[myLocalElements];
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
     double nK[myVxCount*myVyCount];
