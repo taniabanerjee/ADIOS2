@@ -110,10 +110,6 @@ void LagrangeOptimizer::computeLagrangeParameters(
     double breg_result[myVxCount*myVyCount];
     memset(K, 0, myVxCount*myVyCount*sizeof(double));
     myLagranges = new double[4*myNodeCount];
-    myLagrangeIndexesDensity = new int[myPlaneCount*myNodeCount];
-    myLagrangeIndexesUpara = new int[myPlaneCount*myNodeCount];
-    myLagrangeIndexesTperp = new int[myPlaneCount*myNodeCount];
-    myLagrangeIndexesRpara = new int[myPlaneCount*myNodeCount];
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
@@ -134,6 +130,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
         for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
             i = int(k/(myVxCount*myVyCount));
             D[i] += f0_f[k] * myVolume[k];
+            // if (i > 300) {
+                // printf ("Node %d F0F[%d]=%5.3g Volume=%5.3g\n", i, k, f0_f[k], myVolume[k]);
+            // }
         }
         std::vector<double> U(myNodeCount, 0);
         std::vector<double> Tperp(myNodeCount, 0);
@@ -355,6 +354,14 @@ void LagrangeOptimizer::computeLagrangeParameters(
                 double d = determinant(hessians, order);
                 if (d == 0) {
                     printf ("Need to define pesudoinverse for matrix in node %d\n", idx);
+                    printf ("%5.3g %5.3g %5.3g %5.3g\n", hessians[0][0],
+                        hessians[0][1], hessians[0][2], hessians[0][3]);
+                    printf ("%5.3g %5.3g %5.3g %5.3g\n", hessians[1][0],
+                        hessians[1][1], hessians[1][2], hessians[1][3]);
+                    printf ("%5.3g %5.3g %5.3g %5.3g\n", hessians[2][0],
+                        hessians[2][1], hessians[2][2], hessians[2][3]);
+                    printf ("%5.3g %5.3g %5.3g %5.3g\n", hessians[3][0],
+                        hessians[3][1], hessians[3][2], hessians[3][3]);
                     break;
                 }
                 else{
@@ -414,6 +421,10 @@ void LagrangeOptimizer::computeLagrangeParameters(
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
     double nK[myVxCount*myVyCount];
+    myLagrangeIndexesDensity = new int[myPlaneCount*myNodeCount];
+    myLagrangeIndexesUpara = new int[myPlaneCount*myNodeCount];
+    myLagrangeIndexesTperp = new int[myPlaneCount*myNodeCount];
+    myLagrangeIndexesRpara = new int[myPlaneCount*myNodeCount];
     start = clock();
     quantizeLagranges(0, myLagrangeIndexesDensity, myDensityTable);
     quantizeLagranges(1, myLagrangeIndexesUpara, myUparaTable);
@@ -1149,7 +1160,7 @@ void LagrangeOptimizer::setVolume()
 
     std::vector<double> mu_vp_vol;
     for (int ii=0; ii<mu_vol.size(); ++ii) {
-        for (int jj=0; jj<mu_vol.size(); ++jj) {
+        for (int jj=0; jj<vp_vol.size(); ++jj) {
             mu_vp_vol.push_back(mu_vol[ii] * vp_vol[jj]);
         }
     }
