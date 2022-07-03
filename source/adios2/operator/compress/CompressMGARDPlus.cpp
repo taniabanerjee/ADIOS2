@@ -40,8 +40,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,  reinterpret_cast<const double*>(dataIn));
     uint8_t compression_method = atoi(m_Parameters["compression_method"].c_str());
+    uint8_t pq_yes = atoi(m_Parameters["pq"].c_str());
     size_t bufferOutOffset = 0;
-    const uint8_t bufferVersion = 1;
+    const uint8_t bufferVersion = pq_yes ? 1:2;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, compression_method);
@@ -63,7 +64,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
                              tmpDecompressBuffer.data());
         optim.computeLagrangeParameters(
                 reinterpret_cast<const double*>(
-                tmpDecompressBuffer.data()));
+                tmpDecompressBuffer.data()), pq_yes);
         bufferOutOffset += mgardBufferSize;
     }
     else if (compression_method == 1) {
@@ -79,7 +80,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
                              tmpDecompressBuffer.data());
         optim.computeLagrangeParameters(
                 reinterpret_cast<const double*>(
-                tmpDecompressBuffer.data()));
+                tmpDecompressBuffer.data()), pq_yes);
         bufferOutOffset += szBufferSize;
     }
     else if (compression_method == 2) {
@@ -95,7 +96,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
                              tmpDecompressBuffer.data());
         optim.computeLagrangeParameters(
                 reinterpret_cast<const double*>(
-                tmpDecompressBuffer.data()));
+                tmpDecompressBuffer.data()), pq_yes);
         bufferOutOffset += zfpBufferSize;
     }
     // int my_rank;
@@ -126,8 +127,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
     // for your second double number and so on
 #endif
-    size_t ppsize = optim.putResultV1(bufferOut, bufferOutOffset);
-    bufferOutOffset += ppsize;
+    if (bufferVersion == 1) {
+        size_t ppsize = optim.putResultV1(bufferOut, bufferOutOffset);
+        bufferOutOffset += ppsize;
+    }
+    else {
+        size_t ppsize = optim.putResultV2(bufferOut, bufferOutOffset);
+        bufferOutOffset += ppsize;
+    }
 
 #ifdef UF_DEBUG
     int arraySize = optim.getPlaneCount()*optim.getNodeCount()*
