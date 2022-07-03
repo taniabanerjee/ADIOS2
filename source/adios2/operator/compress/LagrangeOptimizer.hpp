@@ -18,7 +18,8 @@ class LagrangeOptimizer
                 adios2::Dims blockStart, adios2::Dims blockCount,
                 const double* dataIn);
         // Compute Lagrange Parameters
-        void computeLagrangeParameters(const double* reconstructedData);
+        void computeLagrangeParameters(const double* reconstructedData,
+                const int applyPQ);
         // Get the plane offset
         size_t getPlaneOffset();
         // Get the node offset
@@ -38,6 +39,7 @@ class LagrangeOptimizer
         size_t putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResultV1(char* &bufferOut, size_t &bufferOutOffset);
+        size_t putResultV2(char* &bufferOut, size_t &bufferOutOffset);
         char* setDataFromCharBufferV1(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
         void setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
         void setDataFromCharBuffer2(double* &dataOut, const char* bufferIn, size_t bufferOffset, size_t bufferSize);
@@ -74,11 +76,13 @@ class LagrangeOptimizer
         void quantizeLagranges(int offset, int* &membership, double* &cluster);
         void initializeClusterCenters(double* &clusters, int numP, int myRank, double* lagarray, int numObjs);
         size_t putPQIndexes(char* &bufferOut, size_t &bufferOutOffset);
+        size_t putLagrangeParameters(char* &bufferOut,
+                    size_t &bufferOutOffset);
         size_t getPQIndexes(const char* bufferIn);
 
         // Members
         // Actual data being compressed and related parameters
-        const double* myDataIn;
+        std::vector <double> myDataIn;
         long unsigned int myPlaneOffset;
         long unsigned int myNodeOffset;
         long unsigned int myNodeCount;

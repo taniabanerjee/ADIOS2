@@ -8,6 +8,8 @@
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 #include "KmeansMPI.h"
+#define GET4D(X, d0, d1, d2, d3, i, j, k, l) X[(d1 * d2 * d3) * i + (d2 * d3) * j + d3 * k + l]
+
 
 // int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
 
@@ -71,7 +73,26 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
     printf ("#local elements %d %d %d %d\n", myPlaneCount, myNodeCount,
         myVxCount, myVyCount);
-    myDataIn = dataIn;
+    // myDataIn = dataIn;
+    myDataIn.reserve(myLocalElements);
+    // std::vector<double> i_g(myLocalElements);
+    for (int i = 0; i < myPlaneCount; i++)
+    {
+        for (int j = 0; j < myVxCount; j++)
+        {
+            for (int k = 0; k < myNodeCount; k++)
+            {
+                for (int l = 0; l < myVyCount; l++)
+                {
+                    GET4D(myDataIn, myPlaneCount, myNodeCount, myVxCount,
+                        myVyCount, i, k, j, l) =
+                        GET4D(dataIn, myPlaneCount, myVxCount,
+                            myNodeCount, myVyCount, i, j, k, l);
+                }
+            }
+        }
+    }
+    // myDataIn = i_g.data();
     readF0Params(meshFile);
     setVolume();
     setVp();
@@ -80,7 +101,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
 #ifdef UF_DEBUG
     printf ("volume: gv %d f0_nvp %d f0_nmu %d, vp: %d, vth: %d, vth2: %d, mu_qoi: %d\n", myGridVolume.size(), myF0Nvp.size(), myF0Nmu.size(), myVp.size(), myVth.size(), myVth2.size(), myMuQoi.size());
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        compute_C_qois(iphi, myDensity, myUpara, myTperp, myTpara, myN0, myT0, myDataIn);
+        compute_C_qois(iphi, myDensity, myUpara, myTperp, myTpara, myN0, myT0, myDataIn.data());
     }
 #endif
     myMaxValue = 0;
@@ -91,7 +112,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
 }
 
 void LagrangeOptimizer::computeLagrangeParameters(
-    const double* reconData)
+    const double* reconData, const int applyPQ)
 {
     clock_t start = clock();
     int ii, i, j, k, l, m;
@@ -100,6 +121,24 @@ void LagrangeOptimizer::computeLagrangeParameters(
             ((double*)reconData)[ii] = myEpsilon;
         }
     }
+    std::vector<double> i_g(myLocalElements);
+    for (int i = 0; i < myPlaneCount; i++)
+    {
+        for (int j = 0; j < myVxCount; j++)
+        {
+            for (int k = 0; k < myNodeCount; k++)
+            {
+                for (int l = 0; l < myVyCount; l++)
+                {
+                    GET4D(i_g, myPlaneCount, myNodeCount, myVxCount,
+                        myVyCount, i, k, j, l) =
+                        GET4D(reconData, myPlaneCount, myVxCount,
+                            myNodeCount, myVyCount, i, j, k, l);
+                }
+            }
+        }
+    }
+    reconData = i_g.data();
     int count = 0;
     double gradients[4] = {0.0, 0.0, 0.0, 0.0};
     double hessians[4][4] = {0.0, 0.0, 0.0, 0.0,
@@ -387,71 +426,62 @@ void LagrangeOptimizer::computeLagrangeParameters(
         }
     }
     printf ("Time Taken for Optimization Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
-#if 0
-    FILE* fp1 = fopen("dL.txt", "a");
-    FILE* fp2 = fopen("uL.txt", "a");
-    FILE* fp3 = fopen("tL.txt", "a");
-    FILE* fp4 = fopen("rL.txt", "a");
-    for (i=0; i<myNodeCount; ++i) {
-        fprintf (fp1, "%f\n", myLagranges[4*i]);
-        fprintf (fp2, "%f\n", myLagranges[4*i + 1]);
-        fprintf (fp3, "%f\n", myLagranges[4*i + 2]);
-        fprintf (fp4, "%f\n", myLagranges[4*i + 3]);
-    }
-    double* new_recon = new double[myLocalElements];
-    double nK[myVxCount*myVyCount];
-    for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        for (idx = 0; idx<myNodeCount; ++idx) {
-            const double* recon_one = &reconData[myNodeCount*myVxCount*
-                  myVyCount*iphi + myVxCount*myVyCount*idx];
-            double* new_recon_one = &new_recon[myNodeCount*myVxCount*
-                  myVyCount*iphi + myVxCount*myVyCount*idx];
-            int x = 4*idx;
-            for (i=0; i<myVxCount * myVyCount; ++i) {
-                nK[i] = myLagranges[x]*myVolume[myVxCount*myVyCount*idx+i]+
-                       myLagranges[x+1]*V2[myVxCount*myVyCount*idx+i] +
-                       myLagranges[x+2]*V3[myVxCount*myVyCount*idx+i] +
-                       myLagranges[x+3]*V4[myVxCount*myVyCount*idx+i];
-                new_recon_one[i] = recon_one[i] * exp(-nK[i]);
-            }
-        }
-    }
-#endif
     double* breg_recon = new double[myLocalElements];
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
-    double nK[myVxCount*myVyCount];
-    myLagrangeIndexesDensity = new int[myPlaneCount*myNodeCount];
-    myLagrangeIndexesUpara = new int[myPlaneCount*myNodeCount];
-    myLagrangeIndexesTperp = new int[myPlaneCount*myNodeCount];
-    myLagrangeIndexesRpara = new int[myPlaneCount*myNodeCount];
-    start = clock();
-    quantizeLagranges(0, myLagrangeIndexesDensity, myDensityTable);
-    quantizeLagranges(1, myLagrangeIndexesUpara, myUparaTable);
-    quantizeLagranges(2, myLagrangeIndexesTperp, myTperpTable);
-    quantizeLagranges(3, myLagrangeIndexesRpara, myRparaTable);
-    printf ("Time Taken for Quantization: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
-    for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        for (idx = 0; idx<myNodeCount; ++idx) {
-            const double* recon_one = &reconData[myNodeCount*myVxCount*
-                  myVyCount*iphi + myVxCount*myVyCount*idx];
-            double* new_recon_one = &new_recon[myNodeCount*myVxCount*
-                  myVyCount*iphi + myVxCount*myVyCount*idx];
-            int x = 4*idx;
-            int m1 = myLagrangeIndexesDensity[iphi*myNodeCount + idx];
-            int m2 = myLagrangeIndexesUpara[iphi*myNodeCount + idx];
-            int m3 = myLagrangeIndexesTperp[iphi*myNodeCount + idx];
-            int m4 = myLagrangeIndexesRpara[iphi*myNodeCount + idx];
-            double c1 = myDensityTable[m1];
-            double c2 = myUparaTable[m2];
-            double c3 = myTperpTable[m3];
-            double c4 = myRparaTable[m4];
-            for (i=0; i<myVxCount * myVyCount; ++i) {
-                nK[i] = (c1)*myVolume[myVxCount*myVyCount*idx+i]+
-                       (c2)*V2[myVxCount*myVyCount*idx+i] +
-                       (c3)*V3[myVxCount*myVyCount*idx+i] +
-                       (c4)*V4[myVxCount*myVyCount*idx+i];
-                new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+    if (applyPQ) {
+        double nK[myVxCount*myVyCount];
+        myLagrangeIndexesDensity = new int[myPlaneCount*myNodeCount];
+        myLagrangeIndexesUpara = new int[myPlaneCount*myNodeCount];
+        myLagrangeIndexesTperp = new int[myPlaneCount*myNodeCount];
+        myLagrangeIndexesRpara = new int[myPlaneCount*myNodeCount];
+        start = clock();
+        quantizeLagranges(0, myLagrangeIndexesDensity, myDensityTable);
+        quantizeLagranges(1, myLagrangeIndexesUpara, myUparaTable);
+        quantizeLagranges(2, myLagrangeIndexesTperp, myTperpTable);
+        quantizeLagranges(3, myLagrangeIndexesRpara, myRparaTable);
+        printf ("Time Taken for Quantization: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+        for (iphi=0; iphi<myPlaneCount; ++iphi) {
+            for (idx = 0; idx<myNodeCount; ++idx) {
+                const double* recon_one = &reconData[myNodeCount*myVxCount*
+                      myVyCount*iphi + myVxCount*myVyCount*idx];
+                double* new_recon_one = &new_recon[myNodeCount*myVxCount*
+                      myVyCount*iphi + myVxCount*myVyCount*idx];
+                int x = 4*idx;
+                int m1 = myLagrangeIndexesDensity[iphi*myNodeCount + idx];
+                int m2 = myLagrangeIndexesUpara[iphi*myNodeCount + idx];
+                int m3 = myLagrangeIndexesTperp[iphi*myNodeCount + idx];
+                int m4 = myLagrangeIndexesRpara[iphi*myNodeCount + idx];
+                double c1 = myDensityTable[m1];
+                double c2 = myUparaTable[m2];
+                double c3 = myTperpTable[m3];
+                double c4 = myRparaTable[m4];
+                for (i=0; i<myVxCount * myVyCount; ++i) {
+                    nK[i] = (c1)*myVolume[myVxCount*myVyCount*idx+i]+
+                           (c2)*V2[myVxCount*myVyCount*idx+i] +
+                           (c3)*V3[myVxCount*myVyCount*idx+i] +
+                           (c4)*V4[myVxCount*myVyCount*idx+i];
+                    new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+                }
+            }
+        }
+    }
+    else {
+        double nK[myVxCount*myVyCount];
+        for (iphi=0; iphi<myPlaneCount; ++iphi) {
+            for (idx = 0; idx<myNodeCount; ++idx) {
+                const double* recon_one = &reconData[myNodeCount*myVxCount*
+                      myVyCount*iphi + myVxCount*myVyCount*idx];
+                double* new_recon_one = &new_recon[myNodeCount*myVxCount*
+                      myVyCount*iphi + myVxCount*myVyCount*idx];
+                int x = 4*idx;
+                for (i=0; i<myVxCount * myVyCount; ++i) {
+                    nK[i] = myLagranges[x]*myVolume[myVxCount*myVyCount*idx+i]+
+                           myLagranges[x+1]*V2[myVxCount*myVyCount*idx+i] +
+                           myLagranges[x+2]*V3[myVxCount*myVyCount*idx+i] +
+                           myLagranges[x+3]*V4[myVxCount*myVyCount*idx+i];
+                    new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+                }
             }
         }
     }
@@ -560,6 +590,53 @@ size_t LagrangeOptimizer::getParameterSize()
 size_t LagrangeOptimizer::getTableSize()
 {
     return 0;
+}
+
+size_t LagrangeOptimizer::putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset)
+{
+    int i, count = 0;
+    int numObjs = myPlaneCount*myNodeCount;
+    for (i=0; i<numObjs*4; i+=4) {
+        *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                  myLagranges[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                  myLagranges[i+1];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                  myLagranges[i+2];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<double*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                  myLagranges[i+3];
+    }
+    return count * sizeof(double);
+}
+
+size_t LagrangeOptimizer::putResultV2(char* &bufferOut, size_t &bufferOutOffset)
+{
+    // TODO: after your algorithm is done, put the result into
+    // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
+    // double number *reinterpret_cast<double*>(bufferOut+bufferOutOff      set+8)
+    // for your second double number and so on
+    int intbytes = putLagrangeParameters(bufferOut, bufferOutOffset);
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    if (my_rank == 0) {
+        FILE* fp = fopen("PqMeshInfo.bin", "wb");
+        int str_length = myMeshFile.length();
+        printf("Mesh file %d %s\n", str_length, myMeshFile.c_str());
+        fwrite(&str_length, sizeof(int), 1, fp);
+        fwrite(myMeshFile.c_str(), sizeof(char), str_length, fp);
+        fclose(fp);
+    }
+    return intbytes;
 }
 
 size_t LagrangeOptimizer::putPQIndexes(char* &bufferOut, size_t &bufferOutOffset)
@@ -1312,7 +1389,7 @@ void LagrangeOptimizer::compute_C_qois(int iphi,
         // printf ("Tperp %g, %g, %g, %g\n", value/density[den_index + i]/mySmallElectronCharge, value, myParticleMass, mySmallElectronCharge);
     }
     for (i=0; i<myNodeCount; ++i) {
-        for (j=0; j<myVxCount; ++j)
+        for (j=0; j<myVyCount; ++j)
             en.push_back(0.5*pow((myVp[j]-upar_[i]),2));
     }
     for (i=0; i<myNodeCount; ++i) {
@@ -1320,7 +1397,7 @@ void LagrangeOptimizer::compute_C_qois(int iphi,
             for (k=0; k<myVyCount; ++k)
                 T_par.push_back(f0_f[myVxCount*myVyCount*i + myVyCount*j + k] *
                     myVolume[myVxCount*myVyCount*i + myVyCount*j + k] *
-                    en[myVxCount*i+k] * myVth2[i] * myParticleMass);
+                    en[myVyCount*i+k] * myVth2[i] * myParticleMass);
     }
     for (i=0; i<myNodeCount; ++i) {
         double value = 0;
@@ -1335,6 +1412,103 @@ void LagrangeOptimizer::compute_C_qois(int iphi,
     }
     return;
 }
+
+#if 0
+void LagrangeOptimizer::compute_C_qois(int iphi,
+      std::vector <double> &density, std::vector <double> &upara,
+      std::vector <double> &tperp, std::vector <double> &tpara,
+      std::vector <double> &n0, std::vector <double> &t0,
+      const double* dataIn)
+{
+    std::vector <double> den;
+    std::vector <double> upar;
+    std::vector <double> upar_;
+    std::vector <double> tper;
+    std::vector <double> en;
+    std::vector <double> T_par;
+    int i, j, k;
+    const double* f0_f = &dataIn[iphi*myNodeCount*myVxCount*myVyCount];
+    int den_index = iphi*myNodeCount;
+
+    double value = 0;
+    for (i=0; i<myNodeCount; ++i) {
+        value = 0;
+        for (k=0; k<myVxCount; ++k) {
+            int offset = k*myNodeCount*myVyCount + i*myVyCount;
+            for (j=offset; j < myVyCount+offset; j++) {
+                value += f0_f[j] * myVolume[i*myVxCount*myVyCount + k*myVyCount + (j-offset)];
+            }
+        }
+        density.push_back(value);
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        value = 0;
+        for (k=0; k<myVxCount; ++k) {
+            int offset = k*myNodeCount*myVyCount + i*myVyCount;
+            for (j=offset; j < myVyCount+offset; j++) {
+                value +=f0_f[j] * myVolume[i*myVxCount*myVyCount + k*myVyCount + (j-offset)] * myVth[i]*myVp[(j-offset)];
+            }
+        }
+        upara.push_back(value/density[den_index + i]);
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        value = 0;
+        for (k=0; k<myVxCount; ++k) {
+            int offset = k*myNodeCount*myVyCount + i*myVyCount;
+            for (j=offset; j < myVyCount+offset; j++) {
+                value +=f0_f[j] * myVolume[i*myVxCount*myVyCount + k*myVyCount + (j-offset)] * 0.5 * myMuQoi[k] * myVth2[i] * myParticleMass;
+            }
+        }
+        tperp.push_back(value/density[den_index + i]/mySmallElectronCharge);
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        upar_.push_back(upara[den_index + i]/myVth[i]);
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        for (j=0; j<myVyCount; ++j)
+            en.push_back(0.5*pow((myVp[j]-upar_[i]),2));
+    }
+    for (i=0; i<myNodeCount; ++i) {
+        value = 0;
+        for (k=0; k<myVxCount; ++k) {
+            int offset = k*myNodeCount*myVyCount + i*myVyCount;
+            for (j=offset; j < myVyCount+offset; j++) {
+                value += f0_f[j] * myVolume[i*myVxCount*myVyCount + k*myVyCount + (j-offset)] * en[myVyCount*i+(j-offset)] * myVth2[i] * myParticleMass;
+            }
+        }
+        tpara.push_back(2.0*value/density[den_index + i]/mySmallElectronCharge);
+    }
+#if 0
+    if (myPlaneOffset == 0 && myNodeOffset == 0) {
+        FILE* fp = fopen ("density.txt", "w");
+        for (i=0; i<myNodeCount; ++i) {
+            fprintf(fp, "%f\n", density[i]);
+        }
+        fclose(fp);
+        fp = fopen ("upara.txt", "w");
+        for (i=0; i<myNodeCount; ++i) {
+            fprintf(fp, "%f\n", upara[i]);
+        }
+        fclose(fp);
+        fp = fopen ("tperp.txt", "w");
+        for (i=0; i<myNodeCount; ++i) {
+            fprintf(fp, "%f\n", tperp[i]);
+        }
+        fclose(fp);
+        fp = fopen ("tpara.txt", "w");
+        for (i=0; i<myNodeCount; ++i) {
+            fprintf(fp, "%f\n", tpara[i]);
+        }
+        fclose(fp);
+    }
+#endif
+    for (i=0; i<myNodeCount; ++i) {
+        n0.push_back(density[i]);
+        t0.push_back((2.0*tperp[i]+tpara[i])/3.0);
+    }
+    return;
+}
+#endif
 
 #if 0
 void compute_C_qois_new(int iphi,
@@ -1509,7 +1683,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     std::vector <double> refn0;
     std::vector <double> reft0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        compute_C_qois(iphi, refdensity, refupara, reftperp, reftpara, refn0, reft0, myDataIn);
+        compute_C_qois(iphi, refdensity, refupara, reftperp, reftpara, refn0, reft0, myDataIn.data());
     }
     double pd_error_b = rmseErrorPD(reconData);
     double pd_error_a = rmseErrorPD(bregData);
@@ -1520,25 +1694,32 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
         }
     }
 #endif
-    printf ("PD errors %g, %g\n", pd_error_b, pd_error_a);
+    // printf ("PD errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", pd_error_b, pd_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
+    printf ("%d, %d, %d, %d, PD, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, pd_error_b, pd_error_a);
     double density_error_b = rmseError(refdensity, rdensity);
     double density_error_a = rmseError(refdensity, bdensity);
-    printf ("Density errors %g, %g\n", density_error_b, density_error_a);
+    // printf ("Density errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", density_error_b, density_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
+    printf ("%d, %d, %d, %d, Density, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, density_error_b, density_error_a);
     double upara_error_b = rmseError(refupara, rupara);
     double upara_error_a = rmseError(refupara, bupara);
-    printf ("Upara errors %g, %g\n", upara_error_b, upara_error_a);
+    // printf ("Upara errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", upara_error_b, upara_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
+    printf ("%d, %d, %d, %d, Upara, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, upara_error_b, upara_error_a);
     double tperp_error_b = rmseError(reftperp, rtperp);
     double tperp_error_a = rmseError(reftperp, btperp);
-    printf ("Tperp errors %g, %g\n", tperp_error_b, tperp_error_a);
+    // printf ("Tperp errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", tperp_error_b, tperp_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
+    printf ("%d, %d, %d, %d, Tperp, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, tperp_error_b, tperp_error_a);
     double tpara_error_b = rmseError(reftpara, rtpara);
     double tpara_error_a = rmseError(reftpara, btpara);
-    printf ("Tpara errors %g, %g\n", tpara_error_b, tpara_error_a);
+    // printf ("Tpara errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", tpara_error_b, tpara_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
+    printf ("%d, %d, %d, %d, Tpara, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, tpara_error_b, tpara_error_a);
     double n0_error_b = rmseError(refn0, rn0);
     double n0_error_a = rmseError(refn0, bn0);
-    printf ("n0 errors %g, %g\n", n0_error_b, n0_error_a);
+    // printf ("n0 errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", n0_error_b, n0_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
+    printf ("%d, %d, %d, %d, n0, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, n0_error_b, n0_error_a);
     double T0_error_b = rmseError(reft0, rt0);
     double T0_error_a = rmseError(reft0, bt0);
-    printf ("T0 errors %g, %g\n", T0_error_b, T0_error_a);
+    // printf ("T0 errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", T0_error_b, T0_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
+    printf ("%d, %d, %d, %d, T0, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, T0_error_b, T0_error_a);
     return;
 }
 
@@ -1547,7 +1728,7 @@ double LagrangeOptimizer::rmseErrorPD(const double* y)
     double e = 0;
     double maxv = -99999;
     double minv = 99999;
-    const double* x = myDataIn;
+    const double* x = myDataIn.data();
     int nsize = myLocalElements;
     for (int i=0; i<nsize; ++i) {
         e += pow((x[i] - y[i]), 2);
