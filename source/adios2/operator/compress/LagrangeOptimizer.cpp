@@ -154,13 +154,15 @@ void LagrangeOptimizer::computeLagrangeParameters(
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
     for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
         i = int(k/(myVxCount*myVyCount));
-        j = int (k%myVxCount);
+        j = int (k%myVyCount);
         l = int(k%(myVxCount*myVyCount));
         m = int(l/myVyCount);
         V2[k] = myVolume[k] * myVth[i] * myVp[j];
         V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
         V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
     }
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     int breg_index = 0;
     int iphi, idx;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
@@ -225,6 +227,12 @@ void LagrangeOptimizer::computeLagrangeParameters(
         double TperpEB = pow(maxTperp*1e-09, 2);
         double TparaEB = pow(maxTpara*1e-09, 2);
         double PDeB = pow(myMaxValue*1e-09, 2);
+#if UF_DEBUG
+        if (my_rank == 0) {
+            printf ("Max: D %f U %d Tperp %f Tpara %f PD %f\n", maxD, maxU, maxTperp, maxTpara, myMaxValue);
+            printf ("Bounds: D %f U %d Tperp %f Tpara %f PD %f\n", DeB, UeB, TperpEB, TparaEB, PDeB);
+        }
+#endif
         int maxIter = 50;
         std::vector <double> L2_den (maxIter, 0);
         std::vector <double> L2_upara (maxIter, 0);
@@ -266,11 +274,21 @@ void LagrangeOptimizer::computeLagrangeParameters(
                             myVxCount*myVyCount*idx + i]/D[idx];
                         rmse_pd += pow((breg_result[i] - f0_f[myVxCount*myVyCount*idx + i]), 2);
                     }
+#ifdef UF_DEBUG
+                    if (my_rank == 0) {
+                        printf ("updated D %5.3g, U %5.3g, Tperp %5.3g, Tpara %5.3g, PD %5.3g\n", update_D, update_U, update_Tperp, update_Tpara, rmse_pd);
+                    }
+#endif
                     L2_den[count] = pow((update_D - D[idx]), 2);
                     L2_upara[count] = pow((update_U - U[idx]), 2);
                     L2_tperp[count] = pow((update_Tperp-Tperp[idx]), 2);
                     L2_tpara[count] = pow((update_Tpara-Rpara[idx]), 2);
                     L2_PD[count] = sqrt(rmse_pd);
+#ifdef UF_DEBUG
+                    if (my_rank == 0) {
+                        printf ("Errors count %d D %5.3g, U %5.3g, Tperp %5.3g, Tpara %5.3g, PD %5.3g\n", count, L2_den[count], L2_upara[count], L2_tperp[count], L2_tpara[count], L2_PD[count]);
+                    }
+#endif
                     bool c1, c2, c3, c4;
                     bool converged = (isConverged(L2_den, DeB, count)
                         && isConverged(L2_upara, UeB, count)
@@ -294,8 +312,11 @@ void LagrangeOptimizer::computeLagrangeParameters(
                         myLagranges[idx*4 + 2] = lambdas[2];
                         myLagranges[idx*4 + 3] = lambdas[3];
 #ifdef UF_DEBUG
-                        if (idx % 2000 == 0) {
-                            printf ("node %d finished\n", idx);
+                        if (my_rank == 0) {
+                            printf ("Node: %d, Dpred %f Dact %f, Upred %f Uact %f, Tperp-pred %f Tperp-act %f, Tapara-pred %f Tpara-act %f\n", idx, update_D, D[idx], update_U, U[idx], update_Tperp, Tperp[idx], update_Tpara, Rpara[idx]);
+                            for (i=0; i<myVxCount*myVyCount; ++i) {
+                                printf ("Node %d, pre nK %f, x %d, y %d, n %d, %g\n", idx, K[i], i/37, i%37, idx, breg_result[i]);
+                            }
                         }
 #endif
                         break;
@@ -481,6 +502,11 @@ void LagrangeOptimizer::computeLagrangeParameters(
                            myLagranges[x+2]*V3[myVxCount*myVyCount*idx+i] +
                            myLagranges[x+3]*V4[myVxCount*myVyCount*idx+i];
                     new_recon_one[i] = recon_one[i] * exp(-nK[i]);
+#if UF_DEBUG
+                    if (my_rank == 0) {
+                        printf ("Node %d, post nK %f, x %d, y %d, n %d %g\n", idx, nK[i], i/37, i%37, idx, new_recon_one[i]);
+                    }
+#endif
                 }
             }
         }
