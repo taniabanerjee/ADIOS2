@@ -1136,6 +1136,7 @@ void LagrangeOptimizer::setDataFromCharBuffer2(double* &reconData,
     }
 }
 
+#if 0
 void LagrangeOptimizer::readCharBuffer(const char* bufferIn, size_t bufferOffset, size_t bufferSize)
 {
     int i;
@@ -1178,6 +1179,7 @@ void LagrangeOptimizer::readCharBuffer(const char* bufferIn, size_t bufferOffset
     printf ("Nmu error %f\n", myF0Nmu[0] - nmu);
     printf ("Dsmu error %f\n", myF0Dsmu[0] - dsmu);
 }
+#endif
 
 void LagrangeOptimizer::readF0Params(const std::string meshFile)
 {
@@ -1642,6 +1644,74 @@ bool LagrangeOptimizer::isConverged(std::vector <double> difflist, double eB, in
     return status;
 }
 
+void LagrangeOptimizer::compareErrorsPD(const double* reconData, const double* bregData, int rank)
+{
+    double pd_b;
+    int pd_size_b;
+    double pd_min_b;
+    double pd_max_b;
+    double pd_a;
+    int pd_size_a;
+    double pd_min_a;
+    double pd_max_a;
+    double pd_error_b = rmseErrorPD(reconData, pd_b, pd_max_b, pd_min_b, pd_size_b);
+    double pd_error_a = rmseErrorPD(bregData, pd_a, pd_max_a, pd_min_a, pd_size_a);
+    // get total error for recon
+    double pd_e_b;
+    int pd_s_b;
+    double pd_omin_b;
+    double pd_omax_b;
+    MPI_Allreduce(&pd_b, &pd_e_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    double pd_e_a;
+    int pd_s_a;
+    double pd_omin_a;
+    double pd_omax_a;
+    MPI_Allreduce(&pd_a, &pd_e_a, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_size_a, &pd_s_a, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_min_a, &pd_omin_a, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_max_a, &pd_omax_a, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    if (rank == 0) {
+        printf ("Overall PD Error: %f %f\n", sqrt(pd_e_b/pd_s_b)/(pd_omax_b-pd_omin_b), sqrt(pd_e_a/pd_s_a)/(pd_omax_a-pd_omin_a));
+    }
+}
+
+void LagrangeOptimizer::compareErrorsQoI(std::vector <double> &refqoi, std::vector <double> &rqoi, std::vector <double> &bqoi, const char* qoi, int rank)
+{
+    double pd_b;
+    int pd_size_b;
+    double pd_min_b;
+    double pd_max_b;
+    double pd_a;
+    int pd_size_a;
+    double pd_min_a;
+    double pd_max_a;
+    double pd_error_b = rmseError(refqoi, rqoi, pd_b, pd_max_b, pd_min_b, pd_size_b);
+    double pd_error_a = rmseError(refqoi, bqoi, pd_a, pd_max_a, pd_min_a, pd_size_a);
+    // get total error for recon
+    double pd_e_b;
+    int pd_s_b;
+    double pd_omin_b;
+    double pd_omax_b;
+    MPI_Allreduce(&pd_b, &pd_e_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    double pd_e_a;
+    int pd_s_a;
+    double pd_omin_a;
+    double pd_omax_a;
+    MPI_Allreduce(&pd_a, &pd_e_a, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_size_a, &pd_s_a, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_min_a, &pd_omin_a, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_max_a, &pd_omax_a, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    if (rank == 0) {
+        printf ("Overall %s Error: %f %f\n", qoi, sqrt(pd_e_b/pd_s_b)/(pd_omax_b-pd_omin_b), sqrt(pd_e_a/pd_s_a)/(pd_omax_a-pd_omin_a));
+    }
+}
+
 void LagrangeOptimizer::compareQoIs(const double* reconData,
         const double* bregData)
 {
@@ -1711,8 +1781,13 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, refdensity, refupara, reftperp, reftpara, refn0, reft0, myDataIn.data());
     }
-    double pd_error_b = rmseErrorPD(reconData);
-    double pd_error_a = rmseErrorPD(bregData);
+    compareErrorsPD(reconData, bregData, my_rank);
+    compareErrorsQoI(refdensity, rdensity, bdensity, "density", my_rank);
+    compareErrorsQoI(refupara, rupara, bupara, "upara", my_rank);
+    compareErrorsQoI(reftperp, rtperp, btperp, "tperp", my_rank);
+    compareErrorsQoI(reftpara, rtpara, btpara, "tpara", my_rank);
+    compareErrorsQoI(refn0, rn0, bn0, "n0", my_rank);
+    compareErrorsQoI(reft0, rt0, bt0, "T0", my_rank);
 #if 0
     if (isnan(pd_error_a)) {
         for (int i=0; i<myLocalElements; ++i) {
@@ -1720,6 +1795,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
         }
     }
 #endif
+#if 0
     // printf ("PD errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", pd_error_b, pd_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
     printf ("%d, %d, %d, %d, PD, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, pd_error_b, pd_error_a);
     double density_error_b = rmseError(refdensity, rdensity);
@@ -1746,16 +1822,17 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     double T0_error_a = rmseError(reft0, bt0);
     // printf ("T0 errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", T0_error_b, T0_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
     printf ("%d, %d, %d, %d, T0, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, T0_error_b, T0_error_a);
+#endif
     return;
 }
 
-double LagrangeOptimizer::rmseErrorPD(const double* y)
+double LagrangeOptimizer::rmseErrorPD(const double* y, double &e, double &maxv, double &minv, int &nsize)
 {
-    double e = 0;
-    double maxv = -99999;
-    double minv = 99999;
+    e = 0;
+    maxv = -99999;
+    minv = 99999;
     const double* x = myDataIn.data();
-    int nsize = myLocalElements;
+    nsize = myLocalElements;
     for (int i=0; i<nsize; ++i) {
         e += pow((x[i] - y[i]), 2);
         if (x[i] < minv) {
@@ -1768,32 +1845,14 @@ double LagrangeOptimizer::rmseErrorPD(const double* y)
     return sqrt(e/nsize)/(maxv-minv);
 }
 
-double LagrangeOptimizer::rmseError(double* &x, std::vector <double> &y)
+double LagrangeOptimizer::rmseError(std::vector <double> &x, std::vector <double> &y, double &e, double &maxv, double &minv, int &ysize)
 {
-    size_t ysize = y.size();
-    double e = 0;
-    double maxv = -99999;
-    double minv = 99999;
-    for (int i=0; i<ysize; ++i) {
-        e += pow((x[i] - y[i]), 2);
-        if (x[i] < minv) {
-            minv = x[i];
-        }
-        if (x[i] > maxv) {
-            maxv = x[i];
-        }
-    }
-    return sqrt(e/ysize)/(maxv-minv);
-}
-
-double LagrangeOptimizer::rmseError(std::vector <double> &x, std::vector <double> &y)
-{
-    unsigned int xsize = x.size();
-    unsigned int ysize = y.size();
+    int xsize = x.size();
+    ysize = y.size();
     assert(xsize == ysize);
-    double e = 0;
-    double maxv = -99999;
-    double minv = 99999;
+    e = 0;
+    maxv = -99999;
+    minv = 99999;
     for (int i=0; i<xsize; ++i) {
         e += pow((x[i] - y[i]), 2);
         if (x[i] < minv) {
@@ -1804,25 +1863,6 @@ double LagrangeOptimizer::rmseError(std::vector <double> &x, std::vector <double
         }
     }
     return sqrt(e/xsize)/(maxv-minv);
-}
-
-double LagrangeOptimizer::rmseError2(std::vector <double> &x, std::vector <double> &y, int start)
-{
-    unsigned int xsize = x.size();
-    unsigned int ysize = y.size();
-    double e = 0;
-    double maxv = -99999;
-    double minv = 99999;
-    for (int i=0; i<ysize; ++i) {
-        e += pow((x[i+start] - y[i]), 2);
-        if (x[i+start] < minv) {
-            minv = x[i+start];
-        }
-        if (x[i+start] > maxv) {
-            maxv = x[i+start];
-        }
-    }
-    return sqrt(e/ysize)/(maxv-minv);
 }
 
 double LagrangeOptimizer::determinant(double a[4][4], double k)
