@@ -70,7 +70,7 @@ class LagrangeOptimizer
             std::vector <double> &y, std::vector <double> &z,
             const char* qoi, int rank);
         double rmseErrorPD(const double* y, double &e, double &maxv,
-            double &minv, int &ysize);
+            double &minv, double &ysize);
         double rmseError(std::vector <double> &rqoi,
             std::vector <double> &bqoi, double &e, double &maxv,
             double &minv, int &ysize);

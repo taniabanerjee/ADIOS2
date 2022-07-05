@@ -71,8 +71,8 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     printf("#planes: %d, #nodes: %d, #vx: %d, #vy: %d\n", myPlaneCount, myNodeCount, myVxCount, myVyCount);
 #endif
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
-    printf ("#local elements %d %d %d %d\n", myPlaneCount, myNodeCount,
-        myVxCount, myVyCount);
+    // printf ("#local elements %d %d %d %d\n", myPlaneCount, myNodeCount,
+        // myVxCount, myVyCount);
     // myDataIn = dataIn;
     myDataIn.reserve(myLocalElements);
     // std::vector<double> i_g(myLocalElements);
@@ -108,7 +108,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     for (size_t i = 0; i < myLocalElements; ++i) {
         myMaxValue = (myMaxValue > myDataIn[i]) ? myMaxValue : myDataIn[i];
     }
-    printf ("Time Taken for QoI Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    // printf ("Time Taken for QoI Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
 }
 
 void LagrangeOptimizer::computeLagrangeParameters(
@@ -446,7 +446,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
             }
         }
     }
-    printf ("Time Taken for Optimization Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    // printf ("Time Taken for Optimization Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
     double* breg_recon = new double[myLocalElements];
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
@@ -461,7 +461,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
         quantizeLagranges(1, myLagrangeIndexesUpara, myUparaTable);
         quantizeLagranges(2, myLagrangeIndexesTperp, myTperpTable);
         quantizeLagranges(3, myLagrangeIndexesRpara, myRparaTable);
-        printf ("Time Taken for Quantization: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+        // printf ("Time Taken for Quantization: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
         for (iphi=0; iphi<myPlaneCount; ++iphi) {
             for (idx = 0; idx<myNodeCount; ++idx) {
                 const double* recon_one = &reconData[myNodeCount*myVxCount*
@@ -563,17 +563,17 @@ void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* 
             lagarray[iphi*myNodeCount + idx] = myLagranges[iphi*myNodeCount + 4*idx + offset];
         }
     }
-    printf ("Time Taken for assigning lag array: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    // printf ("Time Taken for assigning lag array: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
 
     start = clock();
     initializeClusterCenters(clusters, num_procs, my_rank, lagarray, numObjs);
-    printf ("Time Taken for init clusters: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    // printf ("Time Taken for init clusters: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
     start = clock();
     membership = new int [numObjs];
     memset (membership, 0, numObjs*sizeof(int));
     mpi_kmeans(lagarray, numObjs, myNumClusters,
         threshold, membership, clusters);
-    printf ("Time Taken for KMeans: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    // printf ("Time Taken for KMeans: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
     return;
 }
 
@@ -1644,37 +1644,76 @@ bool LagrangeOptimizer::isConverged(std::vector <double> difflist, double eB, in
     return status;
 }
 
+#if 0
 void LagrangeOptimizer::compareErrorsPD(const double* reconData, const double* bregData, int rank)
 {
     double pd_b;
-    int pd_size_b;
+    size_t pd_size_b;
     double pd_min_b;
     double pd_max_b;
     double pd_a;
-    int pd_size_a;
+    size_t pd_size_a;
     double pd_min_a;
     double pd_max_a;
     double pd_error_b = rmseErrorPD(reconData, pd_b, pd_max_b, pd_min_b, pd_size_b);
     double pd_error_a = rmseErrorPD(bregData, pd_a, pd_max_a, pd_min_a, pd_size_a);
     // get total error for recon
     double pd_e_b;
-    int pd_s_b;
+    size_t pd_s_b;
     double pd_omin_b;
     double pd_omax_b;
     MPI_Allreduce(&pd_b, &pd_e_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_LONG_LONG_INT, MPI_SUM, MPI_COMM_WORLD);
     MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
     MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
     double pd_e_a;
-    int pd_s_a;
+    size_t pd_s_a;
     double pd_omin_a;
     double pd_omax_a;
     MPI_Allreduce(&pd_a, &pd_e_a, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    MPI_Allreduce(&pd_size_a, &pd_s_a, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    printf ("Rank %d Num elements %d\n", rank, pd_size_a);
+    MPI_Allreduce(&pd_size_a, &pd_s_a, 1, MPI_LONG_LONG_INT, MPI_SUM, MPI_COMM_WORLD);
     MPI_Allreduce(&pd_min_a, &pd_omin_a, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
     MPI_Allreduce(&pd_max_a, &pd_omax_a, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
     if (rank == 0) {
         printf ("Overall PD Error: %f %f\n", sqrt(pd_e_b/pd_s_b)/(pd_omax_b-pd_omin_b), sqrt(pd_e_a/pd_s_a)/(pd_omax_a-pd_omin_a));
+        // printf ("PD Error stats: %f %d %f %f %f %d %f %f\n", pd_e_b, pd_s_b,pd_omax_b,pd_omin_b, pd_e_a,pd_s_a,pd_omax_a,pd_omin_a);
+    }
+}
+#endif
+
+void LagrangeOptimizer::compareErrorsPD(const double* reconData, const double* bregData, int rank)
+{
+    double pd_b;
+    double pd_size_b;
+    double pd_min_b;
+    double pd_max_b;
+    double pd_a;
+    double pd_size_a;
+    double pd_min_a;
+    double pd_max_a;
+    double pd_error_b = rmseErrorPD(reconData, pd_b, pd_max_b, pd_min_b, pd_size_b);
+    double pd_error_a = rmseErrorPD(bregData, pd_a, pd_max_a, pd_min_a, pd_size_a);
+    // get total error for recon
+    double pd_e_b;
+    double pd_s_b;
+    double pd_omin_b;
+    double pd_omax_b;
+    MPI_Allreduce(&pd_b, &pd_e_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    double pd_e_a;
+    double pd_s_a;
+    double pd_omin_a;
+    double pd_omax_a;
+    MPI_Allreduce(&pd_a, &pd_e_a, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_size_a, &pd_s_a, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_min_a, &pd_omin_a, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&pd_max_a, &pd_omax_a, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    if (rank == 0) {
+        printf ("Overall PD Error: %f %f\n", sqrt(pd_e_b/pd_s_b)/(pd_omax_b-pd_omin_b), sqrt(pd_e_a/pd_s_a)/(pd_omax_a-pd_omin_a));
+        printf ("PD Error stats: %f %f %f %f %f %f %f %f\n", pd_e_b, pd_s_b,pd_omax_b,pd_omin_b, pd_e_a,pd_s_a,pd_omax_a,pd_omin_a);
     }
 }
 
@@ -1826,13 +1865,13 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     return;
 }
 
-double LagrangeOptimizer::rmseErrorPD(const double* y, double &e, double &maxv, double &minv, int &nsize)
+double LagrangeOptimizer::rmseErrorPD(const double* y, double &e, double &maxv, double &minv, double &nsize)
 {
     e = 0;
     maxv = -99999;
     minv = 99999;
     const double* x = myDataIn.data();
-    nsize = myLocalElements;
+    nsize = double(myLocalElements);
     for (int i=0; i<nsize; ++i) {
         e += pow((x[i] - y[i]), 2);
         if (x[i] < minv) {
