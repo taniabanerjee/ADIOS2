@@ -65,16 +65,23 @@ class LagrangeOptimizer
         bool isConverged(std::vector <double> difflist, double eB, int count);
         void compareQoIs(const double* reconData,
             const double* bregData);
-        double rmseErrorPD(const double* y);
-        double rmseError(std::vector <double> &x, std::vector <double> &y);
-        double rmseError(double* &x, std::vector <double> &y);
-        double rmseError2(std::vector <double> &x, std::vector <double> &y, int start);
+        void compareErrorsPD(const double* reconData, const double* bregData, int rank);
+        void compareErrorsQoI(std::vector <double> &x,
+            std::vector <double> &y, std::vector <double> &z,
+            const char* qoi, int rank);
+        double rmseErrorPD(const double* y, double &e, double &maxv,
+            double &minv, int &ysize);
+        double rmseError(std::vector <double> &rqoi,
+            std::vector <double> &bqoi, double &e, double &maxv,
+            double &minv, int &ysize);
         double determinant(double a[4][4], double k);
         double** cofactor(double num[4][4], double f);
         double** transpose(double num[4][4], double fac[4][4], double r);
         void quantizeLagrangesUsingKmeans(int offset);
-        void quantizeLagranges(int offset, int* &membership, double* &cluster);
-        void initializeClusterCenters(double* &clusters, int numP, int myRank, double* lagarray, int numObjs);
+        void quantizeLagranges(int offset, int* &membership,
+            double* &cluster);
+        void initializeClusterCenters(double* &clusters, int numP,
+            int myRank, double* lagarray, int numObjs);
         size_t putPQIndexes(char* &bufferOut, size_t &bufferOutOffset);
         size_t putLagrangeParameters(char* &bufferOut,
                     size_t &bufferOutOffset);
