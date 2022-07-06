@@ -54,8 +54,12 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
      adios2::Dims blockStart, adios2::Dims blockCount,
      const double* dataIn)
 {
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     myMeshFile = meshFile;
-    clock_t start = clock();
+    double start, end;
+    MPI_Barrier(MPI_COMM_WORLD);
+    start = MPI_Wtime();
     int planeIndex = 0;
     int nodeIndex = 2;
     int velXIndex = 1;
@@ -71,11 +75,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     printf("#planes: %d, #nodes: %d, #vx: %d, #vy: %d\n", myPlaneCount, myNodeCount, myVxCount, myVyCount);
 #endif
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
-    // printf ("#local elements %d %d %d %d\n", myPlaneCount, myNodeCount,
-        // myVxCount, myVyCount);
-    // myDataIn = dataIn;
     myDataIn.reserve(myLocalElements);
-    // std::vector<double> i_g(myLocalElements);
     for (int i = 0; i < myPlaneCount; i++)
     {
         for (int j = 0; j < myVxCount; j++)
@@ -92,7 +92,6 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
             }
         }
     }
-    // myDataIn = i_g.data();
     readF0Params(meshFile);
     setVolume();
     setVp();
@@ -108,13 +107,21 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     for (size_t i = 0; i < myLocalElements; ++i) {
         myMaxValue = (myMaxValue > myDataIn[i]) ? myMaxValue : myDataIn[i];
     }
-    // printf ("Time Taken for QoI Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    MPI_Barrier(MPI_COMM_WORLD);
+    end = MPI_Wtime();
+    if (my_rank == 0) {
+        printf ("Time Taken for QoI Computation: %f\n", (end-start));
+    }
 }
 
 void LagrangeOptimizer::computeLagrangeParameters(
     const double* reconData, const int applyPQ)
 {
-    clock_t start = clock();
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    double start, end;
+    MPI_Barrier(MPI_COMM_WORLD);
+    start = MPI_Wtime();
     int ii, i, j, k, l, m;
     for (ii=0; ii<myLocalElements; ++ii) {
         if (!(reconData[ii] > 0)) {
@@ -161,8 +168,6 @@ void LagrangeOptimizer::computeLagrangeParameters(
         V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
         V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
     }
-    int my_rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     int breg_index = 0;
     int iphi, idx;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
@@ -446,7 +451,11 @@ void LagrangeOptimizer::computeLagrangeParameters(
             }
         }
     }
-    // printf ("Time Taken for Optimization Computation: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+    MPI_Barrier(MPI_COMM_WORLD);
+    end = MPI_Wtime();
+    if (my_rank == 0) {
+        printf ("Time Taken for Lagrange Computations: %f\n", (end-start));
+    }
     double* breg_recon = new double[myLocalElements];
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
@@ -456,12 +465,17 @@ void LagrangeOptimizer::computeLagrangeParameters(
         myLagrangeIndexesUpara = new int[myPlaneCount*myNodeCount];
         myLagrangeIndexesTperp = new int[myPlaneCount*myNodeCount];
         myLagrangeIndexesRpara = new int[myPlaneCount*myNodeCount];
-        start = clock();
+        MPI_Barrier(MPI_COMM_WORLD);
+        start = MPI_Wtime();
         quantizeLagranges(0, myLagrangeIndexesDensity, myDensityTable);
         quantizeLagranges(1, myLagrangeIndexesUpara, myUparaTable);
         quantizeLagranges(2, myLagrangeIndexesTperp, myTperpTable);
         quantizeLagranges(3, myLagrangeIndexesRpara, myRparaTable);
-        // printf ("Time Taken for Quantization: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
+        MPI_Barrier(MPI_COMM_WORLD);
+        end = MPI_Wtime();
+        if (my_rank == 0) {
+            printf ("Time Taken for Quantization: %f\n", end-start);
+        }
         for (iphi=0; iphi<myPlaneCount; ++iphi) {
             for (idx = 0; idx<myNodeCount; ++idx) {
                 const double* recon_one = &reconData[myNodeCount*myVxCount*
@@ -556,24 +570,18 @@ void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* 
     int my_rank;
     MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-    clock_t start = clock();
     double* lagarray = new double[myNodeCount];
     for (int iphi = 0; iphi<myPlaneCount; ++iphi) {
         for (int idx = 0; idx<myNodeCount; ++idx) {
             lagarray[iphi*myNodeCount + idx] = myLagranges[iphi*myNodeCount + 4*idx + offset];
         }
     }
-    // printf ("Time Taken for assigning lag array: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
 
-    start = clock();
     initializeClusterCenters(clusters, num_procs, my_rank, lagarray, numObjs);
-    // printf ("Time Taken for init clusters: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
-    start = clock();
     membership = new int [numObjs];
     memset (membership, 0, numObjs*sizeof(int));
     mpi_kmeans(lagarray, numObjs, myNumClusters,
         threshold, membership, clusters);
-    // printf ("Time Taken for KMeans: %5.3g\n", ((double)(clock()-start))/CLOCKS_PER_SEC);
     return;
 }
 
@@ -671,43 +679,43 @@ size_t LagrangeOptimizer::putPQIndexes(char* &bufferOut, size_t &bufferOutOffset
     int numObjs = myPlaneCount*myNodeCount;
     for (i=0; i<numObjs; ++i) {
         *reinterpret_cast<int*>(
-              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
-                  myLagrangeIndexesDensity[i];
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(uint8_t)) =
+                  uint8_t(myLagrangeIndexesDensity[i]);
     }
     for (i=0; i<numObjs; ++i) {
         *reinterpret_cast<int*>(
-              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
-                  myLagrangeIndexesUpara[i];
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(uint8_t)) =
+                  uint8_t(myLagrangeIndexesUpara[i]);
     }
     for (i=0; i<numObjs; ++i) {
         *reinterpret_cast<int*>(
-              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
-                  myLagrangeIndexesTperp[i];
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(uint8_t)) =
+                  uint8_t(myLagrangeIndexesTperp[i]);
     }
     for (i=0; i<numObjs; ++i) {
         *reinterpret_cast<int*>(
-              bufferOut+bufferOutOffset+(intcount++)*sizeof(int)) =
-                  myLagrangeIndexesRpara[i];
+              bufferOut+bufferOutOffset+(intcount++)*sizeof(uint8_t)) =
+                  uint8_t(myLagrangeIndexesRpara[i]);
     }
-    return intcount * sizeof(int);
+    return intcount * sizeof(uint8_t);
 }
 
 size_t LagrangeOptimizer::getPQIndexes(const char* bufferIn)
 {
     int i, intcount = 0;
     for (i=0; i<myNodeCount; ++i) {
-        myLagrangeIndexesDensity[i] = *(reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+        myLagrangeIndexesDensity[i] = *(reinterpret_cast<const uint8_t*>(bufferIn+(intcount++)*sizeof(uint8_t)));
     }
     for (i=0; i<myNodeCount; ++i) {
-        myLagrangeIndexesUpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+        myLagrangeIndexesUpara[i] = (*reinterpret_cast<const uint8_t*>(bufferIn+(intcount++)*sizeof(uint8_t)));
     }
     for (i=0; i<myNodeCount; ++i) {
-        myLagrangeIndexesTperp[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+        myLagrangeIndexesTperp[i] = (*reinterpret_cast<const uint8_t*>(bufferIn+(intcount++)*sizeof(uint8_t)));
     }
     for (i=0; i<myNodeCount; ++i) {
-        myLagrangeIndexesRpara[i] = (*reinterpret_cast<const int*>(bufferIn+(intcount++)*sizeof(int)));
+        myLagrangeIndexesRpara[i] = (*reinterpret_cast<const uint8_t*>(bufferIn+(intcount++)*sizeof(uint8_t)));
     }
-    return intcount*sizeof(int);
+    return intcount*sizeof(uint8_t);
 }
 
 size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
@@ -716,9 +724,10 @@ size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
     // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
     // double number *reinterpret_cast<double*>(bufferOut+bufferOutOff      set+8)
     // for your second double number and so on
-    int intbytes = putPQIndexes(bufferOut, bufferOutOffset);
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    int intbytes = putPQIndexes(bufferOut, bufferOutOffset);
+    // printf ("Rank %d numObjs %d numBytes %d\n", my_rank, myPlaneCount*myNodeCount, intbytes);
     if (my_rank == 0) {
         FILE* fp = fopen("PqMeshInfo.bin", "wb");
         // write out the PQ table and the mesh parameters
@@ -1713,7 +1722,7 @@ void LagrangeOptimizer::compareErrorsPD(const double* reconData, const double* b
     MPI_Allreduce(&pd_max_a, &pd_omax_a, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
     if (rank == 0) {
         printf ("Overall PD Error: %f %f\n", sqrt(pd_e_b/pd_s_b)/(pd_omax_b-pd_omin_b), sqrt(pd_e_a/pd_s_a)/(pd_omax_a-pd_omin_a));
-        printf ("PD Error stats: %f %f %f %f %f %f %f %f\n", pd_e_b, pd_s_b,pd_omax_b,pd_omin_b, pd_e_a,pd_s_a,pd_omax_a,pd_omin_a);
+        // printf ("PD Error stats: %f %f %f %f %f %f %f %f\n", pd_e_b, pd_s_b,pd_omax_b,pd_omin_b, pd_e_a,pd_s_a,pd_omax_a,pd_omin_a);
     }
 }
 
@@ -1765,6 +1774,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     std::vector <double> rt0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
+#if 0
         if (my_rank == 0) {
             FILE* fp = fopen("PartialOrigQoI.txt", "w");
             for (int i=0; i<rdensity.size(); ++i) {
@@ -1783,6 +1793,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
             }
             fclose (fp);
         }
+#endif
     }
     std::vector <double> bdensity;
     std::vector <double> bupara;
@@ -1833,34 +1844,6 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
             printf ("Breg data: %d %f\n", i, bregData[i]);
         }
     }
-#endif
-#if 0
-    // printf ("PD errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", pd_error_b, pd_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
-    printf ("%d, %d, %d, %d, PD, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, pd_error_b, pd_error_a);
-    double density_error_b = rmseError(refdensity, rdensity);
-    double density_error_a = rmseError(refdensity, bdensity);
-    // printf ("Density errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", density_error_b, density_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
-    printf ("%d, %d, %d, %d, Density, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, density_error_b, density_error_a);
-    double upara_error_b = rmseError(refupara, rupara);
-    double upara_error_a = rmseError(refupara, bupara);
-    // printf ("Upara errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", upara_error_b, upara_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
-    printf ("%d, %d, %d, %d, Upara, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, upara_error_b, upara_error_a);
-    double tperp_error_b = rmseError(reftperp, rtperp);
-    double tperp_error_a = rmseError(reftperp, btperp);
-    // printf ("Tperp errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", tperp_error_b, tperp_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
-    printf ("%d, %d, %d, %d, Tperp, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, tperp_error_b, tperp_error_a);
-    double tpara_error_b = rmseError(reftpara, rtpara);
-    double tpara_error_a = rmseError(reftpara, btpara);
-    // printf ("Tpara errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", tpara_error_b, tpara_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
-    printf ("%d, %d, %d, %d, Tpara, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, tpara_error_b, tpara_error_a);
-    double n0_error_b = rmseError(refn0, rn0);
-    double n0_error_a = rmseError(refn0, bn0);
-    // printf ("n0 errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", n0_error_b, n0_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
-    printf ("%d, %d, %d, %d, n0, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, n0_error_b, n0_error_a);
-    double T0_error_b = rmseError(reft0, rt0);
-    double T0_error_a = rmseError(reft0, bt0);
-    // printf ("T0 errors %g, %g, Rank %d, Plane %d, NodeStart %d, NodeEnd %d\n", T0_error_b, T0_error_a, my_rank, myPlaneOffset, myNodeOffset, myNodeOffset+myNodeCount);
-    printf ("%d, %d, %d, %d, T0, %g, %g\n", my_rank, myPlaneOffset, myNodeOffset, myNodeCount, T0_error_b, T0_error_a);
 #endif
     return;
 }

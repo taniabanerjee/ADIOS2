@@ -51,17 +51,29 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     size_t offsetForDecompresedData = bufferOutOffset;
     bufferOutOffset += sizeof(size_t);
 
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     if (compression_method == 0) {
         CompressMGARD mgard(m_Parameters);
+        MPI_Barrier(MPI_COMM_WORLD);
+        double start = MPI_Wtime();
         size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type,
                                 bufferOut + bufferOutOffset);
 
+        MPI_Barrier(MPI_COMM_WORLD);
+        double end = MPI_Wtime();
+        printf ("Time taken for MGARD compression: %f\n", (end - start));
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
         std::vector<char> tmpDecompressBuffer(
                 helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
 
+        MPI_Barrier(MPI_COMM_WORLD);
+        start = MPI_Wtime();
         mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize,
                              tmpDecompressBuffer.data());
+        MPI_Barrier(MPI_COMM_WORLD);
+        end = MPI_Wtime();
+        printf ("Time taken for MGARD decompression: %f\n", (end - start));
         optim.computeLagrangeParameters(
                 reinterpret_cast<const double*>(
                 tmpDecompressBuffer.data()), pq_yes);
@@ -99,8 +111,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
                 tmpDecompressBuffer.data()), pq_yes);
         bufferOutOffset += zfpBufferSize;
     }
-    // int my_rank;
-    // MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     // printf ("My compress rank %d, MGARD size %zu\n", my_rank, mgardBufferSize);
     // TODO: now the original data is in dataIn, the compressed and then
     // decompressed data is in tmpDecompressBuffer.data(). However, these
@@ -130,6 +140,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     if (bufferVersion == 1) {
         size_t ppsize = optim.putResultV1(bufferOut, bufferOutOffset);
         bufferOutOffset += ppsize;
+        // printf ("Rank %d PQ indexes %zu\n", my_rank, ppsize);
     }
     else {
         size_t ppsize = optim.putResultV2(bufferOut, bufferOutOffset);
