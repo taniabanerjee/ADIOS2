@@ -62,7 +62,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
 
         MPI_Barrier(MPI_COMM_WORLD);
         double end = MPI_Wtime();
-        printf ("Time taken for MGARD compression: %f\n", (end - start));
+        if (my_rank == 0) {
+            printf ("Time taken for MGARD compression: %f\n", (end - start));
+        }
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
         std::vector<char> tmpDecompressBuffer(
                 helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
@@ -73,7 +75,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
                              tmpDecompressBuffer.data());
         MPI_Barrier(MPI_COMM_WORLD);
         end = MPI_Wtime();
-        printf ("Time taken for MGARD decompression: %f\n", (end - start));
+        if (my_rank == 0) {
+            printf ("Time taken for MGARD decompression: %f\n", (end - start));
+        }
         optim.computeLagrangeParameters(
                 reinterpret_cast<const double*>(
                 tmpDecompressBuffer.data()), pq_yes);
@@ -81,15 +85,29 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     }
     else if (compression_method == 1) {
         CompressSZ sz(m_Parameters);
+        MPI_Barrier(MPI_COMM_WORLD);
+        double start = MPI_Wtime();
         size_t szBufferSize = sz.Operate(dataIn, blockStart, blockCount, type,
                                 bufferOut + bufferOutOffset);
 
+        double end = MPI_Wtime();
+        if (my_rank == 0) {
+            printf ("Time taken for SZ compression: %f\n", (end - start));
+            printf ("Size after SZ compression: %zu\n", szBufferSize);
+        }
         PutParameter(bufferOut, offsetForDecompresedData, szBufferSize);
         std::vector<char> tmpDecompressBuffer(
                 helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
 
+        MPI_Barrier(MPI_COMM_WORLD);
+        start = MPI_Wtime();
         sz.InverseOperate(bufferOut + bufferOutOffset, szBufferSize,
                              tmpDecompressBuffer.data());
+        MPI_Barrier(MPI_COMM_WORLD);
+        end = MPI_Wtime();
+        if (my_rank == 0) {
+            printf ("Time taken for SZ decompression: %f\n", (end - start));
+        }
         optim.computeLagrangeParameters(
                 reinterpret_cast<const double*>(
                 tmpDecompressBuffer.data()), pq_yes);
@@ -97,15 +115,29 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     }
     else if (compression_method == 2) {
         CompressZFP zfp(m_Parameters);
+        MPI_Barrier(MPI_COMM_WORLD);
+        double start = MPI_Wtime();
         size_t zfpBufferSize = zfp.Operate(dataIn, blockStart, blockCount, type,
                                 bufferOut + bufferOutOffset);
 
+        double end = MPI_Wtime();
+        if (my_rank == 0) {
+            printf ("Time taken for ZFP compression: %f\n", (end - start));
+            printf ("Size after ZFP compression: %zu\n", zfpBufferSize);
+        }
         PutParameter(bufferOut, offsetForDecompresedData, zfpBufferSize);
         std::vector<char> tmpDecompressBuffer(
                 helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
 
+        MPI_Barrier(MPI_COMM_WORLD);
+        start = MPI_Wtime();
         zfp.InverseOperate(bufferOut + bufferOutOffset, zfpBufferSize,
                              tmpDecompressBuffer.data());
+        MPI_Barrier(MPI_COMM_WORLD);
+        end = MPI_Wtime();
+        if (my_rank == 0) {
+            printf ("Time taken for ZFP decompression: %f\n", (end - start));
+        }
         optim.computeLagrangeParameters(
                 reinterpret_cast<const double*>(
                 tmpDecompressBuffer.data()), pq_yes);
