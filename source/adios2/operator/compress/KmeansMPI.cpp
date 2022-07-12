@@ -219,3 +219,74 @@ int mpi_kmeans(double     *objects,     /* in: [numObjs][numCoords] */
     return 1;
 }
 
+/*----< kmeans() - on a single process >-------------------------------------------------------*/
+int kmeans(double     *objects,     /* in: [numObjs][numCoords] */
+               int        numObjs,     /* no. objects */
+               int        numClusters, /* no. clusters */
+               float      threshold,   /* % objects change membership */
+               int       *&membership,  /* out: [numObjs] */
+               double    *&clusters)    /* out: [numClusters][numCoords] */
+               // MPI_Comm   comm)        /* MPI communicator */
+{
+    int      i, j, rank, index, loop=0, total_numObjs;
+    int     *newClusterSize; /* [numClusters]: no. objects assigned in each
+                                new cluster */
+    int     *clusterSize;    /* [numClusters]: temp buffer for Allreduce */
+    float    delta;          /* % of objects change their clusters */
+    float    delta_tmp;
+    double  *newClusters;    /* [numClusters][numCoords] where numCords==1*/
+    double  *origClusters;    /* [numClusters][numCoords] where numCords==1*/
+    int _debug = 0;
+
+    /* initialize membership[] */
+    for (i=0; i<numObjs; i++) membership[i] = -1;
+
+    /* need to initialize newClusterSize and newClusters[0] to all 0 */
+    newClusterSize = (int*) calloc(numClusters, sizeof(int));
+    assert(newClusterSize != NULL);
+    clusterSize    = (int*) calloc(numClusters, sizeof(int));
+    assert(clusterSize != NULL);
+
+    newClusters    = new double[numClusters];
+    origClusters    = new double[numClusters];
+    assert(newClusters != NULL);
+    for (i=0; i<numClusters; i++) {
+        newClusters[i] = 0.0;
+        origClusters[i] = clusters[i];
+    }
+
+    do {
+        double curT = MPI_Wtime();
+        delta = 0.0;
+	      quickSort(clusters, 0, numClusters-1);
+        for (i=0; i<numObjs; i++) {
+            /* find the array index of nestest cluster center */
+	          index = findClosest(clusters, numClusters, objects[i]);
+
+            /* if membership changes, increase delta by 1 */
+            if (membership[i] != index) delta += 1.0;
+
+            /* assign the membership to object i */
+            membership[i] = index;
+
+            /* update new cluster centers : sum of objects located within */
+            newClusterSize[index]++;
+            newClusters[index] += objects[i];
+        }
+
+        /* average the sum and replace old cluster centers with newClusters */
+        for (i=0; i<numClusters; i++) {
+            if (clusterSize[i] > 1)
+                clusters[i] /= clusterSize[i];
+            newClusters[i] = 0.0;  /* set back to 0 */
+            newClusterSize[i] = 0;   /* set back to 0 */
+        }
+        delta = delta / numObjs;
+    } while (delta > threshold && loop++ < 1000);
+
+    free(newClusters);
+    free(newClusterSize);
+    free(clusterSize);
+
+    return 1;
+}
