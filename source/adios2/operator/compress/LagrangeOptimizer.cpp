@@ -8,6 +8,7 @@
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 #include "KmeansMPI.h"
+#include <omp.h>
 #define GET4D(d0, d1, d2, d3, i, j, k, l) ((d1 * d2 * d3) * i + (d2 * d3) * j + d3 * k + l)
 
 
@@ -254,7 +255,13 @@ void LagrangeOptimizer::computeLagrangeParameters(
         std::vector <double> L2_tperp (maxIter, 0);
         std::vector <double> L2_tpara (maxIter, 0);
         std::vector <double> L2_PD (maxIter, 0);
+        #pragma omp parallel for default (none) \
+        shared(L2_den, L2_upara, L2_tperp, L2_tpara, L2_PD, reconData, iphi, D, U, V2, V3, V4, \
+            f0_f, Tperp, Rpara, DeB, UeB, TperpEB, TparaEB, PDeB, maxIter, node_unconv, my_rank) \
+        private (count, i, K, breg_result, count_unLag, gradients, hessians)
         for (idx=0; idx<myNodeCount; ++idx) {
+            int tid = omp_get_thread_num();
+            printf("LagrangeParameters rank,OMP: %d %d\n", my_rank, tid);
             std::fill(L2_den.begin(), L2_den.end(), 0);
             std::fill(L2_upara.begin(), L2_upara.end(), 0);
             std::fill(L2_tperp.begin(), L2_tperp.end(), 0);
@@ -351,6 +358,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
                         myLagranges[idx*4 + 3] = 0;
                         printf ("Node %d did not converge\n", idx);
                         count_unLag = count_unLag + 1;
+                        #pragma omp critical
                         node_unconv.push_back(idx);
                         break;
                     }
