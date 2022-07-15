@@ -1,3 +1,5 @@
+#include <sched.h>
+
 #include <math.h>
 #include <time.h>
 #include <assert.h>
@@ -126,7 +128,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
 {
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-    double start, end;
+    double start, end, start1;
     MPI_Barrier(MPI_COMM_WORLD);
     start = MPI_Wtime();
     int ii, i, j, k, l, m;
@@ -139,9 +141,12 @@ void LagrangeOptimizer::computeLagrangeParameters(
     int lindex, rindex;
     for (int i = 0; i < myPlaneCount; i++)
     {
-        for (int j = 0; j < myVxCount; j++)
+        #pragma omp parallel for default (none) \
+        shared(i, myPlaneCount, myNodeCount, myVxCount, myVyCount, reconData, i_g) \
+        private (lindex, rindex)
+        for (int k = 0; k < myNodeCount; k++)
         {
-            for (int k = 0; k < myNodeCount; k++)
+            for (int j = 0; j < myVxCount; j++)
             {
                 for (int l = 0; l < myVyCount; l++)
                 {
@@ -170,6 +175,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
+    #pragma omp parallel for default (none) \
+    shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVp, myMuQoi, myVth2, myParticleMass, V2, V3, V4) \
+    private (i, j, l, m)
     for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
         i = int(k/(myVxCount*myVyCount));
         j = int (k%myVyCount);
@@ -184,6 +192,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         const double* f0_f = &myDataIn[iphi*myNodeCount*myVxCount*myVyCount];
         std::vector<double> D(myNodeCount, 0);
+        #pragma omp parallel for default (none) \
+        shared(myNodeCount, myVxCount, myVyCount, myVolume, f0_f, D) \
+        private (i)
         for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
             i = int(k/(myVxCount*myVyCount));
             D[i] += f0_f[k] * myVolume[k];
@@ -193,6 +204,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
         }
         std::vector<double> U(myNodeCount, 0);
         std::vector<double> Tperp(myNodeCount, 0);
+        #pragma omp parallel for default (none) \
+        shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVp, f0_f, myMuQoi, myVth2, myParticleMass, mySmallElectronCharge, D, U, Tperp) \
+        private (i, j, l, m)
         for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
             i = int(k/(myVxCount*myVyCount));
             j = int(k%myVyCount);
@@ -205,6 +219,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
         std::vector<double> Tpara(myNodeCount, 0);
         std::vector<double> Rpara(myNodeCount, 0);
         double en;
+        #pragma omp parallel for default (none) \
+        shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVp, f0_f, myVth2, myParticleMass, mySmallElectronCharge, D, U, Tpara) \
+        private (i, j, en)
         for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
             i = int(k/(myVxCount*myVyCount));
             j = int(k%myVyCount);
@@ -212,6 +229,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
             Tpara[i] += 2*(f0_f[k] * myVolume[k] * en *
                 myVth2[i] * myParticleMass)/D[i]/mySmallElectronCharge;
         }
+        #pragma omp parallel for default (none) \
+        shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVth2, myParticleMass, mySmallElectronCharge, U, Tpara, Rpara) \
+        private (i)
         for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
             i = int(k/(myVxCount*myVyCount));
             Rpara[i] = mySmallElectronCharge*Tpara[i] +
@@ -224,6 +244,8 @@ void LagrangeOptimizer::computeLagrangeParameters(
         double maxU = -99999;
         double maxTperp = -99999;
         double maxTpara = -99999;
+        #pragma omp parallel for default (none) \
+        shared(myNodeCount, maxD, maxU, maxTperp, maxTpara, D, U, Tperp, Rpara)
         for (i=0; i<myNodeCount; ++i) {
             if (D[i] > maxD) {
                 maxD = D[i];
@@ -255,13 +277,16 @@ void LagrangeOptimizer::computeLagrangeParameters(
         std::vector <double> L2_tperp (maxIter, 0);
         std::vector <double> L2_tpara (maxIter, 0);
         std::vector <double> L2_PD (maxIter, 0);
+
+        start1 = MPI_Wtime();
         #pragma omp parallel for default (none) \
         shared(L2_den, L2_upara, L2_tperp, L2_tpara, L2_PD, reconData, iphi, D, U, V2, V3, V4, \
             f0_f, Tperp, Rpara, DeB, UeB, TperpEB, TparaEB, PDeB, maxIter, node_unconv, my_rank) \
         private (count, i, K, breg_result, count_unLag, gradients, hessians)
         for (idx=0; idx<myNodeCount; ++idx) {
-            int tid = omp_get_thread_num();
-            printf("LagrangeParameters rank,OMP: %d %d\n", my_rank, tid);
+            //int tid = omp_get_thread_num();
+            //int cpuid = sched_getcpu();
+            //printf("LagrangeParameters rank,idx,tid,cpuid: %d %d %d %d\n", my_rank, idx, tid, cpuid);
             std::fill(L2_den.begin(), L2_den.end(), 0);
             std::fill(L2_upara.begin(), L2_upara.end(), 0);
             std::fill(L2_tperp.begin(), L2_tperp.end(), 0);
@@ -359,7 +384,9 @@ void LagrangeOptimizer::computeLagrangeParameters(
                         printf ("Node %d did not converge\n", idx);
                         count_unLag = count_unLag + 1;
                         #pragma omp critical
-                        node_unconv.push_back(idx);
+                        {
+                            node_unconv.push_back(idx);
+                        }
                         break;
                     }
                 }
@@ -472,7 +499,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
     MPI_Barrier(MPI_COMM_WORLD);
     end = MPI_Wtime();
     if (my_rank == 0) {
-        printf ("Time Taken for Lagrange Computations: %f\n", (end-start));
+        printf ("Time Taken for Lagrange Computations: %f %f\n", end-start, end-start1);
     }
     double* breg_recon = new double[myLocalElements];
     memset(breg_recon, 0, myLocalElements*sizeof(double));
