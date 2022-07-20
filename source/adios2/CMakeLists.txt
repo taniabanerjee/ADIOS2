@@ -417,3 +417,8 @@ install(TARGETS adios2_core ${maybe_adios2_core_mpi} ${maybe_adios2_core_cuda} E
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT adios2_core-libraries NAMELINK_COMPONENT adios2_core-development
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT adios2_core-development
 )
+
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(adios2_core PUBLIC OpenMP::OpenMP_CXX)
+endif()
