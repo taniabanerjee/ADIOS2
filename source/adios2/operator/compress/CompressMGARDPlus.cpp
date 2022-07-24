@@ -18,6 +18,7 @@
 #include "CompressZFP.h"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
+#include <torch/script.h> // One-stop header.
 
 namespace adios2
 {
@@ -50,6 +51,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart,
     PutParameter(bufferOut, bufferOutOffset, optim.getNodeOffset());
     size_t offsetForDecompresedData = bufferOutOffset;
     bufferOutOffset += sizeof(size_t);
+
+    torch::jit::script::Module module;
+    try {
+        // Deserialize the ScriptModule from a file using torch::jit::load().
+        module = torch::jit::load("my_ae.pt");
+    }
+    catch (const c10::Error& e) {
+        std::cerr << "error loading the model\n";
+    }
 
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
