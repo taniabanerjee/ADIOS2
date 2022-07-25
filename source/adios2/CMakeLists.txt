@@ -418,7 +418,10 @@ install(TARGETS adios2_core ${maybe_adios2_core_mpi} ${maybe_adios2_core_cuda} E
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT adios2_core-development
 )
 
-find_package(OpenMP)
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(adios2_core PUBLIC OpenMP::OpenMP_CXX)
-endif()
+find_package(OpenMP REQUIRED)
+target_link_libraries(adios2_core PUBLIC OpenMP::OpenMP_CXX)
+
+find_package(Torch REQUIRED)
+message(STATUS TORCH_LIBRARIES:"${TORCH_LIBRARIES}")
+target_link_libraries(adios2_core PRIVATE "${TORCH_LIBRARIES}")
+#set_property(TARGET example-app PROPERTY CXX_STANDARD 14)
