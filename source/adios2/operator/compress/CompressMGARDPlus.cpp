@@ -35,6 +35,16 @@ namespace core
 namespace compress
 {
 
+// Options for pytorch training.
+struct Options
+{
+    size_t batch_size = 1024;
+    size_t iterations = 100;
+    size_t batch_log_interval = 1000;
+    size_t epoch_log_interval = 20;
+    torch::DeviceType device = torch::kCPU;
+};
+
 // Custom Dataset class
 class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
 {
@@ -103,9 +113,9 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
 // AE Training
 // This is to convert Jaemon's AE pytorch version to CPP
 // https://pytorch.org/cppdocs/frontend.html#end-to-end-example
-struct Autoencoder : torch::nn::Module
+struct AutoencoderImpl : torch::nn::Module
 {
-    Autoencoder(int input_dim, int latent) : enc1(input_dim, latent), input_dim(input_dim)
+    AutoencoderImpl(int input_dim, int latent) : enc1(input_dim, latent)
     {
         register_module("enc1", enc1);
     }
@@ -131,43 +141,55 @@ struct Autoencoder : torch::nn::Module
 
     // Use one of many "standard library" modules.
     torch::nn::Linear enc1;
-    int input_dim;
 };
 
+// see the following why we need: https://discuss.pytorch.org/t/libtorch-how-to-save-model-in-mnist-cpp-example/34234/4
+TORCH_MODULE(Autoencoder);
+
 template <typename DataLoader>
-void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, torch::Device &device, DataLoader &loader,
-           torch::optim::Optimizer &optimizer, size_t epoch, size_t dataset_size)
+void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataLoader &loader,
+           torch::optim::Optimizer &optimizer, size_t epoch, size_t dataset_size, Options &options)
 {
-    model.train();
+    model->train();
 
     size_t batch_idx = 0;
+    double batch_loss = 0;
     for (auto &batch : loader)
     {
         batch_idx++;
-        auto data = batch.data.to(device);
+        auto data = batch.data.to(options.device);
         // std::cout << "Batch: data = " << data.sizes() << std::endl;
         optimizer.zero_grad();
-        auto output = model.forward(data);
+        auto output = model->forward(data);
         auto loss = torch::nn::MSELoss()(output, data);
         loss.backward();
 
         // Averaging the gradients of the parameters in all the processors
-        for (auto &param : model.named_parameters())
+        for (auto &param : model->named_parameters())
         {
             std::vector<torch::Tensor> tmp = {param.value().grad()};
             auto work = pg->allreduce(tmp);
             work->wait(kNoTimeout);
         }
 
-        for (auto &param : model.named_parameters())
+        for (auto &param : model->named_parameters())
         {
             param.value().grad().data() = param.value().grad().data() / pg->getSize();
         }
         // update parameter
         optimizer.step();
+        batch_loss += loss.template item<double>();
 
-        std::printf("Train Epoch: %ld [%5ld/%5ld] Loss: %.4g\n", epoch, batch_idx, dataset_size,
-                    loss.template item<double>());
+        if (batch_idx % options.batch_log_interval == 0)
+        {
+            std::printf("Train Batch: %ld [%5ld/%5ld] Loss: %.4g\n", epoch, batch_idx * batch.data.size(0),
+                        dataset_size, loss.template item<double>());
+        }
+    }
+
+    if (epoch % options.epoch_log_interval == 0)
+    {
+        std::printf("Train Epoch: %ld Loss: %.4g\n", epoch, batch_loss / batch_idx);
     }
 }
 
@@ -215,6 +237,19 @@ struct TemporaryFile
     ~TemporaryFile()
     {
         unlink(path.c_str());
+    }
+};
+
+// helper lambda function to get parameters
+std::string get_param(Params &params, std::string key, std::string def)
+{
+    if (params.find(key) != params.end()) 
+    {
+        return params[key];
+    }
+    else
+    {
+        return def;
     }
 };
 
@@ -269,8 +304,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     int latent_dim = 4;
     std::cout << "input_dim, latent_dim: " << input_dim << " " << latent_dim << std::endl;
 
-    // Pytorch DDP
-    torch::Device device(torch::kCUDA);
+    // Pytorch DDP Training
+    // torch::Device device(torch::kCUDA);
+    Options options;
+    options.device = torch::kCUDA;
+    uint8_t train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
 
     std::string path = ".filestore";
     remove(path.c_str());
@@ -280,26 +318,48 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
     // check if pg is working
     auto mytensor = torch::ones(1) * my_rank;
-    mytensor = mytensor.to(device);
+    mytensor = mytensor.to(options.device);
     std::vector<torch::Tensor> tmp = {mytensor};
     auto work = pg->allreduce(tmp);
     work->wait(kNoTimeout);
     auto expected = (comm_size * (comm_size - 1)) / 2;
-    assert (mytensor.item<int>() == expected);
+    assert(mytensor.item<int>() == expected);
 
     Autoencoder model(input_dim, latent_dim);
-    model.to(device);
+    model->to(options.device);
 
     auto dataset = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]})
                        .map(torch::data::transforms::Stack<>());
     const size_t dataset_size = dataset.size().value();
-    auto loader = torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset), 128);
-    torch::optim::Adam optimizer(model.parameters(), torch::optim::AdamOptions(1e-3 /*learning rate*/));
+    auto loader =
+        torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset), options.batch_size);
+    torch::optim::Adam optimizer(model->parameters(), torch::optim::AdamOptions(1e-3 /*learning rate*/));
 
     double start = MPI_Wtime();
-    for (size_t epoch = 1; epoch <= 100; ++epoch)
+    if (train_yes == 1) 
     {
-        train(pg, model, device, *loader, optimizer, epoch, dataset_size);
+        for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
+        {
+            train(pg, model, *loader, optimizer, epoch, dataset_size, options);
+        }
+        torch::save(model, "xgcf_ae_model.pt");
+    }
+    else
+    {
+        // (2022/08) jyc: We can restart from the model saved in python.
+        torch::load(model, "my_ae.pt");
+    }
+
+    // PQ, etc
+    model->eval();
+    for (auto &batch : *loader)
+    {
+        auto data = batch.data.to(options.device);
+        auto encode = model->encode(data);
+        std::cout << "encode.sizes = " << encode.sizes() << std::endl;
+
+        auto decode = model->decode(encode);
+        std::cout << "decode.sizes = " << decode.sizes() << std::endl;
     }
 
     if (my_rank == 0)
