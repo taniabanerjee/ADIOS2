@@ -162,15 +162,6 @@ void LagrangeOptimizer::computeLagrangeParameters(
         }
     }
     reconData = i_g.data();
-    int count = 0;
-    double gradients[4] = {0.0, 0.0, 0.0, 0.0};
-    double hessians[4][4] = {0.0, 0.0, 0.0, 0.0,
-                         0.0, 0.0, 0.0, 0.0,
-                         0.0, 0.0, 0.0, 0.0,
-                         0.0, 0.0, 0.0, 0.0};
-    double K[myVxCount*myVyCount];
-    double breg_result[myVxCount*myVyCount];
-    memset(K, 0, myVxCount*myVyCount*sizeof(double));
     myLagranges = new double[4*myNodeCount];
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
@@ -272,21 +263,25 @@ void LagrangeOptimizer::computeLagrangeParameters(
         }
 #endif
         int maxIter = 50;
-        std::vector <double> L2_den (maxIter, 0);
-        std::vector <double> L2_upara (maxIter, 0);
-        std::vector <double> L2_tperp (maxIter, 0);
-        std::vector <double> L2_tpara (maxIter, 0);
-        std::vector <double> L2_PD (maxIter, 0);
-
-        start1 = MPI_Wtime();
         #pragma omp parallel for default (none) \
-        shared(L2_den, L2_upara, L2_tperp, L2_tpara, L2_PD, reconData, iphi, D, U, V2, V3, V4, \
+        shared(reconData, iphi, D, U, V2, V3, V4, \
             f0_f, Tperp, Rpara, DeB, UeB, TperpEB, TparaEB, PDeB, maxIter, node_unconv, my_rank) \
-        private (count, i, K, breg_result, count_unLag, gradients, hessians)
+        private (count_unLag)
         for (idx=0; idx<myNodeCount; ++idx) {
-            //int tid = omp_get_thread_num();
-            //int cpuid = sched_getcpu();
-            //printf("LagrangeParameters rank,idx,tid,cpuid: %d %d %d %d\n", my_rank, idx, tid, cpuid);
+            int count = 0;
+            double gradients[4] = {0.0, 0.0, 0.0, 0.0};
+            double hessians[4][4] = {0.0, 0.0, 0.0, 0.0,
+                         0.0, 0.0, 0.0, 0.0,
+                         0.0, 0.0, 0.0, 0.0,
+                         0.0, 0.0, 0.0, 0.0};
+            double K[myVxCount*myVyCount];
+            double breg_result[myVxCount*myVyCount];
+            memset(K, 0, myVxCount*myVyCount*sizeof(double));
+            std::vector <double> L2_den (maxIter, 0);
+            std::vector <double> L2_upara (maxIter, 0);
+            std::vector <double> L2_tperp (maxIter, 0);
+            std::vector <double> L2_tpara (maxIter, 0);
+            std::vector <double> L2_PD (maxIter, 0);
             std::fill(L2_den.begin(), L2_den.end(), 0);
             std::fill(L2_upara.begin(), L2_upara.end(), 0);
             std::fill(L2_tperp.begin(), L2_tperp.end(), 0);
@@ -296,6 +291,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
             double lambdas[4] = {0.0, 0.0, 0.0, 0.0};
             count = 0;
             double aD = D[idx]*mySmallElectronCharge;
+            int i;
             while (1) {
                 for (i=0; i<myVxCount*myVyCount; ++i) {
                     K[i] = lambdas[0]*myVolume[myVxCount*myVyCount*idx + i] +
@@ -304,7 +300,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
                            lambdas[3]*V4[myVxCount*myVyCount*idx + i];
                 }
 #ifdef UF_DEBUG
-                printf("L1 %g, L2 %g L3 %g, L4 %g K[0] %g\n", lambdas[0], lambdas[1], lambdas[2], lambdas[3], exp(-K[0]));
+                printf("Iteration: %d L1 %g, L2 %g L3 %g, L4 %g K[0] %g\n", count, lambdas[0], lambdas[1], lambdas[2], lambdas[3], exp(-K[0]));
 #endif
                 double update_D=0, update_U=0, update_Tperp=0, update_Tpara=0, rmse_pd=0;
                 if (count > 0) {
@@ -564,10 +560,10 @@ void LagrangeOptimizer::computeLagrangeParameters(
                       myVyCount*iphi + myVxCount*myVyCount*idx];
                 int x = 4*idx;
                 for (i=0; i<myVxCount * myVyCount; ++i) {
-                    nK[i] = myLagranges[x]*myVolume[myVxCount*myVyCount*idx+i]+
-                           myLagranges[x+1]*V2[myVxCount*myVyCount*idx+i] +
-                           myLagranges[x+2]*V3[myVxCount*myVyCount*idx+i] +
-                           myLagranges[x+3]*V4[myVxCount*myVyCount*idx+i];
+                    nK[i] = float(myLagranges[x])*myVolume[myVxCount*myVyCount*idx+i]+
+                           float(myLagranges[x+1])*V2[myVxCount*myVyCount*idx+i] +
+                           float(myLagranges[x+2])*V3[myVxCount*myVyCount*idx+i] +
+                           float(myLagranges[x+3])*V4[myVxCount*myVyCount*idx+i];
                     new_recon_one[i] = recon_one[i] * exp(-nK[i]);
 #if UF_DEBUG
                     if (my_rank == 0) {
@@ -720,6 +716,30 @@ size_t LagrangeOptimizer::putLagrangeParameters(char* &bufferOut, size_t &buffer
     int i, count = 0;
     int numObjs = myPlaneCount*myNodeCount;
     for (i=0; i<numObjs*4; i+=4) {
+        *reinterpret_cast<float*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(float)) =
+                  myLagranges[i];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<float*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(float)) =
+                  myLagranges[i+1];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<float*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(float)) =
+                  myLagranges[i+2];
+    }
+    for (i=0; i<numObjs; ++i) {
+        *reinterpret_cast<float*>(
+              bufferOut+bufferOutOffset+(count++)*sizeof(float)) =
+                  myLagranges[i+3];
+    }
+    return count * sizeof(float);
+#if 0
+    int i, count = 0;
+    int numObjs = myPlaneCount*myNodeCount;
+    for (i=0; i<numObjs*4; i+=4) {
         *reinterpret_cast<double*>(
               bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
                   myLagranges[i];
@@ -740,6 +760,7 @@ size_t LagrangeOptimizer::putLagrangeParameters(char* &bufferOut, size_t &buffer
                   myLagranges[i+3];
     }
     return count * sizeof(double);
+#endif
 }
 
 size_t LagrangeOptimizer::putResultV2(char* &bufferOut, size_t &bufferOutOffset)
@@ -1892,7 +1913,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     std::vector <double> rt0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
-// #if 0
+#if 0
         if (my_rank == 0) {
             FILE* fp = fopen("PartialOrigQoI.txt", "w");
             for (int i=0; i<rdensity.size(); ++i) {
@@ -1911,7 +1932,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
             }
             fclose (fp);
         }
-// #endif
+#endif
     }
     std::vector <double> bdensity;
     std::vector <double> bupara;
@@ -1921,7 +1942,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     std::vector <double> bt0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, bdensity, bupara, btperp, btpara, bn0, bt0, bregData);
-// #if 0
+#if 0
         if (my_rank == 0) {
             FILE* fp = fopen("PartialBregQoI.txt", "w");
             for (int i=0; i<bdensity.size(); ++i) {
@@ -1940,7 +1961,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
             }
             fclose (fp);
         }
-// #endif
+#endif
     }
     std::vector <double> refdensity;
     std::vector <double> refupara;
@@ -1950,6 +1971,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     std::vector <double> reft0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, refdensity, refupara, reftperp, reftpara, refn0, reft0, myDataIn.data());
+#if 0
         if (my_rank == 0) {
             FILE* fp = fopen("PartialRefQoI.txt", "w");
             for (int i=0; i<bdensity.size(); ++i) {
@@ -1968,6 +1990,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
             }
             fclose (fp);
         }
+#endif
     }
     compareErrorsPD(reconData, bregData, my_rank);
     compareErrorsQoI(refdensity, rdensity, bdensity, "density", my_rank);

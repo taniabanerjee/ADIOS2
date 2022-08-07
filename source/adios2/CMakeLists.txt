@@ -425,4 +425,3 @@ find_package(Torch REQUIRED)
 message(STATUS TORCH_LIBRARIES:"${TORCH_LIBRARIES}")
 target_link_libraries(adios2_core PRIVATE "${TORCH_LIBRARIES}")
 #set_property(TARGET example-app PROPERTY CXX_STANDARD 14)
-
