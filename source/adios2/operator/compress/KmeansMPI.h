@@ -1,16 +1,3 @@
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/*   File:         kmeans.h   (an OpenMP version)                            */
-/*   Description:  header file for a simple k-means clustering program       */
-/*                                                                           */
-/*   Author:  Wei-keng Liao                                                  */
-/*            ECE Department Northwestern University                         */
-/*            email: wkliao@ece.northwestern.edu                             */
-/*                                                                           */
-/*   Copyright (C) 2005, Northwestern University                             */
-/*   See COPYRIGHT notice in top-level directory.                            */
-/*                                                                           */
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
 #ifndef _H_KMEANS
 #define _H_KMEANS
 
@@ -18,6 +5,7 @@
 
 int mpi_kmeans(double*, int, int, float, int*&, double*&);
 int kmeans(double*, int, int, float, int*&, double*&);
+int kmeans_float(float*, int, int, float, int*&, float*&);
 
 double  wtime(void);
 
