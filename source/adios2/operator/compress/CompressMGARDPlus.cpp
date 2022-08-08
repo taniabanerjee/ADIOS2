@@ -28,6 +28,8 @@
 #include <torch/script.h> // One-stop header.
 #include <torch/torch.h>
 
+#include "KmeansMPI.h"
+
 namespace adios2
 {
 namespace core
@@ -258,6 +260,25 @@ CompressMGARDPlus::CompressMGARDPlus(const Params &parameters)
 {
 }
 
+void initClusterCenters(float* &clusters, float* lagarray, int numObjs,
+    int numClusters)
+{
+    clusters = new float[numClusters];
+    assert(clusters != NULL);
+
+    srand(time(NULL));
+    float* myNumbers = new float[numClusters];
+    std::map <int, int> mymap;
+    for (int i=0; i<numClusters; ++i) {
+        int index = rand() % numObjs;
+        while (mymap.find(index) != mymap.end()) {
+            index = rand() % numObjs;
+        }
+        clusters[i] = lagarray[index];
+        mymap[index] = i;
+    }
+}
+
 size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, const Dims &blockCount,
                                   const DataType type, char *bufferOut)
 {
@@ -336,7 +357,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     torch::optim::Adam optimizer(model->parameters(), torch::optim::AdamOptions(1e-3 /*learning rate*/));
 
     double start = MPI_Wtime();
-    if (train_yes == 1) 
+    if (train_yes == 1)
     {
         for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
         {
@@ -352,15 +373,78 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
     // PQ, etc
     model->eval();
+    std::vector <float> encode_vector;
     for (auto &batch : *loader)
     {
         auto data = batch.data.to(options.device);
         auto encode = model->encode(data);
         std::cout << "encode.sizes = " << encode.sizes() << std::endl;
-
-        auto decode = model->decode(encode);
-        std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+        auto encode_cpu = encode.cpu();
+        std::vector <float> output_vector(encode_cpu.data_ptr<float>(), encode_cpu.data_ptr<float>() + encode_cpu.numel());
+        encode_vector.insert(encode_vector.end(), output_vector.begin(), output_vector.end());
     }
+    std::vector <float> decode_vector(encode_vector.size());
+    *reinterpret_cast<int*>(bufferOut) = latent_dim;
+    int offset = sizeof(int);
+    for (int i=0; i<latent_dim; ++i)
+    {
+        int numObjs = int(encode_vector.size()/latent_dim);
+        float* pq_input = new float[numObjs];
+        int j = 0;
+        for (int k=0; k<encode_vector.size(); ++k)
+        {
+            if (k % latent_dim == i)
+                pq_input[j++] = encode_vector[k];
+        }
+        float pq_threshold = 0.0001;
+        int numClusters = 256;
+        float* clusters = new float[numClusters];
+        initClusterCenters(clusters, pq_input, numObjs, numClusters);
+        int* membership = new int[numObjs];
+        memset(membership, 0, numObjs*sizeof(int));
+        kmeans_float(pq_input, numObjs, numClusters, pq_threshold, membership, clusters);
+        // write PQ table
+        for (j = 0; j<numClusters; ++j)
+            *reinterpret_cast<float*>(bufferOut+offset+j*sizeof(float)) = clusters[j];
+        offset += numClusters*sizeof(float);
+        // write indexes to bufferOutput
+        for (j = 0; j<numObjs; ++j)
+            *reinterpret_cast<float*>(bufferOut+offset+j*sizeof(int)) = membership[j];
+        offset += numObjs*sizeof(int);
+        // write to decode input
+        for (j = 0; j<numObjs; ++j)
+            decode_vector [i + j*latent_dim] = clusters[membership[j]];
+    }
+
+    // check with Jong this code especially what happens when input size is not divisible by batchsize. Should we pad with zeros beforehand?
+    for (int i=0; i<decode_vector.size(); i+=options.batch_size*latent_dim)
+    {
+        std::vector<int> sub(&decode_vector[i],&decode_vector[i+options.batch_size*latent_dim]);
+        auto tensor = torch::zeros({options.batch_size, latent_dim});
+        for (int k=0; k<options.batch_size; ++k)
+        {
+            tensor.slice(0, k, k+1) = torch::from_blob(sub.data(), {latent_dim});
+        }
+        tensor.to(options.device);
+        auto decode = model->decode(tensor);
+        auto decode_cpu = decode.cpu();
+        std::vector <float> output_vector(decode_cpu.data_ptr<float>(), decode_cpu.data_ptr<float>() + decode_cpu.numel());
+        decode_vector.insert(decode_vector.end(), output_vector.begin(), output_vector.end());
+        // un-normalize
+    }
+    // for (auto &batch : *loader)
+    // {
+        // auto decode = model->decode(encode);
+        // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+    // }
+    // compute residuals
+    // dataIn - decode_vector, after dataIn dimensions have been swapped
+    // convert tensor to cpp data is the residual data
+    // apply MGARD on residuals
+    // apply MGARD inverse operate to get back decompressed residuals
+    // add decompressed residuals to decode vector
+    // With this total decompressed output, compute Lagrange parameters
+    // Figure out PD and QoI errors
 
     if (my_rank == 0)
     {
