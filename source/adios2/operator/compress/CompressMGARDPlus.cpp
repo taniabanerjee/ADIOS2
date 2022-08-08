@@ -50,12 +50,14 @@ struct Options
 // Custom Dataset class
 class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
 {
-  private:
-    torch::Tensor fdata;
+  public:
+    torch::Tensor forg;  // Original, un-normalized f-data
+    torch::Tensor fdata; // Normalized f-data
     size_t ds_size;
     size_t nx, ny;
+    torch::Tensor mu;
+    torch::Tensor sig;
 
-  public:
     CustomDataset(double *data, std::vector<long int> dims)
     {
         assert(dims.size() == 4);
@@ -73,15 +75,17 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
         assert(fdata.dim() == 3);
+        forg = fdata.detach().clone();
 
         // Z-score normalization
         // all_planes = (all_planes - mu[:,:,np.newaxis, np.newaxis])/sig[:,:,np.newaxis, np.newaxis
         // (2022/08) jyc: mean and std should be used later for decoding, etc.
-        auto mu = fdata.mean({1, 2});
-        auto sig = fdata.std({1, 2});
+        mu = fdata.mean({1, 2});
+        sig = fdata.std({1, 2});
         // std::cout << "CustomDataset: mu.sizes = " << mu.sizes() << std::endl;
         // std::cout << "CustomDataset: sig.sizes = " << sig.sizes() << std::endl;
 
+        // auto fdata = forg.clone().detach();
         fdata = fdata - mu.reshape({-1, 1, 1});
         fdata = fdata / sig.reshape({-1, 1, 1});
         // double-check if mu ~ 0.0 and sig ~ 1.0
@@ -245,7 +249,7 @@ struct TemporaryFile
 // helper lambda function to get parameters
 std::string get_param(Params &params, std::string key, std::string def)
 {
-    if (params.find(key) != params.end()) 
+    if (params.find(key) != params.end())
     {
         return params[key];
     }
@@ -260,18 +264,19 @@ CompressMGARDPlus::CompressMGARDPlus(const Params &parameters)
 {
 }
 
-void initClusterCenters(float* &clusters, float* lagarray, int numObjs,
-    int numClusters)
+void initClusterCenters(float *&clusters, float *lagarray, int numObjs, int numClusters)
 {
     clusters = new float[numClusters];
     assert(clusters != NULL);
 
     srand(time(NULL));
-    float* myNumbers = new float[numClusters];
-    std::map <int, int> mymap;
-    for (int i=0; i<numClusters; ++i) {
+    float *myNumbers = new float[numClusters];
+    std::map<int, int> mymap;
+    for (int i = 0; i < numClusters; ++i)
+    {
         int index = rand() % numObjs;
-        while (mymap.find(index) != mymap.end()) {
+        while (mymap.find(index) != mymap.end())
+        {
             index = rand() % numObjs;
         }
         clusters[i] = lagarray[index];
@@ -349,8 +354,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     Autoencoder model(input_dim, latent_dim);
     model->to(options.device);
 
-    auto dataset = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]})
-                       .map(torch::data::transforms::Stack<>());
+    auto ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]});
+    auto dataset = ds.map(torch::data::transforms::Stack<>());
     const size_t dataset_size = dataset.size().value();
     auto loader =
         torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset), options.batch_size);
@@ -371,71 +376,85 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         torch::load(model, "my_ae.pt");
     }
 
-    // PQ, etc
+    // Encode
     model->eval();
-    std::vector <float> encode_vector;
+    std::vector<torch::Tensor> encode_vector;
     for (auto &batch : *loader)
     {
         auto data = batch.data.to(options.device);
-        auto encode = model->encode(data);
-        std::cout << "encode.sizes = " << encode.sizes() << std::endl;
-        auto encode_cpu = encode.cpu();
-        std::vector <float> output_vector(encode_cpu.data_ptr<float>(), encode_cpu.data_ptr<float>() + encode_cpu.numel());
-        encode_vector.insert(encode_vector.end(), output_vector.begin(), output_vector.end());
+        auto _encode = model->encode(data);
+        // std::cout << "_encode.sizes = " << _encode.sizes() << std::endl;
+        _encode = _encode.to(torch::kCPU);
+        encode_vector.push_back(_encode);
     }
-    std::vector <float> decode_vector(encode_vector.size());
-    *reinterpret_cast<int*>(bufferOut) = latent_dim;
+    // All of encodes: shape (nmesh, latent_dim), where nmesh = number of total mesh nodes this process has
+    auto encode = torch::cat(encode_vector, 0);
+    std::cout << "encode.sizes = " << encode.sizes() << std::endl;
+
+    // Kmean
+    *reinterpret_cast<int *>(bufferOut) = latent_dim;
     int offset = sizeof(int);
-    for (int i=0; i<latent_dim; ++i)
+    int numObjs = encode.size(0);
+    for (int i = 0; i < latent_dim; ++i)
     {
-        int numObjs = int(encode_vector.size()/latent_dim);
-        float* pq_input = new float[numObjs];
-        int j = 0;
-        for (int k=0; k<encode_vector.size(); ++k)
-        {
-            if (k % latent_dim == i)
-                pq_input[j++] = encode_vector[k];
-        }
+        // subselect each column from encode
+        float *pq_input = encode.slice(1, i, i + 1).contiguous().data_ptr<float>();
         float pq_threshold = 0.0001;
         int numClusters = 256;
-        float* clusters = new float[numClusters];
+        float *clusters = new float[numClusters];
         initClusterCenters(clusters, pq_input, numObjs, numClusters);
-        int* membership = new int[numObjs];
-        memset(membership, 0, numObjs*sizeof(int));
+        int *membership = new int[numObjs];
+        memset(membership, 0, numObjs * sizeof(int));
         kmeans_float(pq_input, numObjs, numClusters, pq_threshold, membership, clusters);
         // write PQ table
-        for (j = 0; j<numClusters; ++j)
-            *reinterpret_cast<float*>(bufferOut+offset+j*sizeof(float)) = clusters[j];
-        offset += numClusters*sizeof(float);
+        for (int j = 0; j < numClusters; ++j)
+            *reinterpret_cast<float *>(bufferOut + offset + j * sizeof(float)) = clusters[j];
+        offset += numClusters * sizeof(float);
         // write indexes to bufferOutput
-        for (j = 0; j<numObjs; ++j)
-            *reinterpret_cast<float*>(bufferOut+offset+j*sizeof(int)) = membership[j];
-        offset += numObjs*sizeof(int);
+        for (int j = 0; j < numObjs; ++j)
+            *reinterpret_cast<float *>(bufferOut + offset + j * sizeof(int)) = membership[j];
+        offset += numObjs * sizeof(int);
         // write to decode input
-        for (j = 0; j<numObjs; ++j)
-            decode_vector [i + j*latent_dim] = clusters[membership[j]];
-    }
 
-    // check with Jong this code especially what happens when input size is not divisible by batchsize. Should we pad with zeros beforehand?
-    for (int i=0; i<decode_vector.size(); i+=options.batch_size*latent_dim)
-    {
-        std::vector<int> sub(&decode_vector[i],&decode_vector[i+options.batch_size*latent_dim]);
-        auto tensor = torch::zeros({options.batch_size, latent_dim});
-        for (int k=0; k<options.batch_size; ++k)
-        {
-            tensor.slice(0, k, k+1) = torch::from_blob(sub.data(), {latent_dim});
-        }
-        tensor.to(options.device);
-        auto decode = model->decode(tensor);
-        auto decode_cpu = decode.cpu();
-        std::vector <float> output_vector(decode_cpu.data_ptr<float>(), decode_cpu.data_ptr<float>() + decode_cpu.numel());
-        decode_vector.insert(decode_vector.end(), output_vector.begin(), output_vector.end());
-        // un-normalize
+        // We update encode tensor directly
+        for (int j = 0; j < numObjs; ++j)
+            encode[j, i] = clusters[membership[j]];
     }
+    std::cout << "kmean is done " << std::endl;
+
+    // Decode
+    std::vector<torch::Tensor> decode_vector;
+    for (int i = 0; i < numObjs; i += options.batch_size)
+    {
+        auto batch = encode.slice(0, i, i + options.batch_size < numObjs ? i + options.batch_size : numObjs);
+        batch = batch.to(options.device);
+        auto _decode = model->decode(batch);
+        _decode = _decode.to(torch::kCPU);
+        decode_vector.push_back(_decode);
+    }
+    // All of decoded data: shape (nmesh, nx, ny)
+    auto decode = torch::cat(decode_vector, 0);
+    decode = decode.to(torch::kFloat64).reshape({-1, ds.nx, ds.ny});
+    std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+
+    // Un-normalize
+    auto mu = ds.mu;
+    auto sig = ds.sig;
+    std::cout << "mu.sizes = " << mu.sizes() << std::endl;
+    std::cout << "sig.sizes = " << sig.sizes() << std::endl;
+    decode = decode * sig.reshape({-1, 1, 1});
+    decode = decode + mu.reshape({-1, 1, 1});
+    // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+
+    auto diff = ds.forg - decode;
+    std::cout << "forg min,max = " << ds.forg.min().item<double>() << " " << ds.forg.max().item<double>() << std::endl;
+    std::cout << "decode min,max = " << decode.min().item<double>() << " " << decode.max().item<double>() << std::endl;
+    std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
+
     // for (auto &batch : *loader)
     // {
-        // auto decode = model->decode(encode);
-        // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+    // auto decode = model->decode(encode);
+    // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
     // }
     // compute residuals
     // dataIn - decode_vector, after dataIn dimensions have been swapped
