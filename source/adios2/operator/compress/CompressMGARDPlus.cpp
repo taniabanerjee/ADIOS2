@@ -75,6 +75,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
         assert(fdata.dim() == 3);
+        assert(dims[0] == 1);
         forg = fdata.detach().clone();
 
         // Z-score normalization
@@ -529,23 +530,26 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
 
         // use MGARD to compress the residuals
-        auto perm_diff = diff.permute({0,2,1,3}).cpu();
+        auto perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0,2,1,3}).contiguous().cpu();
         std::vector <double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
 
         // reserve space in output buffer to store MGARD buffer size
         size_t offsetForDecompresedData = offset;
         offset += sizeof(size_t);
+        std::cout << "residual data is ready" << std::endl;
 
         // apply MGARD operate
         CompressMGARD mgard(m_Parameters);
         size_t mgardBufferSize = mgard.Operate(reinterpret_cast<char*>(diff_data.data()), blockStart, blockCount, type, bufferOut + offset);
         offset += mgardBufferSize;
+        std::cout << "mgard is ready" << std::endl;
 
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
 
         // use MGARD decompress
         std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
         mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
+        std::cout << "mgard inverse is ready" << std::endl;
 
         // reconstruct data from the residuals
         auto decompressed_residual_data = torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64)
@@ -556,6 +560,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // apply post processing
         optim.computeLagrangeParameters(recon_vec.data(), pq_yes);
+        std::cout << "Lagrange is ready" << std::endl;
 
         // for (auto &batch : *loader)
         // {
