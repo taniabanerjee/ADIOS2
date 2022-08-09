@@ -582,7 +582,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             double end = MPI_Wtime();
             printf("Time taken for Training: %f\n", (end - start));
         }
-        return offset;
+        bufferOutOffset += offset;
     }
 
     // printf ("My compress rank %d, MGARD size %zu\n", my_rank, mgardBufferSize);
