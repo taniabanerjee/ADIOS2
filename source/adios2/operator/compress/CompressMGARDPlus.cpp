@@ -541,15 +541,16 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // apply MGARD operate
         CompressMGARD mgard(m_Parameters);
         size_t mgardBufferSize = mgard.Operate(reinterpret_cast<char*>(diff_data.data()), blockStart, blockCount, type, bufferOut + offset);
-        offset += mgardBufferSize;
+        // size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type, bufferOut + offset);
         std::cout << "mgard is ready" << std::endl;
 
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
 
         // use MGARD decompress
         std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
-        mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
+        mgard.InverseOperate(bufferOut + offset, mgardBufferSize, tmpDecompressBuffer.data());
         std::cout << "mgard inverse is ready" << std::endl;
+        offset += mgardBufferSize;
 
         // reconstruct data from the residuals
         auto decompressed_residual_data = torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64)
