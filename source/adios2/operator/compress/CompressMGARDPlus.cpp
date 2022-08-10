@@ -408,26 +408,10 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         int latent_dim = 4;
         std::cout << "input_dim, latent_dim: " << input_dim << " " << latent_dim << std::endl;
 
-        // Pytorch DDP Training
-        // torch::Device device(torch::kCUDA);
+        // Pytorch
         Options options;
         options.device = torch::kCUDA;
         uint8_t train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
-
-        std::string path = ".filestore";
-        remove(path.c_str());
-        auto store = c10::make_intrusive<::c10d::FileStore>(path, comm_size);
-        c10::intrusive_ptr<c10d::ProcessGroupNCCL::Options> opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
-        auto pg = std::make_shared<::c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
-
-        // check if pg is working
-        auto mytensor = torch::ones(1) * my_rank;
-        mytensor = mytensor.to(options.device);
-        std::vector<torch::Tensor> tmp = {mytensor};
-        auto work = pg->allreduce(tmp);
-        work->wait(kNoTimeout);
-        auto expected = (comm_size * (comm_size - 1)) / 2;
-        assert(mytensor.item<int>() == expected);
 
         Autoencoder model(input_dim, latent_dim);
         model->to(options.device);
@@ -442,6 +426,21 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         double start = MPI_Wtime();
         if (train_yes == 1)
         {
+            // Pytorch DDP
+            std::string path = ".filestore";
+            auto store = c10::make_intrusive<::c10d::FileStore>(path, comm_size);
+            c10::intrusive_ptr<c10d::ProcessGroupNCCL::Options> opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
+            auto pg = std::make_shared<::c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
+
+            // check if pg is working
+            auto mytensor = torch::ones(1) * my_rank;
+            mytensor = mytensor.to(options.device);
+            std::vector<torch::Tensor> tmp = {mytensor};
+            auto work = pg->allreduce(tmp);
+            work->wait(kNoTimeout);
+            auto expected = (comm_size * (comm_size - 1)) / 2;
+            assert(mytensor.item<int>() == expected);
+
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
             {
                 train(pg, model, *loader, optimizer, epoch, dataset_size, options);
@@ -451,7 +450,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         else
         {
             // (2022/08) jyc: We can restart from the model saved in python.
-            torch::load(model, "my_ae.pt");
+            torch::load(model, "my_iter.pt");
         }
 
         // Encode
