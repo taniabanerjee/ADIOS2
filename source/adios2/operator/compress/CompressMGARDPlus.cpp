@@ -294,6 +294,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
     std::cout << "rank,size:" << my_rank << " " << comm_size << std::endl;
 
+    std::cout << "Parameters:" << std::endl;
+    for (auto const& x : m_Parameters)
+    {
+        std::cout << "  " << x.first  << ": " << x.second << std::endl;
+    }
+    
     // Instantiate LagrangeOptimizer
     LagrangeOptimizer optim;
     // Read ADIOS2 files end, use data for your algorithm
