@@ -451,7 +451,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         else
         {
             // (2022/08) jyc: We can restart from the model saved in python.
-            torch::load(model, "my_iter.pt");
+            const char* mname = get_param(m_Parameters, "ae", "").c_str();
+            torch::load(model, mname);
         }
 
         // Encode
@@ -507,6 +508,168 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             auto batch = encode.slice(0, i, i + options.batch_size < numObjs ? i + options.batch_size : numObjs);
             batch = batch.to(options.device);
             auto _decode = model->decode(batch);
+            _decode = _decode.to(torch::kCPU);
+            decode_vector.push_back(_decode);
+        }
+        // All of decoded data: shape (nmesh, nx, ny)
+        auto decode = torch::cat(decode_vector, 0);
+        decode = decode.to(torch::kFloat64).reshape({-1, ds.nx, ds.ny});
+        std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+
+        // Un-normalize
+        auto mu = ds.mu;
+        auto sig = ds.sig;
+        std::cout << "mu.sizes = " << mu.sizes() << std::endl;
+        std::cout << "sig.sizes = " << sig.sizes() << std::endl;
+        decode = decode * sig.reshape({-1, 1, 1});
+        decode = decode + mu.reshape({-1, 1, 1});
+        // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+
+        // forg and docode shape: (nmesh, nx, ny)
+        auto diff = ds.forg - decode;
+        std::cout << "forg min,max = " << ds.forg.min().item<double>() << " " << ds.forg.max().item<double>()
+                  << std::endl;
+        std::cout << "decode min,max = " << decode.min().item<double>() << " " << decode.max().item<double>()
+                  << std::endl;
+        std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
+
+        // use MGARD to compress the residuals
+        auto perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
+        std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
+
+        // reserve space in output buffer to store MGARD buffer size
+        size_t offsetForDecompresedData = offset;
+        offset += sizeof(size_t);
+        std::cout << "residual data is ready" << std::endl;
+
+        // apply MGARD operate.
+        // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
+        CompressMGARD mgard(m_Parameters);
+        size_t mgardBufferSize =
+            mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut + offset);
+        // size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type, bufferOut + offset);
+        std::cout << "mgard is ready" << std::endl;
+
+        PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
+
+        // use MGARD decompress
+        std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+        mgard.InverseOperate(bufferOut + offset, mgardBufferSize, tmpDecompressBuffer.data());
+        std::cout << "mgard inverse is ready" << std::endl;
+        offset += mgardBufferSize;
+
+        // reconstruct data from the residuals
+        auto decompressed_residual_data =
+            torch::from_blob((void *)tmpDecompressBuffer.data(),
+                             {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64)
+                .permute({0, 2, 1, 3});
+        auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
+        // recon_data shape (1, nmesh, nx, ny) and make it contiguous in memory
+        recon_data = recon_data.contiguous().cpu();
+        std::vector<double> recon_vec(recon_data.data_ptr<double>(),
+                                      recon_data.data_ptr<double>() + recon_data.numel());
+
+        // apply post processing
+        // recon_vec shape: (1, nmesh, nx, ny)
+        optim.computeLagrangeParameters(recon_vec.data(), pq_yes);
+        std::cout << "Lagrange is ready" << std::endl;
+
+        // for (auto &batch : *loader)
+        // {
+        // auto decode = model->decode(encode);
+        // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+        // }
+        // compute residuals
+        // dataIn - decode_vector, after dataIn dimensions have been swapped
+        // convert tensor to cpp data is the residual data
+        // apply MGARD on residuals
+        // apply MGARD inverse operate to get back decompressed residuals
+        // add decompressed residuals to decode vector
+        // With this total decompressed output, compute Lagrange parameters
+        // Figure out PD and QoI errors
+
+        if (my_rank == 0)
+        {
+            double end = MPI_Wtime();
+            printf("Time taken for Training: %f\n", (end - start));
+        }
+        bufferOutOffset += offset;
+    }
+    else if (compression_method == 4)
+    {
+        MPI_Barrier(MPI_COMM_WORLD);
+        double start = MPI_Wtime();
+        const char* mname = m_Parameters["ae"].c_str();
+        std::cout << "Module name:" << mname;
+        torch::jit::script::Module module;
+        try {
+            // Deserialize the ScriptModule from a file using torch::jit::load().
+            module = torch::jit::load(mname);
+        }
+        catch (const c10::Error& e) {
+            std::cerr << "error loading the model\n";
+            return -1;
+        }
+        torch::Device device(torch::kCUDA);
+        Options options;
+        options.batch_size = 128;
+        int latent_dim = 4;
+        auto ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]});
+        auto dataset = ds.map(torch::data::transforms::Stack<>());
+        const size_t dataset_size = dataset.size().value();
+        auto loader = torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset),
+                                                                                              options.batch_size);
+        std::vector<torch::Tensor> encode_vector;
+        for (auto &batch : *loader)
+        {
+            auto data = batch.data.to(torch::kCUDA);
+            auto _encode = module.run_method("encode", data).toTensor();
+            // std::cout << "_encode.sizes = " << _encode.sizes() << std::endl;
+            _encode = _encode.to(torch::kCPU);
+            encode_vector.push_back(_encode);
+        }
+        // encodes shape is (nmesh, latent_dim), where nmesh = number of total mesh nodes this process has
+        auto encode = torch::cat(encode_vector, 0);
+        std::cout << "encode.sizes = " << encode.sizes() << std::endl;
+
+        // Kmean
+        *reinterpret_cast<int *>(bufferOut) = latent_dim;
+        int offset = sizeof(int);
+        int numObjs = encode.size(0);
+        for (int i = 0; i < latent_dim; ++i)
+        {
+            // subselect each column from encode
+            float *pq_input = encode.slice(1, i, i + 1).contiguous().data_ptr<float>();
+            float pq_threshold = 0.0001;
+            int numClusters = 256;
+            float *clusters = new float[numClusters];
+            initClusterCenters(clusters, pq_input, numObjs, numClusters);
+            int *membership = new int[numObjs];
+            memset(membership, 0, numObjs * sizeof(int));
+            kmeans_float(pq_input, numObjs, numClusters, pq_threshold, membership, clusters);
+            // write PQ table
+            for (int j = 0; j < numClusters; ++j)
+                *reinterpret_cast<float *>(bufferOut + offset + j * sizeof(float)) = clusters[j];
+            offset += numClusters * sizeof(float);
+            // write indexes to bufferOutput
+            for (int j = 0; j < numObjs; ++j)
+                *reinterpret_cast<float *>(bufferOut + offset + j * sizeof(int)) = membership[j];
+            offset += numObjs * sizeof(int);
+            // write to decode input
+
+            // We update encode tensor directly
+            for (int j = 0; j < numObjs; ++j)
+                encode[j, i] = clusters[membership[j]];
+        }
+        std::cout << "kmean is done " << std::endl;
+
+        // Decode
+        std::vector<torch::Tensor> decode_vector;
+        for (int i = 0; i < numObjs; i += options.batch_size)
+        {
+            auto batch = encode.slice(0, i, i + options.batch_size < numObjs ? i + options.batch_size : numObjs);
+            batch = batch.to(torch::kCUDA);
+            auto _decode = module.run_method("decode", batch).toTensor();
             _decode = _decode.to(torch::kCPU);
             decode_vector.push_back(_decode);
         }
