@@ -440,6 +440,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         {
             // Pytorch DDP
             std::string path = ".filestore";
+            if (my_rank == 0)
+            {
+                remove(path.c_str());
+            }
+            MPI_Barrier(MPI_COMM_WORLD);
             auto store = c10::make_intrusive<::c10d::FileStore>(path, comm_size);
             c10::intrusive_ptr<c10d::ProcessGroupNCCL::Options> opts =
                 c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
