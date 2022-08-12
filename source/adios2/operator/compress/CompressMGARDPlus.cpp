@@ -45,6 +45,7 @@ struct Options
     size_t batch_log_interval = 1000;
     size_t epoch_log_interval = 20;
     torch::DeviceType device = torch::kCPU;
+    size_t batch_max = 0;
 };
 
 // Custom Dataset class
@@ -161,6 +162,7 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
 
     size_t batch_idx = 0;
     double batch_loss = 0;
+
     for (auto &batch : loader)
     {
         batch_idx++;
@@ -191,6 +193,11 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
         {
             std::printf("Train Batch: %ld [%5ld/%5ld] Loss: %.4g\n", epoch, batch_idx * batch.data.size(0),
                         dataset_size, loss.template item<double>());
+        }
+
+        if (batch_idx >= options.batch_max) 
+        {
+            break;
         }
     }
 
@@ -426,7 +433,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         auto ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]});
         auto dataset = ds.map(torch::data::transforms::Stack<>());
         const size_t dataset_size = dataset.size().value();
-        auto loader = torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset),
+        auto loader = torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(dataset),
                                                                                               options.batch_size);
         torch::optim::Adam optimizer(model->parameters(), torch::optim::AdamOptions(1e-3 /*learning rate*/));
         // if (my_rank == 0)
@@ -445,10 +452,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                 remove(path.c_str());
             }
             MPI_Barrier(MPI_COMM_WORLD);
-            auto store = c10::make_intrusive<::c10d::FileStore>(path, comm_size);
-            c10::intrusive_ptr<c10d::ProcessGroupNCCL::Options> opts =
-                c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
-            auto pg = std::make_shared<::c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
+            auto store = c10::make_intrusive<c10d::FileStore>(path, comm_size);
+            auto opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
+            auto pg = std::make_shared<c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
 
             // check if pg is working
             auto mytensor = torch::ones(1) * my_rank;
@@ -459,6 +465,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             auto expected = (comm_size * (comm_size - 1)) / 2;
             assert(mytensor.item<int>() == expected);
 
+            // The number of iteration should be same for all processes due to sync
+            int nbatch = dataset_size/options.batch_size + 1;
+            MPI_Allreduce(MPI_IN_PLACE, &nbatch, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+            // std::cout << "Loader size: " << dataset_size/options.batch_size + 1 << " " << nbatch << std::endl;
+            options.batch_max = nbatch;
+            
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
             {
                 train(pg, model, *loader, optimizer, epoch, dataset_size, options);
