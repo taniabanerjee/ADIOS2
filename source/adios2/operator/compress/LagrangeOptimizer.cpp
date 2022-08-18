@@ -16,22 +16,31 @@
 
 // int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
 
-LagrangeOptimizer::LagrangeOptimizer()
+LagrangeOptimizer::LagrangeOptimizer(const char* species)
 {
     // Initialize charge and mass variables
-    mySmallElectronCharge = 1.6022e-19;
-    myParticleMass = 3.344e-27;
+    for (int i=0; i<myNumSpecies; ++i) {
+        if (!strcmp(species, mySpeciesList[i]))
+        {
+            mySmallElectronCharge = mySpeciesCharge[i];
+            myParticleMass = mySpeciesMass[i];
+            mySpecies = i;
+        }
+    }
     myNumClusters = 256;
     myEpsilon = 100;
     useKMeansMPI = 0;
 }
 
 LagrangeOptimizer::LagrangeOptimizer(size_t planeOffset,
-    size_t nodeOffset, size_t p, size_t n, size_t vx, size_t vy)
+    size_t nodeOffset, size_t p, size_t n, size_t vx, size_t vy,
+    const uint8_t species)
 {
     // Initialize charge and mass variables
-    mySmallElectronCharge = 1.6022e-19;
-    myParticleMass = 3.344e-27;
+    mySmallElectronCharge = mySpeciesCharge[species];
+    myParticleMass = mySpeciesMass[species];
+    mySpecies = species;
+    // Change it if it is for electrons
     myPlaneOffset = planeOffset;
     myNodeOffset = nodeOffset;
     myPlaneCount = p;
@@ -119,7 +128,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     MPI_Barrier(MPI_COMM_WORLD);
     end = MPI_Wtime();
     if (my_rank == 0) {
-        printf ("Time Taken for QoI Computation: %f\n", (end-start));
+        printf ("%d Time Taken for QoI Computation: %f\n", mySpecies, (end-start));
     }
 }
 
@@ -495,7 +504,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
     MPI_Barrier(MPI_COMM_WORLD);
     end = MPI_Wtime();
     if (my_rank == 0) {
-        printf ("Time Taken for Lagrange Computations: %f %f\n", end-start, end-start1);
+        printf ("%d Time Taken for Lagrange Computations: %f %f\n", mySpecies, end-start, end-start1);
     }
     double* breg_recon = new double[myLocalElements];
     memset(breg_recon, 0, myLocalElements*sizeof(double));
@@ -551,6 +560,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
         }
     }
     else {
+      const char* precision = "double";
         double nK[myVxCount*myVyCount];
         for (iphi=0; iphi<myPlaneCount; ++iphi) {
             for (idx = 0; idx<myNodeCount; ++idx) {
@@ -560,10 +570,20 @@ void LagrangeOptimizer::computeLagrangeParameters(
                       myVyCount*iphi + myVxCount*myVyCount*idx];
                 int x = 4*idx;
                 for (i=0; i<myVxCount * myVyCount; ++i) {
-                    nK[i] = float(myLagranges[x])*myVolume[myVxCount*myVyCount*idx+i]+
+                    if (!strcmp(precision, "float"))
+                    {
+                        nK[i] = float(myLagranges[x])*myVolume[myVxCount*myVyCount*idx+i]+
                            float(myLagranges[x+1])*V2[myVxCount*myVyCount*idx+i] +
                            float(myLagranges[x+2])*V3[myVxCount*myVyCount*idx+i] +
                            float(myLagranges[x+3])*V4[myVxCount*myVyCount*idx+i];
+                    }
+                    else if (!strcmp(precision, "double"))
+                    {
+                        nK[i] = (myLagranges[x])*myVolume[myVxCount*myVyCount*idx+i]+
+                           (myLagranges[x+1])*V2[myVxCount*myVyCount*idx+i] +
+                           (myLagranges[x+2])*V3[myVxCount*myVyCount*idx+i] +
+                           (myLagranges[x+3])*V4[myVxCount*myVyCount*idx+i];
+                    }
                     new_recon_one[i] = recon_one[i] * exp(-nK[i]);
 #if UF_DEBUG
                     if (my_rank == 0) {
@@ -670,6 +690,11 @@ void LagrangeOptimizer::quantizeLagrangesMPI(int offset, int* &membership, doubl
     return;
 }
 
+uint8_t LagrangeOptimizer::getSpecies()
+{
+    return mySpecies;
+}
+
 size_t LagrangeOptimizer::getPlaneOffset()
 {
     return myPlaneOffset;
@@ -713,6 +738,7 @@ size_t LagrangeOptimizer::getTableSize()
 
 size_t LagrangeOptimizer::putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset)
 {
+#if 0
     int i, count = 0;
     int numObjs = myPlaneCount*myNodeCount;
     for (i=0; i<numObjs*4; i+=4) {
@@ -736,7 +762,7 @@ size_t LagrangeOptimizer::putLagrangeParameters(char* &bufferOut, size_t &buffer
                   myLagranges[i+3];
     }
     return count * sizeof(float);
-#if 0
+#else
     int i, count = 0;
     int numObjs = myPlaneCount*myNodeCount;
     for (i=0; i<numObjs*4; i+=4) {
@@ -1329,6 +1355,7 @@ void LagrangeOptimizer::readCharBuffer(const char* bufferIn, size_t bufferOffset
 }
 #endif
 
+// Get all variables from mesh file pertaining to ions and electrons
 void LagrangeOptimizer::readF0Params(const std::string meshFile)
 {
     // Read ADIOS2 files from here
@@ -1387,10 +1414,11 @@ void LagrangeOptimizer::setVolume(std::vector <double> &volume)
         j = int(k%vvsize);
         mu_vp_vol[k] = mu_vol[i] * vp_vol[j];
     }
+    int indexOffset = mySpecies==1 ? myNodeCount : 0;
     for (k=0; k<myNodeCount*vvsize*mvsize; ++k) {
         i = int (k/(vvsize*mvsize));
         j = int (k%(vvsize*mvsize));
-        volume[k] = (myGridVolume[myNodeCount+i] * mu_vp_vol[j]);
+        volume[k] = (myGridVolume[indexOffset+i] * mu_vp_vol[j]);
     }
     return;
 }
@@ -1417,20 +1445,10 @@ void LagrangeOptimizer::setVolume()
             mu_vp_vol.push_back(mu_vol[ii] * vp_vol[jj]);
         }
     }
-    if (myGridVolume.size() == 2*myNodeCount) {
-        for (int ii=0; ii<myNodeCount; ++ii) {
-            for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
-            // Access myGridVolume with an offset of nnodes to get to the electrons
-                myVolume.push_back(myGridVolume[myNodeCount+ii] * mu_vp_vol[jj]);
-            }
-        }
-    }
-    else {
-        for (int ii=0; ii<myNodeCount; ++ii) {
-            for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
-            // Access myGridVolume with an offset of nnodes to get to the electrons
-                myVolume.push_back(myGridVolume[ii] * mu_vp_vol[jj]);
-            }
+    int indexOffset = mySpecies==1 ? myNodeCount : 0;
+    for (int ii=0; ii<myNodeCount; ++ii) {
+        for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
+            myVolume.push_back(myGridVolume[indexOffset+ii] * mu_vp_vol[jj]);
         }
     }
     return;
@@ -1472,8 +1490,9 @@ void LagrangeOptimizer::setVth2(std::vector <double> &vth,
                                 std::vector <double> &vth2)
 {
     double value;
+    int indexOffset = mySpecies==1 ? myNodeCount : 0;
     for (int i=0; i<myNodeCount; ++i) {
-        value = myF0TEv[myNodeCount+i]*mySmallElectronCharge/myParticleMass;
+        value = myF0TEv[indexOffset+i]*mySmallElectronCharge/myParticleMass;
         vth2[i] = (value);
         vth[i] = (sqrt(value));
     }
@@ -1483,21 +1502,12 @@ void LagrangeOptimizer::setVth2(std::vector <double> &vth,
 void LagrangeOptimizer::setVth2()
 {
     double value = 0;
-    if (myF0TEv.size() == 2*myNodeCount) {
-        for (int ii=0; ii<myNodeCount; ++ii) {
-            // Access f0_T_ev with an offset of myNodeCount to get to the electrons
-            value = myF0TEv[myNodeCount+ii]*mySmallElectronCharge/myParticleMass;
-            myVth2.push_back(value);
-            myVth.push_back(sqrt(value));
-        }
-    }
-    else{
-        for (int ii=0; ii<myNodeCount; ++ii) {
-            // Access f0_T_ev with an offset of myNodeCount to get to the electrons
-            value = myF0TEv[ii]*mySmallElectronCharge/myParticleMass;
-            myVth2.push_back(value);
-            myVth.push_back(sqrt(value));
-        }
+    int indexOffset = mySpecies==1 ? myNodeCount : 0;
+    for (int ii=0; ii<myNodeCount; ++ii) {
+        // Access f0_T_ev with an offset of myNodeCount to get to the electrons
+        value = myF0TEv[indexOffset+ii]*mySmallElectronCharge/myParticleMass;
+        myVth2.push_back(value);
+        myVth.push_back(sqrt(value));
     }
     return;
 }

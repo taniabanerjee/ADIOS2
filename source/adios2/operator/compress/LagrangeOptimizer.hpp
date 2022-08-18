@@ -7,9 +7,9 @@ class LagrangeOptimizer
 {
     public:
         // Constructor
-        LagrangeOptimizer();
+        LagrangeOptimizer(const char* species);
         LagrangeOptimizer(size_t planeOffset, size_t nodeOffset,
-            size_t p, size_t n, size_t vx, size_t vy);
+            size_t p, size_t n, size_t vx, size_t vy, uint8_t species);
 
         // Destructor
         ~LagrangeOptimizer();
@@ -20,6 +20,8 @@ class LagrangeOptimizer
         // Compute Lagrange Parameters
         void computeLagrangeParameters(const double* reconstructedData,
                 const int applyPQ);
+        // Get the particular species
+        uint8_t getSpecies();
         // Get the plane offset
         size_t getPlaneOffset();
         // Get the node offset
@@ -92,6 +94,7 @@ class LagrangeOptimizer
 
         // Members
         // Actual data being compressed and related parameters
+        uint8_t mySpecies;
         std::vector <double> myDataIn;
         long unsigned int myPlaneOffset;
         long unsigned int myNodeOffset;
@@ -102,6 +105,10 @@ class LagrangeOptimizer
         long unsigned int myLocalElements;
         double myMaxValue;
         // Constant physics parameters
+        static const int myNumSpecies = 2;
+        const char* mySpeciesList[myNumSpecies] = {"electron", "ion"};
+        double mySpeciesCharge[myNumSpecies] = {1.6022e-19, 1.6022e-19};
+        double mySpeciesMass[myNumSpecies] = {9.1093E-31, 1.6720E-27};
         double mySmallElectronCharge;
         double myParticleMass;
         // Mesh Parameters
