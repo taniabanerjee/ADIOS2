@@ -1,6 +1,9 @@
 #ifndef LAGRANGE_TORCH_HPP
 #define LAGRANGE_TORCH_HPP
 
+#include <torch/script.h>
+#include <torch/torch.h>
+
 #include "LagrangeOptimizer.hpp"
 
 class LagrangeTorch : public LagrangeOptimizer
@@ -75,7 +78,17 @@ class LagrangeTorch : public LagrangeOptimizer
                     size_t &bufferOutOffset);
         size_t getPQIndexes(const char* bufferIn);
 
+    private:
         // Members
+        at::Tensor myGridVolumeTorch;
+        at::Tensor myF0TEvTorch;
+        at::Tensor myVolumeTorch;
+        at::Tensor myVpTorch;
+        at::Tensor myMuQoiTorch;
+        at::Tensor myVthTorch;
+        at::Tensor myVth2Torch;
+        static at::TensorOptions ourGPUOptions;
+        static at::TensorOptions ourCPUOptions;
 };
 
 #endif
