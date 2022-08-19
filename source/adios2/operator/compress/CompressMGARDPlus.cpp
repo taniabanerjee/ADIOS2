@@ -12,7 +12,7 @@
 #include "CompressMGARD.h"
 #include "CompressSZ.h"
 #include "CompressZFP.h"
-#include "LagrangeOptimizer.hpp"
+#include "LagrangeTorch.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 #include <cassert>
@@ -303,8 +303,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     }
 #endif
 
-    // Instantiate LagrangeOptimizer
-    LagrangeOptimizer optim(m_Parameters["species"].c_str());
+    // Instantiate LagrangeTorch
+    LagrangeTorch optim(m_Parameters["species"].c_str());
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -926,7 +926,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    LagrangeOptimizer optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species);
+    LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species);
     double *doubleData = reinterpret_cast<double *>(dataOut);
     dataOut = optim.setDataFromCharBufferV1(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
 

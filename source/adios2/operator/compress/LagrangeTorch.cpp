@@ -658,46 +658,6 @@ void LagrangeTorch::quantizeLagrangesMPI(int offset, int* &membership, double* &
     return;
 }
 
-uint8_t LagrangeTorch::getSpecies()
-{
-    return mySpecies;
-}
-
-size_t LagrangeTorch::getPlaneOffset()
-{
-    return myPlaneOffset;
-}
-
-size_t LagrangeTorch::getNodeOffset()
-{
-    return myNodeOffset;
-}
-
-size_t LagrangeTorch::getPlaneCount()
-{
-    return myPlaneCount;
-}
-
-size_t LagrangeTorch::getNodeCount()
-{
-    return myNodeCount;
-}
-
-size_t LagrangeTorch::getVxCount()
-{
-    return myVxCount;
-}
-
-size_t LagrangeTorch::getVyCount()
-{
-    return myVyCount;
-}
-
-size_t LagrangeTorch::getParameterSize()
-{
-    return myNodeCount * 4 * sizeof(double);
-}
-
 // Get the number of bytes needed to store the PQ table
 size_t LagrangeTorch::getTableSize()
 {

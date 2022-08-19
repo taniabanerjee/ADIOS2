@@ -20,23 +20,6 @@ class LagrangeTorch : public LagrangeOptimizer
         // Compute Lagrange Parameters
         void computeLagrangeParameters(const double* reconstructedData,
                 const int applyPQ);
-        // Get the particular species
-        uint8_t getSpecies();
-        // Get the plane offset
-        size_t getPlaneOffset();
-        // Get the node offset
-        size_t getNodeOffset();
-        // Get the number of planes
-        size_t getPlaneCount();
-        // Get the number of nodes
-        size_t getNodeCount();
-        // Get the vx dimensions
-        size_t getVxCount();
-        // Get the vy dimensions
-        size_t getVyCount();
-        // Get the number of bytes needed to store the Lagrange parameters
-        size_t getParameterSize();
-        // Get the number of bytes needed to store the PQ table
         size_t getTableSize();
         size_t putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset);
@@ -93,59 +76,6 @@ class LagrangeTorch : public LagrangeOptimizer
         size_t getPQIndexes(const char* bufferIn);
 
         // Members
-        // Actual data being compressed and related parameters
-        uint8_t mySpecies;
-        std::vector <double> myDataIn;
-        long unsigned int myPlaneOffset;
-        long unsigned int myNodeOffset;
-        long unsigned int myNodeCount;
-        long unsigned int myPlaneCount;
-        long unsigned int myVxCount;
-        long unsigned int myVyCount;
-        long unsigned int myLocalElements;
-        double myMaxValue;
-        // Constant physics parameters
-        static const int myNumSpecies = 2;
-        const char* mySpeciesList[myNumSpecies] = {"electron", "ion"};
-        double mySpeciesCharge[myNumSpecies] = {1.6022e-19, 1.6022e-19};
-        double mySpeciesMass[myNumSpecies] = {9.1093E-31, 1.6720E-27};
-        double mySmallElectronCharge;
-        double myParticleMass;
-        // Mesh Parameters
-        std::string myMeshFile;
-        std::vector <double> myGridVolume;
-        std::vector <int> myF0Nvp;
-        std::vector <int> myF0Nmu;
-        std::vector <double> myF0Dvp;
-        std::vector <double> myF0Dsmu;
-        std::vector <double> myF0TEv;
-        std::vector <double> myVolume;
-        std::vector <double> myVp;
-        std::vector <double> myMuQoi;
-        std::vector <double> myVth2;
-        std::vector <double> myVth;
-        // Original QoIs
-        std::vector <double> myDensity;
-        std::vector <double> myUpara;
-        std::vector <double> myTperp;
-        std::vector <double> myTpara;
-        std::vector <double> myN0;
-        std::vector <double> myT0;
-        // Lagrange Parameters
-        double* myLagranges;
-        // PQ parameters
-        int myNumClusters;
-        int* myLagrangeIndexesDensity;
-        int* myLagrangeIndexesUpara;
-        int* myLagrangeIndexesTperp;
-        int* myLagrangeIndexesRpara;
-        double* myDensityTable;
-        double* myUparaTable;
-        double* myTperpTable;
-        double* myRparaTable;
-        std::vector <double> myTable;
-        double myEpsilon;
-        int useKMeansMPI;
 };
 
 #endif
