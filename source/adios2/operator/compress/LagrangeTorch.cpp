@@ -11,10 +11,15 @@
 #include "adios2/helper/adiosFunctions.h"
 #include "KmeansMPI.h"
 #include <omp.h>
+#include <string_view>
 #define GET4D(d0, d1, d2, d3, i, j, k, l) ((d1 * d2 * d3) * i + (d2 * d3) * j + d3 * k + l)
 
 
 // int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
+
+// Define static class members
+at::TensorOptions LagrangeTorch::ourGPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
+at::TensorOptions LagrangeTorch::ourCPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
 
 LagrangeTorch::LagrangeTorch(const char* species)
   : LagrangeOptimizer(species)
@@ -57,27 +62,11 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     printf("#planes: %d, #nodes: %d, #vx: %d, #vy: %d\n", myPlaneCount, myNodeCount, myVxCount, myVyCount);
 #endif
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
-    myDataIn.reserve(myLocalElements);
-    int lindex, rindex;
-    for (int i = 0; i < myPlaneCount; i++)
-    {
-        for (int j = 0; j < myVxCount; j++)
-        {
-            for (int k = 0; k < myNodeCount; k++)
-            {
-                for (int l = 0; l < myVyCount; l++)
-                {
-                    lindex = int(GET4D(myPlaneCount, myNodeCount, myVxCount, myVyCount, i, k, j, l));
-                    rindex = int(GET4D(myPlaneCount, myVxCount, myNodeCount, myVyCount, i, j, k, l));
-                    myDataIn[lindex] = dataIn[rindex];
-                    // GET4D(myDataIn, myPlaneCount, myNodeCount, myVxCount,
-                        // myVyCount, i, k, j, l) =
-                        // GET4D(dataIn, myPlaneCount, myVxCount,
-                            // myNodeCount, myVyCount, i, j, k, l);
-                }
-            }
-        }
-    }
+    auto datain = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+                  .permute({0, 2, 1, 3});
+    datain = datain.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myDataIn = datain_vec;
     readF0Params(meshFile);
     setVolume();
     setVp();
@@ -942,8 +931,9 @@ size_t LagrangeTorch::putResult(char* &bufferOut, size_t &bufferOutOffset)
         fwrite(myTperpTable, sizeof(double), myNumClusters, fp);
         fwrite(myRparaTable, sizeof(double), myNumClusters, fp);
         fwrite(&myNodeCount, sizeof(int), 1, fp);
-        fwrite(myGridVolume.data()+myNodeCount, sizeof(double), myNodeCount, fp);
-        fwrite(myF0TEv.data()+myNodeCount, sizeof(double), myNodeCount, fp);
+        int indexOffset = mySpecies==1 ? myNodeCount : 0;
+        fwrite(myGridVolume.data()+indexOffset, sizeof(double), myNodeCount, fp);
+        fwrite(myF0TEv.data()+indexOffset, sizeof(double), myNodeCount, fp);
         fwrite(&myF0Dvp, sizeof(double), 1, fp);
         fwrite(&myF0Dsmu, sizeof(double), 1, fp);
         fwrite(&myF0Nvp, sizeof(int), 1, fp);
@@ -1321,123 +1311,68 @@ void LagrangeTorch::readF0Params(const std::string meshFile)
     var_ev->SetSelection(adios2::Box<adios2::Dims>({0, myNodeOffset}, {evShape[0], myNodeCount}));
     engine->Get(*var_ev, myF0TEv);
     engine->Close();
-}
-
-void LagrangeTorch::setVolume(std::vector <double> &volume)
-{
-    int vvsize = myF0Nvp[0]*2 + 1;
-    int mvsize = myF0Nmu[0] + 1;
-    std::vector<double> vp_vol (vvsize, 1.0);
-    vp_vol[0] = 0.5;
-    vp_vol[myF0Nvp[0]*2] = 0.5;
-
-    std::vector<double> mu_vol (mvsize, 1.0);
-    mu_vol[0] = 0.5;
-    mu_vol[myF0Nmu[0]] = 0.5;
-
-    std::vector<double> mu_vp_vol (vvsize*mvsize, 0);
-    int k, i, j;
-    for (k=0; k<vvsize*mvsize; ++k) {
-        i = int(k/mvsize);
-        j = int(k%vvsize);
-        mu_vp_vol[k] = mu_vol[i] * vp_vol[j];
-    }
-    int indexOffset = mySpecies==1 ? myNodeCount : 0;
-    for (k=0; k<myNodeCount*vvsize*mvsize; ++k) {
-        i = int (k/(vvsize*mvsize));
-        j = int (k%(vvsize*mvsize));
-        volume[k] = (myGridVolume[indexOffset+i] * mu_vp_vol[j]);
-    }
-    return;
+    myGridVolumeTorch = torch::from_blob((void *)myGridVolume.data(), {volumeShape[0], myNodeCount}, torch::kFloat64).to(torch::kCUDA);;
+    myF0TEvTorch = torch::from_blob((void *)myF0TEv.data(), {evShape[0], myNodeCount}, torch::kFloat64).to(torch::kCUDA);;
 }
 
 void LagrangeTorch::setVolume()
 {
-    std::vector<double> vp_vol;
-    vp_vol.push_back(0.5);
-    for (int ii = 1; ii<myF0Nvp[0]*2; ++ii) {
-        vp_vol.push_back(1.0);
-    }
-    vp_vol.push_back(0.5);
+    auto vp_vol = torch::ones({myF0Nvp[0]*2+1}, ourGPUOptions);
+    vp_vol[0] = 0.5;
+    vp_vol[-1] = 0.5;
 
-    std::vector<double> mu_vol;
-    mu_vol.push_back(0.5);
-    for (int ii = 1; ii<myF0Nmu[0]; ++ii) {
-        mu_vol.push_back(1.0);
-    }
-    mu_vol.push_back(0.5);
+    auto mu_vol = torch::ones({myF0Nmu[0]+1}, ourGPUOptions);
+    mu_vol[0] = 0.5;
+    mu_vol[-1] = 0.5;
 
-    std::vector<double> mu_vp_vol;
-    for (int ii=0; ii<mu_vol.size(); ++ii) {
-        for (int jj=0; jj<vp_vol.size(); ++jj) {
-            mu_vp_vol.push_back(mu_vol[ii] * vp_vol[jj]);
-        }
-    }
-    int indexOffset = mySpecies==1 ? myNodeCount : 0;
-    for (int ii=0; ii<myNodeCount; ++ii) {
-        for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
-            myVolume.push_back(myGridVolume[indexOffset+ii] * mu_vp_vol[jj]);
-        }
-    }
-    return;
-}
+    c10::string_view indexing{"ij"};
+    std::vector<at::Tensor> args = torch::meshgrid({mu_vol, vp_vol}, indexing);
+    at::Tensor cx = args[0].contiguous();
+    at::Tensor cy = args[1].contiguous();
+    at::Tensor mu_vp_vol = at::transpose(cx, 0, 1) * at::transpose(cy, 0, 1);
+    auto f0_grid_vol = myGridVolumeTorch[mySpecies];
+    myVolumeTorch = at::multiply(f0_grid_vol.view({myNodeCount,1,1}), mu_vp_vol.view({1,myVxCount,myVyCount}));
 
-void LagrangeTorch::setVp(std::vector <double> &vp)
-{
-    for (int ii = -myF0Nvp[0]; ii<myF0Nvp[0]+1; ++ii) {
-        vp[ii+myF0Nvp[0]] = (ii*myF0Dvp[0]);
-    }
+    auto datain = myVolumeTorch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myVolume = datain_vec;
+
     return;
 }
 
 void LagrangeTorch::setVp()
 {
-    for (int ii = -myF0Nvp[0]; ii<myF0Nvp[0]+1; ++ii) {
-        myVp.push_back(ii*myF0Dvp[0]);
-    }
-    return;
-}
-
-void LagrangeTorch::setMuQoi(std::vector <double> &muqoi)
-{
-    for (int ii = 0; ii<myF0Nmu[0]+1; ++ii) {
-        muqoi[ii] = (pow(ii*myF0Dsmu[0], 2));
-    }
+    myVpTorch = at::multiply(at::arange(-myF0Nvp[0], myF0Nvp[0]+1, ourGPUOptions), at::Scalar(myF0Dvp[0]));
+    auto datain = myVpTorch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myVp = datain_vec;
     return;
 }
 
 void LagrangeTorch::setMuQoi()
 {
-    for (int ii = 0; ii<myF0Nmu[0]+1; ++ii) {
-        myMuQoi.push_back(pow(ii*myF0Dsmu[0], 2));
-    }
-    return;
-}
+    auto mu = at::multiply(at::arange(myF0Nmu[0]+1, ourGPUOptions), at::Scalar(myF0Dsmu[0]));
+    myMuQoiTorch = at::pow(mu, at::Scalar(2));
 
-void LagrangeTorch::setVth2(std::vector <double> &vth,
-                                std::vector <double> &vth2)
-{
-    double value;
-    int indexOffset = mySpecies==1 ? myNodeCount : 0;
-    for (int i=0; i<myNodeCount; ++i) {
-        value = myF0TEv[indexOffset+i]*mySmallElectronCharge/myParticleMass;
-        vth2[i] = (value);
-        vth[i] = (sqrt(value));
-    }
+    auto datain = myMuQoiTorch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myMuQoi = datain_vec;
     return;
 }
 
 void LagrangeTorch::setVth2()
 {
-    double value = 0;
-    int indexOffset = mySpecies==1 ? myNodeCount : 0;
-    for (int ii=0; ii<myNodeCount; ++ii) {
-        // Access f0_T_ev with an offset of myNodeCount to get to the electrons
-        value = myF0TEv[indexOffset+ii]*mySmallElectronCharge/myParticleMass;
-        myVth2.push_back(value);
-        myVth.push_back(sqrt(value));
-    }
-    return;
+    auto f0_T_ev = myF0TEvTorch[mySpecies];
+    myVth2Torch = at::multiply(f0_T_ev, at::Scalar(mySmallElectronCharge/myParticleMass));
+    myVthTorch = at::sqrt(myVth2Torch);
+
+    auto datain = myVth2Torch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myVth2 = datain_vec;
+
+    auto datain2 = myVthTorch.contiguous().cpu();
+    std::vector<double> datain_vec2(datain2.data_ptr<double>(), datain2.data_ptr<double>() + datain2.numel());
+    myVth = datain_vec2;
 }
 
 void LagrangeTorch::compute_C_qois(int iphi,
