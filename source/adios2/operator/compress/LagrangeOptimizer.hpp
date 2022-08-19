@@ -48,7 +48,7 @@ class LagrangeOptimizer
         void readCharBuffer(const char* bufferIn, size_t bufferOffset,
                 size_t bufferSize);
 
-    private:
+    protected:
         // APIs
         void readF0Params(const std::string meshFile);
         void setVolume();
