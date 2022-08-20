@@ -482,15 +482,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         if (train_yes == 1)
         {
             // Pytorch DDP
-            /*
-            std::string path = ".filestore";
-            if (my_rank == 0)
-            {
-                remove(path.c_str());
-            }
-            MPI_Barrier(MPI_COMM_WORLD);
-            */
-            std::string path = std::tmpnam(nullptr);
+            // std::string path = std::tmpnam(nullptr);
             // auto store = c10::make_intrusive<c10d::FileStore>(path, 0);
             const char *MASTER_ADDR = std::getenv("MASTER_ADDR");
             const int MASTER_PORT = atoi(std::getenv("MASTER_PORT"));
