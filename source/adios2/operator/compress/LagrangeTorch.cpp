@@ -6,65 +6,38 @@
 #include <mpi.h>
 #include <string.h>
 #include <map>
-#include "LagrangeOptimizer.hpp"
+#include "LagrangeTorch.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 #include "KmeansMPI.h"
 #include <omp.h>
+#include <string_view>
 #define GET4D(d0, d1, d2, d3, i, j, k, l) ((d1 * d2 * d3) * i + (d2 * d3) * j + d3 * k + l)
 
 
 // int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
 
-LagrangeOptimizer::LagrangeOptimizer(const char* species)
+// Define static class members
+at::TensorOptions LagrangeTorch::ourGPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
+at::TensorOptions LagrangeTorch::ourCPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
+
+LagrangeTorch::LagrangeTorch(const char* species)
+  : LagrangeOptimizer(species)
 {
-    // Initialize charge and mass variables
-    for (int i=0; i<myNumSpecies; ++i) {
-        if (!strcmp(species, mySpeciesList[i]))
-        {
-            mySmallElectronCharge = mySpeciesCharge[i];
-            myParticleMass = mySpeciesMass[i];
-            mySpecies = i;
-        }
-    }
-    myNumClusters = 256;
-    myEpsilon = 100;
-    useKMeansMPI = 0;
 }
 
-LagrangeOptimizer::LagrangeOptimizer(size_t planeOffset,
+LagrangeTorch::LagrangeTorch(size_t planeOffset,
     size_t nodeOffset, size_t p, size_t n, size_t vx, size_t vy,
     const uint8_t species)
-{
-    // Initialize charge and mass variables
-    mySmallElectronCharge = mySpeciesCharge[species];
-    myParticleMass = mySpeciesMass[species];
-    mySpecies = species;
-    // Change it if it is for electrons
-    myPlaneOffset = planeOffset;
-    myNodeOffset = nodeOffset;
-    myPlaneCount = p;
-    myNodeCount = n;
-    myVxCount = vx;
-    myVyCount = vy;
-    myNumClusters = 256;
-    myLagrangeIndexesDensity = new int[myNodeCount];
-    myLagrangeIndexesUpara = new int[myNodeCount];
-    myLagrangeIndexesTperp = new int[myNodeCount];
-    myLagrangeIndexesRpara = new int[myNodeCount];
-    myDensityTable = new double[myNumClusters];
-    myUparaTable = new double[myNumClusters];
-    myTperpTable = new double[myNumClusters];
-    myRparaTable = new double[myNumClusters];
-    myEpsilon = 100;
-    useKMeansMPI = 0;
-}
-
-LagrangeOptimizer::~LagrangeOptimizer()
+  : LagrangeOptimizer(planeOffset, nodeOffset, p, n, vx, vy, species)
 {
 }
 
-void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
+LagrangeTorch::~LagrangeTorch()
+{
+}
+
+void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
      adios2::Dims blockStart, adios2::Dims blockCount,
      const double* dataIn)
 {
@@ -89,27 +62,11 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     printf("#planes: %d, #nodes: %d, #vx: %d, #vy: %d\n", myPlaneCount, myNodeCount, myVxCount, myVyCount);
 #endif
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
-    myDataIn.reserve(myLocalElements);
-    int lindex, rindex;
-    for (int i = 0; i < myPlaneCount; i++)
-    {
-        for (int j = 0; j < myVxCount; j++)
-        {
-            for (int k = 0; k < myNodeCount; k++)
-            {
-                for (int l = 0; l < myVyCount; l++)
-                {
-                    lindex = int(GET4D(myPlaneCount, myNodeCount, myVxCount, myVyCount, i, k, j, l));
-                    rindex = int(GET4D(myPlaneCount, myVxCount, myNodeCount, myVyCount, i, j, k, l));
-                    myDataIn[lindex] = dataIn[rindex];
-                    // GET4D(myDataIn, myPlaneCount, myNodeCount, myVxCount,
-                        // myVyCount, i, k, j, l) =
-                        // GET4D(dataIn, myPlaneCount, myVxCount,
-                            // myNodeCount, myVyCount, i, j, k, l);
-                }
-            }
-        }
-    }
+    auto datain = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+                  .permute({0, 2, 1, 3});
+    datain = datain.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myDataIn = datain_vec;
     readF0Params(meshFile);
     setVolume();
     setVp();
@@ -132,7 +89,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
     }
 }
 
-void LagrangeOptimizer::computeLagrangeParameters(
+void LagrangeTorch::computeLagrangeParameters(
     const double* reconData, const int applyPQ)
 {
     int my_rank;
@@ -598,7 +555,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
     return;
 }
 
-void LagrangeOptimizer::initializeClusterCenters(double* &clusters, double* lagarray, int numObjs)
+void LagrangeTorch::initializeClusterCenters(double* &clusters, double* lagarray, int numObjs)
 {
     clusters = new double[myNumClusters];
     assert(clusters != NULL);
@@ -616,7 +573,7 @@ void LagrangeOptimizer::initializeClusterCenters(double* &clusters, double* laga
     }
 }
 
-void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* &clusters)
+void LagrangeTorch::quantizeLagranges(int offset, int* &membership, double* &clusters)
 {
     int numObjs = myPlaneCount*myNodeCount;
     float threshold = 0.0001;
@@ -634,7 +591,7 @@ void LagrangeOptimizer::quantizeLagranges(int offset, int* &membership, double* 
     return;
 }
 
-void LagrangeOptimizer::initializeClusterCentersMPI(double* &clusters, int numP, int myRank, double* lagarray, int numObjs)
+void LagrangeTorch::initializeClusterCentersMPI(double* &clusters, int numP, int myRank, double* lagarray, int numObjs)
 {
     clusters = new double[myNumClusters];
     assert(clusters != NULL);
@@ -667,7 +624,7 @@ void LagrangeOptimizer::initializeClusterCentersMPI(double* &clusters, int numP,
     MPI_Allgatherv(myNumbers, myNumClusters, MPI_DOUBLE, clusters, counts, disps, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
-void LagrangeOptimizer::quantizeLagrangesMPI(int offset, int* &membership, double* &clusters)
+void LagrangeTorch::quantizeLagrangesMPI(int offset, int* &membership, double* &clusters)
 {
     int numObjs = myPlaneCount*myNodeCount;
     float threshold = 0.01;
@@ -690,53 +647,13 @@ void LagrangeOptimizer::quantizeLagrangesMPI(int offset, int* &membership, doubl
     return;
 }
 
-uint8_t LagrangeOptimizer::getSpecies()
-{
-    return mySpecies;
-}
-
-size_t LagrangeOptimizer::getPlaneOffset()
-{
-    return myPlaneOffset;
-}
-
-size_t LagrangeOptimizer::getNodeOffset()
-{
-    return myNodeOffset;
-}
-
-size_t LagrangeOptimizer::getPlaneCount()
-{
-    return myPlaneCount;
-}
-
-size_t LagrangeOptimizer::getNodeCount()
-{
-    return myNodeCount;
-}
-
-size_t LagrangeOptimizer::getVxCount()
-{
-    return myVxCount;
-}
-
-size_t LagrangeOptimizer::getVyCount()
-{
-    return myVyCount;
-}
-
-size_t LagrangeOptimizer::getParameterSize()
-{
-    return myNodeCount * 4 * sizeof(double);
-}
-
 // Get the number of bytes needed to store the PQ table
-size_t LagrangeOptimizer::getTableSize()
+size_t LagrangeTorch::getTableSize()
 {
     return 0;
 }
 
-size_t LagrangeOptimizer::putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset)
+size_t LagrangeTorch::putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset)
 {
 #if 0
     int i, count = 0;
@@ -789,7 +706,7 @@ size_t LagrangeOptimizer::putLagrangeParameters(char* &bufferOut, size_t &buffer
 #endif
 }
 
-size_t LagrangeOptimizer::putResultV2(char* &bufferOut, size_t &bufferOutOffset)
+size_t LagrangeTorch::putResultV2(char* &bufferOut, size_t &bufferOutOffset)
 {
     // TODO: after your algorithm is done, put the result into
     // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
@@ -809,7 +726,7 @@ size_t LagrangeOptimizer::putResultV2(char* &bufferOut, size_t &bufferOutOffset)
     return intbytes;
 }
 
-size_t LagrangeOptimizer::putPQIndexes(char* &bufferOut, size_t &bufferOutOffset)
+size_t LagrangeTorch::putPQIndexes(char* &bufferOut, size_t &bufferOutOffset)
 {
     int i, intcount = 0, count = 0, singlecount = 0, bufferbytes = 0;
     int numObjs = myPlaneCount*myNodeCount;
@@ -865,7 +782,7 @@ size_t LagrangeOptimizer::putPQIndexes(char* &bufferOut, size_t &bufferOutOffset
     return bufferbytes;
 }
 
-size_t LagrangeOptimizer::getPQIndexes(const char* bufferIn)
+size_t LagrangeTorch::getPQIndexes(const char* bufferIn)
 {
     int i, intcount = 0;
     for (i=0; i<myNodeCount; ++i) {
@@ -883,7 +800,7 @@ size_t LagrangeOptimizer::getPQIndexes(const char* bufferIn)
     return intcount*sizeof(uint8_t);
 }
 
-size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
+size_t LagrangeTorch::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
 {
     // TODO: after your algorithm is done, put the result into
     // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
@@ -910,7 +827,7 @@ size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
     return intbytes;
 }
 
-char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
+char* LagrangeTorch::setDataFromCharBufferV1(double* &reconData,
     const char* bufferIn, size_t sizeOut)
 {
     size_t bufferOffset = getPQIndexes(bufferIn);
@@ -975,7 +892,7 @@ char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
     return reinterpret_cast<char*>(reconData);
 }
 
-size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
+size_t LagrangeTorch::putResult(char* &bufferOut, size_t &bufferOutOffset)
 {
     // TODO: after your algorithm is done, put the result into
     // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
@@ -1014,8 +931,9 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
         fwrite(myTperpTable, sizeof(double), myNumClusters, fp);
         fwrite(myRparaTable, sizeof(double), myNumClusters, fp);
         fwrite(&myNodeCount, sizeof(int), 1, fp);
-        fwrite(myGridVolume.data()+myNodeCount, sizeof(double), myNodeCount, fp);
-        fwrite(myF0TEv.data()+myNodeCount, sizeof(double), myNodeCount, fp);
+        int indexOffset = mySpecies==1 ? myNodeCount : 0;
+        fwrite(myGridVolume.data()+indexOffset, sizeof(double), myNodeCount, fp);
+        fwrite(myF0TEv.data()+indexOffset, sizeof(double), myNodeCount, fp);
         fwrite(&myF0Dvp, sizeof(double), 1, fp);
         fwrite(&myF0Dsmu, sizeof(double), 1, fp);
         fwrite(&myF0Nvp, sizeof(int), 1, fp);
@@ -1067,7 +985,7 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
     return intcount*sizeof(int);
 }
 
-void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
+void LagrangeTorch::setDataFromCharBuffer(double* &reconData,
     const char* bufferIn, size_t bufferTotalSize)
 {
     int my_rank;
@@ -1201,7 +1119,7 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
 #endif
 }
 
-size_t LagrangeOptimizer::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset)
+size_t LagrangeTorch::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset)
 {
     // TODO: after your algorithm is done, put the result into
     // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
@@ -1252,7 +1170,7 @@ size_t LagrangeOptimizer::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffse
     return count*sizeof(double) + 2*sizeof(int);
 }
 
-void LagrangeOptimizer::setDataFromCharBuffer2(double* &reconData,
+void LagrangeTorch::setDataFromCharBuffer2(double* &reconData,
     const char* bufferIn, size_t bufferOffset, size_t totalSize)
 {
     size_t bufferSize = totalSize - bufferOffset;
@@ -1311,7 +1229,7 @@ void LagrangeOptimizer::setDataFromCharBuffer2(double* &reconData,
 }
 
 #if 0
-void LagrangeOptimizer::readCharBuffer(const char* bufferIn, size_t bufferOffset, size_t bufferSize)
+void LagrangeTorch::readCharBuffer(const char* bufferIn, size_t bufferOffset, size_t bufferSize)
 {
     int i;
     // Assuming the Lagrange parameters are stored as double numbers
@@ -1356,7 +1274,7 @@ void LagrangeOptimizer::readCharBuffer(const char* bufferIn, size_t bufferOffset
 #endif
 
 // Get all variables from mesh file pertaining to ions and electrons
-void LagrangeOptimizer::readF0Params(const std::string meshFile)
+void LagrangeTorch::readF0Params(const std::string meshFile)
 {
     // Read ADIOS2 files from here
     adios2::core::ADIOS adios("C++");
@@ -1393,126 +1311,71 @@ void LagrangeOptimizer::readF0Params(const std::string meshFile)
     var_ev->SetSelection(adios2::Box<adios2::Dims>({0, myNodeOffset}, {evShape[0], myNodeCount}));
     engine->Get(*var_ev, myF0TEv);
     engine->Close();
+    myGridVolumeTorch = torch::from_blob((void *)myGridVolume.data(), {volumeShape[0], myNodeCount}, torch::kFloat64).to(torch::kCUDA);;
+    myF0TEvTorch = torch::from_blob((void *)myF0TEv.data(), {evShape[0], myNodeCount}, torch::kFloat64).to(torch::kCUDA);;
 }
 
-void LagrangeOptimizer::setVolume(std::vector <double> &volume)
+void LagrangeTorch::setVolume()
 {
-    int vvsize = myF0Nvp[0]*2 + 1;
-    int mvsize = myF0Nmu[0] + 1;
-    std::vector<double> vp_vol (vvsize, 1.0);
+    auto vp_vol = torch::ones({myF0Nvp[0]*2+1}, ourGPUOptions);
     vp_vol[0] = 0.5;
-    vp_vol[myF0Nvp[0]*2] = 0.5;
+    vp_vol[-1] = 0.5;
 
-    std::vector<double> mu_vol (mvsize, 1.0);
+    auto mu_vol = torch::ones({myF0Nmu[0]+1}, ourGPUOptions);
     mu_vol[0] = 0.5;
-    mu_vol[myF0Nmu[0]] = 0.5;
+    mu_vol[-1] = 0.5;
 
-    std::vector<double> mu_vp_vol (vvsize*mvsize, 0);
-    int k, i, j;
-    for (k=0; k<vvsize*mvsize; ++k) {
-        i = int(k/mvsize);
-        j = int(k%vvsize);
-        mu_vp_vol[k] = mu_vol[i] * vp_vol[j];
-    }
-    int indexOffset = mySpecies==1 ? myNodeCount : 0;
-    for (k=0; k<myNodeCount*vvsize*mvsize; ++k) {
-        i = int (k/(vvsize*mvsize));
-        j = int (k%(vvsize*mvsize));
-        volume[k] = (myGridVolume[indexOffset+i] * mu_vp_vol[j]);
-    }
+    c10::string_view indexing{"ij"};
+    std::vector<at::Tensor> args = torch::meshgrid({mu_vol, vp_vol}, indexing);
+    at::Tensor cx = args[0].contiguous();
+    at::Tensor cy = args[1].contiguous();
+    at::Tensor mu_vp_vol = at::transpose(cx, 0, 1) * at::transpose(cy, 0, 1);
+    auto f0_grid_vol = myGridVolumeTorch[mySpecies];
+    myVolumeTorch = at::multiply(f0_grid_vol.view({myNodeCount,1,1}), mu_vp_vol.view({1,myVxCount,myVyCount}));
+
+    auto datain = myVolumeTorch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myVolume = datain_vec;
+
     return;
 }
 
-void LagrangeOptimizer::setVolume()
+void LagrangeTorch::setVp()
 {
-    std::vector<double> vp_vol;
-    vp_vol.push_back(0.5);
-    for (int ii = 1; ii<myF0Nvp[0]*2; ++ii) {
-        vp_vol.push_back(1.0);
-    }
-    vp_vol.push_back(0.5);
-
-    std::vector<double> mu_vol;
-    mu_vol.push_back(0.5);
-    for (int ii = 1; ii<myF0Nmu[0]; ++ii) {
-        mu_vol.push_back(1.0);
-    }
-    mu_vol.push_back(0.5);
-
-    std::vector<double> mu_vp_vol;
-    for (int ii=0; ii<mu_vol.size(); ++ii) {
-        for (int jj=0; jj<vp_vol.size(); ++jj) {
-            mu_vp_vol.push_back(mu_vol[ii] * vp_vol[jj]);
-        }
-    }
-    int indexOffset = mySpecies==1 ? myNodeCount : 0;
-    for (int ii=0; ii<myNodeCount; ++ii) {
-        for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
-            myVolume.push_back(myGridVolume[indexOffset+ii] * mu_vp_vol[jj]);
-        }
-    }
+    myVpTorch = at::multiply(at::arange(-myF0Nvp[0], myF0Nvp[0]+1, ourGPUOptions), at::Scalar(myF0Dvp[0]));
+    auto datain = myVpTorch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myVp = datain_vec;
     return;
 }
 
-void LagrangeOptimizer::setVp(std::vector <double> &vp)
+void LagrangeTorch::setMuQoi()
 {
-    for (int ii = -myF0Nvp[0]; ii<myF0Nvp[0]+1; ++ii) {
-        vp[ii+myF0Nvp[0]] = (ii*myF0Dvp[0]);
-    }
+    auto mu = at::multiply(at::arange(myF0Nmu[0]+1, ourGPUOptions), at::Scalar(myF0Dsmu[0]));
+    myMuQoiTorch = at::pow(mu, at::Scalar(2));
+
+    auto datain = myMuQoiTorch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myMuQoi = datain_vec;
     return;
 }
 
-void LagrangeOptimizer::setVp()
+void LagrangeTorch::setVth2()
 {
-    for (int ii = -myF0Nvp[0]; ii<myF0Nvp[0]+1; ++ii) {
-        myVp.push_back(ii*myF0Dvp[0]);
-    }
-    return;
+    auto f0_T_ev = myF0TEvTorch[mySpecies];
+    myVth2Torch = at::multiply(f0_T_ev, at::Scalar(mySmallElectronCharge/myParticleMass));
+    myVthTorch = at::sqrt(myVth2Torch);
+
+    auto datain = myVth2Torch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myVth2 = datain_vec;
+
+    auto datain2 = myVthTorch.contiguous().cpu();
+    std::vector<double> datain_vec2(datain2.data_ptr<double>(), datain2.data_ptr<double>() + datain2.numel());
+    myVth = datain_vec2;
 }
 
-void LagrangeOptimizer::setMuQoi(std::vector <double> &muqoi)
-{
-    for (int ii = 0; ii<myF0Nmu[0]+1; ++ii) {
-        muqoi[ii] = (pow(ii*myF0Dsmu[0], 2));
-    }
-    return;
-}
-
-void LagrangeOptimizer::setMuQoi()
-{
-    for (int ii = 0; ii<myF0Nmu[0]+1; ++ii) {
-        myMuQoi.push_back(pow(ii*myF0Dsmu[0], 2));
-    }
-    return;
-}
-
-void LagrangeOptimizer::setVth2(std::vector <double> &vth,
-                                std::vector <double> &vth2)
-{
-    double value;
-    int indexOffset = mySpecies==1 ? myNodeCount : 0;
-    for (int i=0; i<myNodeCount; ++i) {
-        value = myF0TEv[indexOffset+i]*mySmallElectronCharge/myParticleMass;
-        vth2[i] = (value);
-        vth[i] = (sqrt(value));
-    }
-    return;
-}
-
-void LagrangeOptimizer::setVth2()
-{
-    double value = 0;
-    int indexOffset = mySpecies==1 ? myNodeCount : 0;
-    for (int ii=0; ii<myNodeCount; ++ii) {
-        // Access f0_T_ev with an offset of myNodeCount to get to the electrons
-        value = myF0TEv[indexOffset+ii]*mySmallElectronCharge/myParticleMass;
-        myVth2.push_back(value);
-        myVth.push_back(sqrt(value));
-    }
-    return;
-}
-
-void LagrangeOptimizer::compute_C_qois(int iphi,
+void LagrangeTorch::compute_C_qois(int iphi,
       std::vector <double> &density, std::vector <double> &upara,
       std::vector <double> &tperp, std::vector <double> &tpara,
       std::vector <double> &n0, std::vector <double> &t0,
@@ -1600,7 +1463,7 @@ void LagrangeOptimizer::compute_C_qois(int iphi,
 }
 
 #if 0
-void LagrangeOptimizer::compute_C_qois(int iphi,
+void LagrangeTorch::compute_C_qois(int iphi,
       std::vector <double> &density, std::vector <double> &upara,
       std::vector <double> &tperp, std::vector <double> &tpara,
       std::vector <double> &n0, std::vector <double> &t0,
@@ -1788,7 +1651,7 @@ void compute_C_qois_new(int iphi,
 }
 #endif
 
-bool LagrangeOptimizer::isConverged(std::vector <double> difflist, double eB, int count)
+bool LagrangeTorch::isConverged(std::vector <double> difflist, double eB, int count)
 {
     bool status = false;
     if (count < 2) {
@@ -1803,7 +1666,7 @@ bool LagrangeOptimizer::isConverged(std::vector <double> difflist, double eB, in
 }
 
 #if 0
-void LagrangeOptimizer::compareErrorsPD(const double* reconData, const double* bregData, int rank)
+void LagrangeTorch::compareErrorsPD(const double* reconData, const double* bregData, int rank)
 {
     double pd_b;
     size_t pd_size_b;
@@ -1840,7 +1703,7 @@ void LagrangeOptimizer::compareErrorsPD(const double* reconData, const double* b
 }
 #endif
 
-void LagrangeOptimizer::compareErrorsPD(const double* reconData, const double* bregData, int rank)
+void LagrangeTorch::compareErrorsPD(const double* reconData, const double* bregData, int rank)
 {
     double pd_b;
     double pd_size_b;
@@ -1875,7 +1738,7 @@ void LagrangeOptimizer::compareErrorsPD(const double* reconData, const double* b
     }
 }
 
-void LagrangeOptimizer::compareErrorsQoI(std::vector <double> &refqoi, std::vector <double> &rqoi, std::vector <double> &bqoi, const char* qoi, int rank)
+void LagrangeTorch::compareErrorsQoI(std::vector <double> &refqoi, std::vector <double> &rqoi, std::vector <double> &bqoi, const char* qoi, int rank)
 {
     double pd_b;
     int pd_size_b;
@@ -1909,7 +1772,7 @@ void LagrangeOptimizer::compareErrorsQoI(std::vector <double> &refqoi, std::vect
     }
 }
 
-void LagrangeOptimizer::compareQoIs(const double* reconData,
+void LagrangeTorch::compareQoIs(const double* reconData,
         const double* bregData)
 {
     int iphi;
@@ -2019,7 +1882,7 @@ void LagrangeOptimizer::compareQoIs(const double* reconData,
     return;
 }
 
-double LagrangeOptimizer::rmseErrorPD(const double* y, double &e, double &maxv, double &minv, double &nsize)
+double LagrangeTorch::rmseErrorPD(const double* y, double &e, double &maxv, double &minv, double &nsize)
 {
     e = 0;
     maxv = -99999;
@@ -2038,7 +1901,7 @@ double LagrangeOptimizer::rmseErrorPD(const double* y, double &e, double &maxv, 
     return sqrt(e/nsize)/(maxv-minv);
 }
 
-double LagrangeOptimizer::rmseError(std::vector <double> &x, std::vector <double> &y, double &e, double &maxv, double &minv, int &ysize)
+double LagrangeTorch::rmseError(std::vector <double> &x, std::vector <double> &y, double &e, double &maxv, double &minv, int &ysize)
 {
     int xsize = x.size();
     ysize = y.size();
@@ -2058,7 +1921,7 @@ double LagrangeOptimizer::rmseError(std::vector <double> &x, std::vector <double
     return sqrt(e/xsize)/(maxv-minv);
 }
 
-double LagrangeOptimizer::determinant(double a[4][4], double k)
+double LagrangeTorch::determinant(double a[4][4], double k)
 {
   double s = 1, det = 0;
   double b[4][4] = {{0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}};
@@ -2100,7 +1963,7 @@ double LagrangeOptimizer::determinant(double a[4][4], double k)
     return (det);
 }
 
-double** LagrangeOptimizer::cofactor(double num[4][4], double f)
+double** LagrangeTorch::cofactor(double num[4][4], double f)
 {
  double b[4][4], fac[4][4];
  int p, q, m, n, i, j;
@@ -2133,7 +1996,7 @@ double** LagrangeOptimizer::cofactor(double num[4][4], double f)
   return transpose(num, fac, f);
 }
 /*Finding transpose of matrix*/
-double** LagrangeOptimizer::transpose(double num[4][4], double fac[4][4], double r)
+double** LagrangeTorch::transpose(double num[4][4], double fac[4][4], double r)
 {
   int i, j;
   double b[4][4], d;

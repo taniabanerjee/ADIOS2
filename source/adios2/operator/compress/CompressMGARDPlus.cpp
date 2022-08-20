@@ -12,7 +12,7 @@
 #include "CompressMGARD.h"
 #include "CompressSZ.h"
 #include "CompressZFP.h"
-#include "LagrangeOptimizer.hpp"
+#include "LagrangeTorch.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 #include <cassert>
@@ -331,6 +331,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     int comm_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
+#if 0
+    // Disabling this print temporarily to check swamping of output
     std::cout << "rank,size:" << my_rank << " " << comm_size << std::endl;
 
     std::cout << "Parameters:" << std::endl;
@@ -338,9 +340,10 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     {
         std::cout << "  " << x.first << ": " << x.second << std::endl;
     }
+#endif
 
-    // Instantiate LagrangeOptimizer
-    LagrangeOptimizer optim;
+    // Instantiate LagrangeTorch
+    LagrangeTorch optim(m_Parameters["species"].c_str());
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -350,6 +353,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     const uint8_t bufferVersion = pq_yes ? 1 : 2;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
+    PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
     PutParameter(bufferOut, bufferOutOffset, compression_method);
     PutParameter(bufferOut, bufferOutOffset, optim.getPlaneOffset());
     PutParameter(bufferOut, bufferOutOffset, optim.getNodeOffset());
@@ -367,7 +371,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         double end = MPI_Wtime();
         if (my_rank == 0)
         {
-            printf("Time taken for MGARD compression: %f\n", (end - start));
+            printf("%d Time taken for MGARD compression: %f\n", optim.getSpecies(), (end - start));
         }
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
         std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
@@ -379,7 +383,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         end = MPI_Wtime();
         if (my_rank == 0)
         {
-            printf("Time taken for MGARD decompression: %f\n", (end - start));
+            printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
         }
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), pq_yes);
         bufferOutOffset += mgardBufferSize;
@@ -944,6 +948,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // If a newer buffer format is implemented, create another function, e.g.
     // DecompressV2 and keep this function for decompressing lagacy data.
 
+    const uint8_t species = GetParameter<uint8_t>(bufferIn, bufferInOffset);
     const uint8_t compression_method = GetParameter<uint8_t>(bufferIn, bufferInOffset);
     const size_t planeOffset = GetParameter<size_t>(bufferIn, bufferInOffset);
     const size_t nodeOffset = GetParameter<size_t>(bufferIn, bufferInOffset);
@@ -978,7 +983,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    LagrangeOptimizer optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount);
+    LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species);
     double *doubleData = reinterpret_cast<double *>(dataOut);
     dataOut = optim.setDataFromCharBufferV1(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
 
