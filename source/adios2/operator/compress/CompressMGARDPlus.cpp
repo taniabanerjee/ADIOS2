@@ -481,28 +481,40 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         start = MPI_Wtime();
         if (train_yes == 1)
         {
-            // Pytorch DDP
-            // std::string path = std::tmpnam(nullptr);
-            // auto store = c10::make_intrusive<c10d::FileStore>(path, 0);
-            const char *MASTER_ADDR = std::getenv("MASTER_ADDR");
-            const int MASTER_PORT = atoi(std::getenv("MASTER_PORT"));
-            auto store = c10::make_intrusive<c10d::TCPStore>(MASTER_ADDR, MASTER_PORT,
-                                                             /* numWorkers */ 0,
-                                                             /* isServer */ my_rank == 0 ? true : false,
-                                                             std::chrono::seconds(defaultTimeout),
-                                                             /* wait */ false);
-            auto opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
-            std::cout << "TCPStore: " << MASTER_ADDR << " " << MASTER_PORT << std::endl;
-            auto pg = std::make_shared<c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
+            std::shared_ptr<c10d::ProcessGroupNCCL> pg;
+            if (options.use_ddp)
+            {
+                // Pytorch DDP
+                // std::string path = std::tmpnam(nullptr);
+                // auto store = c10::make_intrusive<c10d::FileStore>(path, 0);
+                char *MASTER_ADDR = std::getenv("MASTER_ADDR");
+                if (MASTER_ADDR == NULL)
+                {
+                    MASTER_ADDR = "127.0.0.1";
+                }
+                char *MASTER_PORT = std::getenv("MASTER_PORT");
+                if (MASTER_PORT == NULL)
+                {
+                    MASTER_PORT = "29500";
+                }
+                auto store = c10::make_intrusive<c10d::TCPStore>(MASTER_ADDR, atoi(MASTER_PORT),
+                                                                /* numWorkers */ 0,
+                                                                /* isServer */ my_rank == 0 ? true : false,
+                                                                std::chrono::seconds(defaultTimeout),
+                                                                /* wait */ false);
+                auto opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
+                std::cout << "TCPStore: " << MASTER_ADDR << " " << MASTER_PORT << std::endl;
+                pg = std::make_shared<c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
 
-            // check if pg is working
-            auto mytensor = torch::ones(1) * my_rank;
-            mytensor = mytensor.to(options.device);
-            std::vector<torch::Tensor> tmp = {mytensor};
-            auto work = pg->allreduce(tmp);
-            work->wait();
-            auto expected = (comm_size * (comm_size - 1)) / 2;
-            assert(mytensor.item<int>() == expected);
+                // check if pg is working
+                auto mytensor = torch::ones(1) * my_rank;
+                mytensor = mytensor.to(options.device);
+                std::vector<torch::Tensor> tmp = {mytensor};
+                auto work = pg->allreduce(tmp);
+                work->wait();
+                auto expected = (comm_size * (comm_size - 1)) / 2;
+                assert(mytensor.item<int>() == expected);
+            }
 
             // The number of iteration should be same for all processes due to sync
             int nbatch = dataset_size / options.batch_size + 1;
