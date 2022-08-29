@@ -1317,26 +1317,24 @@ void LagrangeTorch::readF0Params(const std::string meshFile)
 
 void LagrangeTorch::setVolume()
 {
-    auto vp_vol = torch::ones({myF0Nvp[0]*2+1}, ourGPUOptions);
-    vp_vol[0] = 0.5;
-    vp_vol[-1] = 0.5;
+    auto vp_vol_torch = torch::ones({myF0Nvp[0]*2+1}, ourGPUOptions);
+    vp_vol_torch[0] = 0.5;
+    vp_vol_torch[-1] = 0.5;
 
-    auto mu_vol = torch::ones({myF0Nmu[0]+1}, ourGPUOptions);
-    mu_vol[0] = 0.5;
-    mu_vol[-1] = 0.5;
+    auto mu_vol_torch = torch::ones({myF0Nmu[0]+1}, ourGPUOptions);
+    mu_vol_torch[0] = 0.5;
+    mu_vol_torch[-1] = 0.5;
 
     c10::string_view indexing{"ij"};
-    std::vector<at::Tensor> args = torch::meshgrid({mu_vol, vp_vol}, indexing);
+    std::vector<at::Tensor> args = torch::meshgrid({mu_vol_torch, vp_vol_torch}, indexing);
     at::Tensor cx = args[0].contiguous();
     at::Tensor cy = args[1].contiguous();
-    at::Tensor mu_vp_vol = at::transpose(cx, 0, 1) * at::transpose(cy, 0, 1);
+    at::Tensor mu_vp_vol_torch = at::transpose(cx, 0, 1) * at::transpose(cy, 0, 1);
     auto f0_grid_vol = myGridVolumeTorch[mySpecies];
-    myVolumeTorch = at::multiply(f0_grid_vol.view({myNodeCount,1,1}), mu_vp_vol.view({1,myVxCount,myVyCount}));
-
+    myVolumeTorch = at::multiply(f0_grid_vol.reshape({myNodeCount,1}), mu_vp_vol_torch.reshape({1,myVxCount*myVyCount}));
     auto datain = myVolumeTorch.contiguous().cpu();
     std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
     myVolume = datain_vec;
-
     return;
 }
 
@@ -1362,8 +1360,8 @@ void LagrangeTorch::setMuQoi()
 
 void LagrangeTorch::setVth2()
 {
-    auto f0_T_ev = myF0TEvTorch[mySpecies];
-    myVth2Torch = at::multiply(f0_T_ev, at::Scalar(mySmallElectronCharge/myParticleMass));
+    auto f0_T_ev_torch = myF0TEvTorch[mySpecies];
+    myVth2Torch = at::multiply(f0_T_ev_torch, at::Scalar(mySmallElectronCharge/myParticleMass));
     myVthTorch = at::sqrt(myVth2Torch);
 
     auto datain = myVth2Torch.contiguous().cpu();
@@ -1388,6 +1386,7 @@ void LagrangeTorch::compute_C_qois(int iphi,
     std::vector <double> en;
     std::vector <double> T_par;
     int i, j, k;
+    // std::cout << "data in" << myDataInTorch.sizes() << std::endl;
     const double* f0_f = &dataIn[iphi*myNodeCount*myVxCount*myVyCount];
     int den_index = iphi*myNodeCount;
 
