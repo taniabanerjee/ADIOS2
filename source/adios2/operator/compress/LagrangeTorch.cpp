@@ -64,6 +64,7 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
     auto datain = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
                   .permute({0, 2, 1, 3});
+    myDataInTorch = datain;
     datain = datain.contiguous().cpu();
     std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
     myDataIn = datain_vec;
@@ -98,40 +99,40 @@ void LagrangeTorch::computeLagrangeParameters(
     MPI_Barrier(MPI_COMM_WORLD);
     start = MPI_Wtime();
     int ii, i, j, k, l, m;
-    for (ii=0; ii<myLocalElements; ++ii) {
-        if (!(reconData[ii] > 0)) {
-            ((double*)reconData)[ii] = myEpsilon;
-        }
-    }
-    std::vector<double> i_g(myLocalElements);
-    int lindex, rindex;
-    for (int i = 0; i < myPlaneCount; i++)
-    {
-        #pragma omp parallel for default (none) \
-        shared(i, myPlaneCount, myNodeCount, myVxCount, myVyCount, reconData, i_g) \
-        private (lindex, rindex)
-        for (int k = 0; k < myNodeCount; k++)
-        {
-            for (int j = 0; j < myVxCount; j++)
-            {
-                for (int l = 0; l < myVyCount; l++)
-                {
-                    lindex = int(GET4D(myPlaneCount, myNodeCount, myVxCount, myVyCount, i, k, j, l));
-                    rindex = int(GET4D(myPlaneCount, myVxCount, myNodeCount, myVyCount, i, j, k, l));
-                    i_g[lindex] = reconData[rindex];
-                    // GET4D(i_g, myPlaneCount, myNodeCount, myVxCount,
-                        // myVyCount, i, k, j, l) =
-                        // GET4D(reconData, myPlaneCount, myVxCount,
-                            // myNodeCount, myVyCount, i, j, k, l);
-                }
-            }
-        }
-    }
-    reconData = i_g.data();
+    // pass adios2::Dims blockCount
+    // auto datain = torch::from_blob((void *)reconData, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+    auto recondatain = torch::from_blob((void *)reconData, {myPlaneCount, myVxCount, myNodeCount, myVyCount}, torch::kFloat64).to(torch::kCUDA)
+                  .permute({0, 2, 1, 3});
+    recondatain = at::clamp(recondatain, at::Scalar(100), at::Scalar(1e+50));
+    auto datain = recondatain.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    reconData = datain_vec.data();
     myLagranges = new double[4*myNodeCount];
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
+#if 1
+    auto V2_torch = myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
+    auto V3_torch = myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
+    auto V4_torch = myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
+    // std::cout << "myVolumeTorch sizes" << myVolumeTorch.sizes() << std::endl;
+    // std::cout << "myVp sizes" << at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) << std::endl;
+    // std::cout << "myVth2 sizes" << myVth2Torch.reshape({myNodeCount, 1, 1}).sizes() << std::endl;
+    // std::cout << "V4_torch sizes" << V4_torch.sizes() << std::endl;
+
+    auto datain2 = V2_torch.contiguous().cpu();
+    std::vector<double> datain_vec2(datain2.data_ptr<double>(), datain2.data_ptr<double>() + datain2.numel());
+    V2 = datain_vec2;
+
+    auto datain3 = V3_torch.contiguous().cpu();
+    std::vector<double> datain_vec3(datain3.data_ptr<double>(), datain3.data_ptr<double>() + datain3.numel());
+    V3 = datain_vec3;
+
+    auto datain4 = V4_torch.contiguous().cpu();
+    std::vector<double> datain_vec4(datain4.data_ptr<double>(), datain4.data_ptr<double>() + datain4.numel());
+    V4 = datain_vec4;
+
+#else
     #pragma omp parallel for default (none) \
     shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVp, myMuQoi, myVth2, myParticleMass, V2, V3, V4) \
     private (i, j, l, m)
@@ -144,6 +145,7 @@ void LagrangeTorch::computeLagrangeParameters(
         V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
         V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
     }
+#endif
     int breg_index = 0;
     int iphi, idx;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
@@ -1386,8 +1388,25 @@ void LagrangeTorch::compute_C_qois(int iphi,
     std::vector <double> en;
     std::vector <double> T_par;
     int i, j, k;
-    // std::cout << "data in" << myDataInTorch.sizes() << std::endl;
+    std::cout << "data in" << myDataInTorch.sizes() << std::endl;
+    auto f0_f_torch = myDataInTorch[iphi];
+    auto datain = f0_f_torch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    const double* f0_f_from_torch = datain_vec.data();
     const double* f0_f = &dataIn[iphi*myNodeCount*myVxCount*myVyCount];
+#if 0
+    std::cout << "f0_f data";
+    for (i = 0; i<100; ++i) {
+        std::cout << " " << f0_f[i] << " " << f0_f_from_torch[i];
+    }
+    std::cout << std::endl;
+    for (i = 0; i<myNodeCount*myVxCount*myVyCount; ++i) {
+        if (f0_f[i] != f0_f_from_torch[i]) {
+            std::cout << "non-matching index " << i << " " << f0_f[i] << " " << f0_f_from_torch[i] << std::endl;
+        }
+    }
+#endif
+
     int den_index = iphi*myNodeCount;
 
     for (i=0; i<myNodeCount*myVxCount*myVyCount; ++i) {
