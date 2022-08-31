@@ -80,6 +80,7 @@ class LagrangeTorch : public LagrangeOptimizer
 
     private:
         // Members
+        at::Tensor myDataInTorch;
         at::Tensor myGridVolumeTorch;
         at::Tensor myF0TEvTorch;
         at::Tensor myVolumeTorch;

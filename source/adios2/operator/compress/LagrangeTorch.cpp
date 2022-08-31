@@ -111,11 +111,9 @@ void LagrangeTorch::computeLagrangeParameters(
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
-#if 1
     auto V2_torch = myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     auto V3_torch = myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
     auto V4_torch = myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
-    // std::cout << "myVolumeTorch sizes" << myVolumeTorch.sizes() << std::endl;
     // std::cout << "myVp sizes" << at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) << std::endl;
     // std::cout << "myVth2 sizes" << myVth2Torch.reshape({myNodeCount, 1, 1}).sizes() << std::endl;
     // std::cout << "V4_torch sizes" << V4_torch.sizes() << std::endl;
@@ -132,105 +130,74 @@ void LagrangeTorch::computeLagrangeParameters(
     std::vector<double> datain_vec4(datain4.data_ptr<double>(), datain4.data_ptr<double>() + datain4.numel());
     V4 = datain_vec4;
 
-#else
-    #pragma omp parallel for default (none) \
-    shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVp, myMuQoi, myVth2, myParticleMass, V2, V3, V4) \
-    private (i, j, l, m)
-    for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
-        i = int(k/(myVxCount*myVyCount));
-        j = int (k%myVyCount);
-        l = int(k%(myVxCount*myVyCount));
-        m = int(l/myVyCount);
-        V2[k] = myVolume[k] * myVth[i] * myVp[j];
-        V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
-        V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
-    }
-#endif
     int breg_index = 0;
     int iphi, idx;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         const double* f0_f = &myDataIn[iphi*myNodeCount*myVxCount*myVyCount];
         std::vector<double> D(myNodeCount, 0);
-        #pragma omp parallel for default (none) \
-        shared(myNodeCount, myVxCount, myVyCount, myVolume, f0_f, D) \
-        private (i)
-        for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
-            i = int(k/(myVxCount*myVyCount));
-            D[i] += f0_f[k] * myVolume[k];
-            // if (i > 300) {
-                // printf ("Node %d F0F[%d]=%5.3g Volume=%5.3g\n", i, k, f0_f[k], myVolume[k]);
-            // }
-        }
+        auto f0_f_torch = myDataInTorch[iphi];
+        std::cout << "f0_f_torch sizes" << f0_f_torch.sizes() << std::endl;
+        auto D_torch = (f0_f_torch *  myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount})).sum({1, 2});
+        std::cout << "D sizes" << D_torch.sizes() << std::endl;
+
+        auto datain5 = D_torch.contiguous().cpu();
+        std::vector<double> datain_vec5(datain5.data_ptr<double>(), datain5.data_ptr<double>() + datain5.numel());
+        D = datain_vec5;
+
         std::vector<double> U(myNodeCount, 0);
         std::vector<double> Tperp(myNodeCount, 0);
-        #pragma omp parallel for default (none) \
-        shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVp, f0_f, myMuQoi, myVth2, myParticleMass, mySmallElectronCharge, D, U, Tperp) \
-        private (i, j, l, m)
-        for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
-            i = int(k/(myVxCount*myVyCount));
-            j = int(k%myVyCount);
-            l = int(k%(myVxCount*myVyCount));
-            m = int(l/myVyCount);
-            U[i] += (f0_f[k] * myVolume[k] * myVth[i] * myVp[j])/D[i];
-            Tperp[i] += (f0_f[k] * myVolume[k] * 0.5 * myMuQoi[m] *
-                myVth2[i] * myParticleMass)/D[i]/mySmallElectronCharge;
+        auto U_torch = ((f0_f_torch * myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount})).sum({1, 2}))/D_torch;
+        auto Tperp_torch = ((f0_f_torch * myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1,2}))/D_torch/mySmallElectronCharge;
+
+        auto datain6 = U_torch.contiguous().cpu();
+        std::vector<double> datain_vec6(datain6.data_ptr<double>(), datain6.data_ptr<double>() + datain6.numel());
+        U = datain_vec6;
+
+        auto datain7 = Tperp_torch.contiguous().cpu();
+        std::vector<double> datain_vec7(datain7.data_ptr<double>(), datain7.data_ptr<double>() + datain7.numel());
+        Tperp = datain_vec7;
+
+#if 0
+        if (U == datain_vec6) {
+            std::cout << "vectors U and U_torch are equal" << std::endl;
         }
+        else {
+            std::cout << "vectors U and U_torch are not equal" << std::endl;
+            for (i=0; i<myNodeCount; ++i) {
+              if (abs(U[i] - datain_vec6[i]) > 0.1) {
+                std::cout << i << " " << U[i] << " " << datain_vec6[i] << std::endl;
+              }
+            }
+        }
+#endif
         std::vector<double> Tpara(myNodeCount, 0);
         std::vector<double> Rpara(myNodeCount, 0);
-        double en;
-        #pragma omp parallel for default (none) \
-        shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVp, f0_f, myVth2, myParticleMass, mySmallElectronCharge, D, U, Tpara) \
-        private (i, j, en)
-        for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
-            i = int(k/(myVxCount*myVyCount));
-            j = int(k%myVyCount);
-            en = 0.5*pow((myVp[j]-U[i]/myVth[i]),2);
-            Tpara[i] += 2*(f0_f[k] * myVolume[k] * en *
-                myVth2[i] * myParticleMass)/D[i]/mySmallElectronCharge;
-        }
-        #pragma omp parallel for default (none) \
-        shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVth2, myParticleMass, mySmallElectronCharge, U, Tpara, Rpara) \
-        private (i)
-        for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
-            i = int(k/(myVxCount*myVyCount));
-            Rpara[i] = mySmallElectronCharge*Tpara[i] +
-                myVth2[i] * myParticleMass *
-                pow((U[i]/myVth[i]), 2);
-        }
+        auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch.reshape({myNodeCount, 1})/myVthTorch.reshape({myNodeCount, 1})),2);
+        std::cout << "en_torch sizes" << en_torch.sizes() << std::endl;
+        auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}) * en_torch.reshape({myNodeCount, 1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1, 2}))/D_torch/mySmallElectronCharge;
+        // auto Rpara_torch = mySmallElectronCharge*Tpara_torch + (myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass at::pow((U_torch.reshape({myNodeCount, 1})/myVthTorch.reshape({myNodeCount, 1})), 2);
+        auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch/myVthTorch), 2);
+        std::cout << "Rpara_torch sizes" << Rpara_torch.sizes() << std::endl;
+
+        auto datain8 = Rpara_torch.contiguous().cpu();
+        std::vector<double> datain_vec8(datain8.data_ptr<double>(), datain8.data_ptr<double>() + datain8.numel());
+        Rpara = datain_vec8;
+
         int count_unLag = 0;
         std::vector <int> node_unconv;
-        double maxD = -99999;
-        double maxU = -99999;
-        double maxTperp = -99999;
-        double maxTpara = -99999;
-        #pragma omp parallel for default (none) \
-        shared(myNodeCount, maxD, maxU, maxTperp, maxTpara, D, U, Tperp, Rpara)
-        for (i=0; i<myNodeCount; ++i) {
-            if (D[i] > maxD) {
-                maxD = D[i];
-            }
-            if (U[i] > maxU) {
-                maxU = U[i];
-            }
-            if (Tperp[i] > maxTperp) {
-                maxTperp = Tperp[i];
-            }
-            if (Rpara[i] > maxTpara) {
-                maxTpara = Rpara[i];
-            }
-        }
+        double maxD = D_torch.max().item().to<double>();
+        double maxU = U_torch.max().item().to<double>();
+        double maxTperp = Tperp_torch.max().item().to<double>();
+        double maxTpara = Rpara_torch.max().item().to<double>();
+
         double DeB = pow(maxD*1e-09, 2);
         double UeB = pow(maxU*1e-09, 2);
         double TperpEB = pow(maxTperp*1e-09, 2);
         double TparaEB = pow(maxTpara*1e-09, 2);
         double PDeB = pow(myMaxValue*1e-09, 2);
-#if UF_DEBUG
-        if (my_rank == 0) {
-            printf ("Max: D %f U %d Tperp %f Tpara %f PD %f\n", maxD, maxU, maxTperp, maxTpara, myMaxValue);
-            printf ("Bounds: D %f U %d Tperp %f Tpara %f PD %f\n", DeB, UeB, TperpEB, TparaEB, PDeB);
-        }
-#endif
+
         int maxIter = 50;
+        lambdas_torch = torch.zeros((recon.shape[0],4)).to(device);
         #pragma omp parallel for default (none) \
         shared(reconData, iphi, D, U, V2, V3, V4, \
             f0_f, Tperp, Rpara, DeB, UeB, TperpEB, TparaEB, PDeB, maxIter, node_unconv, my_rank) \
