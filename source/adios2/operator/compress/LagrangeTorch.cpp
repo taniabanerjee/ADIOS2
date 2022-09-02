@@ -107,7 +107,6 @@ void LagrangeTorch::computeLagrangeParameters(
     auto datain = recondatain.contiguous().cpu();
     std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
     reconData = datain_vec.data();
-    myLagranges = new double[4*myNodeCount];
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
@@ -132,6 +131,7 @@ void LagrangeTorch::computeLagrangeParameters(
 
     int breg_index = 0;
     int iphi, idx;
+    std::vector <double> new_recon_vec;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         const double* f0_f = &myDataIn[iphi*myNodeCount*myVxCount*myVyCount];
         std::vector<double> D(myNodeCount, 0);
@@ -189,6 +189,7 @@ void LagrangeTorch::computeLagrangeParameters(
         double maxU = U_torch.max().item().to<double>();
         double maxTperp = Tperp_torch.max().item().to<double>();
         double maxTpara = Rpara_torch.max().item().to<double>();
+        auto aD_torch = D_torch*mySmallElectronCharge;
 
         double DeB = pow(maxD*1e-09, 2);
         double UeB = pow(maxU*1e-09, 2);
@@ -196,12 +197,82 @@ void LagrangeTorch::computeLagrangeParameters(
         double TparaEB = pow(maxTpara*1e-09, 2);
         double PDeB = pow(myMaxValue*1e-09, 2);
 
-        int maxIter = 50;
-        lambdas_torch = torch.zeros((recon.shape[0],4)).to(device);
-        #pragma omp parallel for default (none) \
-        shared(reconData, iphi, D, U, V2, V3, V4, \
-            f0_f, Tperp, Rpara, DeB, UeB, TperpEB, TparaEB, PDeB, maxIter, node_unconv, my_rank) \
-        private (count_unLag)
+        int maxIter = 5;
+        auto options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
+        auto lambdas_torch = torch::zeros({myNodeCount,4}, options);
+        auto gradients_torch = torch::zeros({myNodeCount,4}, options);
+        auto hessians_torch = torch::zeros({myNodeCount,4,4}, options);
+
+        auto K = torch::zeros({myNodeCount,39,39}, options);
+        int count = 0;
+
+#if 1
+        using namespace torch::indexing;
+        while (count < maxIter)
+        {
+            gradients_torch.index_put_({Slice(None), 0}, (-((recondatain[iphi]*myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount})*at::exp(-K)).sum({1,2})) + D_torch));
+            gradients_torch.index_put_({Slice(None), 1}, (-((recondatain[iphi]*V2_torch*at::exp(-K)).sum({1,2})) + U_torch*D_torch));
+            gradients_torch.index_put_({Slice(None), 2}, (-((recondatain[iphi]*V3_torch*at::exp(-K)).sum({1,2})) + Tperp_torch*aD_torch));
+            gradients_torch.index_put_({Slice(None), 3}, (-((recondatain[iphi]*V4_torch*at::exp(-K)).sum({1,2})) + Rpara_torch*D_torch));
+            hessians_torch.index_put_({Slice(None), 0, 0}, (recondatain[iphi]*at::pow(myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount}),2)*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 0, 1}, (recondatain[iphi]*myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount})*V2_torch*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 0, 2}, (recondatain[iphi]*myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount})*V3_torch*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 0, 3}, (recondatain[iphi]*myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount})*V4_torch*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 1, 0}, hessians_torch.index({Slice(None), 0, 1}));
+            hessians_torch.index_put_({Slice(None), 1, 1}, (recondatain[iphi]*at::pow(V2_torch, 2)*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 1, 2}, (recondatain[iphi]*V2_torch*V3_torch*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 1, 3}, (recondatain[iphi]*V2_torch*V4_torch*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 2, 0}, hessians_torch.index({Slice(None), 0, 2}));
+            hessians_torch.index_put_({Slice(None), 2, 1}, hessians_torch.index({Slice(None), 1, 2}));
+            hessians_torch.index_put_({Slice(None), 2, 2}, (recondatain[iphi]*at::pow(V3_torch, 2)*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 2, 3}, (recondatain[iphi]*V3_torch*V4_torch*at::exp(-K)).sum({1,2}));
+            hessians_torch.index_put_({Slice(None), 3, 0}, hessians_torch.index({Slice(None), 0, 3}));
+            hessians_torch.index_put_({Slice(None), 3, 1}, hessians_torch.index({Slice(None), 1, 3}));
+            hessians_torch.index_put_({Slice(None), 3, 2}, hessians_torch.index({Slice(None), 2, 3}));
+            hessians_torch.index_put_({Slice(None), 3, 3}, (recondatain[iphi]*at::pow(V4_torch, 2)*at::exp(-K)).sum({1,2}));
+            lambdas_torch = lambdas_torch - at::squeeze(at::bmm(hessians_torch.inverse(), gradients_torch.reshape({myNodeCount, 4, 1})));
+#if 0
+            if (my_rank == 0) {
+                std::cout << "Count " << count << std::endl;
+                std::cout << "Hessians size " << hessians_torch.sizes() << std::endl;
+                std::cout << "Hessians " << hessians_torch << std::endl;
+                std::cout << "Hessians inverse " << hessians_torch.inverse() << std::endl;
+                std::cout << "Gradients " << gradients_torch << std::endl;
+                std::cout << "MXM shape" << at::bmm(hessians_torch.inverse(), gradients_torch.reshape({myNodeCount, 4, 1})).sizes() << std::endl;
+                std::cout << "MXM " << at::bmm(hessians_torch.inverse(), gradients_torch.reshape({myNodeCount, 4, 1})) << std::endl;
+                std::cout << "Final shape " << at::squeeze(at::bmm(hessians_torch.inverse(), gradients_torch.reshape({myNodeCount, 4, 1}))).sizes() << std::endl;
+                std::cout << "Final result " << at::squeeze(at::bmm(hessians_torch.inverse(), gradients_torch.reshape({myNodeCount, 4, 1}))) << std::endl;
+            }
+#endif
+            auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount});
+            auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
+            auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
+            auto l4 = lambdas_torch.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
+            K = l1 + l2 + l3 + l4;
+            // std::cout << "Count: " << count << std::endl;
+            // std::cout << "Gradient: " << gradients_torch << std::endl;
+            // std::cout << "Hessians: " << hessians_torch << std::endl;
+            // std::cout << "Lagrange parameters: " << lambdas_torch << std::endl;
+            // std::cout << "K: " << K << std::endl;
+            // std::cout << "exp(-K): " << at::exp(-K) << std::endl;
+            count = count + 1;
+        }
+        std::cout << "K shape " << K.sizes() << std::endl;
+        std::cout << "exp(-K) shape " << at::exp(-K).sizes() << std::endl;
+        auto outputs = recondatain[iphi]*at::exp(-K);
+        auto datain9 = outputs.contiguous().cpu();
+        std::vector<double> datain_vec9(datain9.data_ptr<double>(), datain9.data_ptr<double>() + datain9.numel());
+        new_recon_vec.insert(std::end(new_recon_vec), std::begin(datain_vec9), std::end(datain_vec9));
+
+        auto datain11 = lambdas_torch.contiguous().cpu();
+        std::vector<double> datain_vec11(datain11.data_ptr<double>(), datain11.data_ptr<double>() + datain11.numel());
+        double* myGradients = datain_vec11.data();
+
+        auto datain10 = lambdas_torch.contiguous().cpu();
+        std::vector<double> datain_vec10(datain10.data_ptr<double>(), datain10.data_ptr<double>() + datain10.numel());
+        myLagranges = datain_vec10.data();
+#else
+        myLagranges = new double[4*myNodeCount];
         for (idx=0; idx<myNodeCount; ++idx) {
             int count = 0;
             double gradients[4] = {0.0, 0.0, 0.0, 0.0};
@@ -234,9 +305,6 @@ void LagrangeTorch::computeLagrangeParameters(
                            lambdas[2]*V3[myVxCount*myVyCount*idx + i] +
                            lambdas[3]*V4[myVxCount*myVyCount*idx + i];
                 }
-#ifdef UF_DEBUG
-                printf("Iteration: %d L1 %g, L2 %g L3 %g, L4 %g K[0] %g\n", count, lambdas[0], lambdas[1], lambdas[2], lambdas[3], exp(-K[0]));
-#endif
                 double update_D=0, update_U=0, update_Tperp=0, update_Tpara=0, rmse_pd=0;
                 if (count > 0) {
                     for (i=0; i<myVxCount*myVyCount; ++i) {
@@ -252,21 +320,11 @@ void LagrangeTorch::computeLagrangeParameters(
                             myVxCount*myVyCount*idx + i]/D[idx];
                         rmse_pd += pow((breg_result[i] - f0_f[myVxCount*myVyCount*idx + i]), 2);
                     }
-#ifdef UF_DEBUG
-                    if (my_rank == 0) {
-                        printf ("updated D %5.3g, U %5.3g, Tperp %5.3g, Tpara %5.3g, PD %5.3g\n", update_D, update_U, update_Tperp, update_Tpara, rmse_pd);
-                    }
-#endif
                     L2_den[count] = pow((update_D - D[idx]), 2);
                     L2_upara[count] = pow((update_U - U[idx]), 2);
                     L2_tperp[count] = pow((update_Tperp-Tperp[idx]), 2);
                     L2_tpara[count] = pow((update_Tpara-Rpara[idx]), 2);
                     L2_PD[count] = sqrt(rmse_pd);
-#ifdef UF_DEBUG
-                    if (my_rank == 0) {
-                        printf ("Errors count %d D %5.3g, U %5.3g, Tperp %5.3g, Tpara %5.3g, PD %5.3g\n", count, L2_den[count], L2_upara[count], L2_tperp[count], L2_tpara[count], L2_PD[count]);
-                    }
-#endif
                     bool c1, c2, c3, c4;
                     bool converged = (isConverged(L2_den, DeB, count)
                         && isConverged(L2_upara, UeB, count)
@@ -289,14 +347,6 @@ void LagrangeTorch::computeLagrangeParameters(
                         myLagranges[idx*4 + 1] = lambdas[1];
                         myLagranges[idx*4 + 2] = lambdas[2];
                         myLagranges[idx*4 + 3] = lambdas[3];
-#ifdef UF_DEBUG
-                        if (my_rank == 0) {
-                            printf ("Node: %d, Dpred %f Dact %f, Upred %f Uact %f, Tperp-pred %f Tperp-act %f, Tapara-pred %f Tpara-act %f\n", idx, update_D, D[idx], update_U, U[idx], update_Tperp, Tperp[idx], update_Tpara, Rpara[idx]);
-                            for (i=0; i<myVxCount*myVyCount; ++i) {
-                                printf ("Node %d, pre nK %f, x %d, y %d, n %d, %g\n", idx, K[i], i/37, i%37, idx, breg_result[i]);
-                            }
-                        }
-#endif
                         break;
                     }
                     else if (count == maxIter && !converged) {
@@ -314,7 +364,6 @@ void LagrangeTorch::computeLagrangeParameters(
                         myLagranges[idx*4 + 3] = 0;
                         printf ("Node %d did not converge\n", idx);
                         count_unLag = count_unLag + 1;
-                        #pragma omp critical
                         {
                             node_unconv.push_back(idx);
                         }
@@ -368,11 +417,14 @@ void LagrangeTorch::computeLagrangeParameters(
                 gradients[1] = gvalue2;
                 gradients[2] = gvalue3;
                 gradients[3] = gvalue4;
-#ifdef UF_DEBUG
-                if (idx == 5427) {
-                    printf ("Element %d, Iter %d, grad0 = %f, grad1 = %f, grad2 = %f, grad3 = %f\n", idx,count,gvalue1,gvalue2,gvalue3,gvalue4);
+                if (my_rank == 0) {
+                    std::cout << "myrank 0 idx " << idx << std::endl;
+                    std::cout << "torch grad " << myGradients[idx*4] << " c++ grad " << gradients[0] << std::endl;
+                    std::cout << "torch grad " << myGradients[idx*4+1] << " c++ grad " << gradients[1] << std::endl;
+                    std::cout << "torch grad " << myGradients[idx*4+2] << " c++ grad " << gradients[2] << std::endl;
+                    std::cout << "torch grad " << myGradients[idx*4+3] << " c++ grad " << gradients[3] << std::endl;
+                    std::cout << "torch recon_one[0]" << reconData[0] << " c++ recon_one[0] " << recon_one[0] << std::endl;
                 }
-#endif
                 hessians[0][0] = hvalue1;
                 hessians[0][1] = hvalue2;
                 hessians[0][2] = hvalue3;
@@ -406,11 +458,15 @@ void LagrangeTorch::computeLagrangeParameters(
                     break;
                 }
                 else{
+                    printf ("%5.3g %5.3g %5.3g %5.3g\n", hessians[0][0],
+                        hessians[0][1], hessians[0][2], hessians[0][3]);
+                    printf ("%5.3g %5.3g %5.3g %5.3g\n", hessians[1][0],
+                        hessians[1][1], hessians[1][2], hessians[1][3]);
+                    printf ("%5.3g %5.3g %5.3g %5.3g\n", hessians[2][0],
+                        hessians[2][1], hessians[2][2], hessians[2][3]);
+                    printf ("%5.3g %5.3g %5.3g %5.3g\n", hessians[3][0],
+                        hessians[3][1], hessians[3][2], hessians[3][3]);
                     double** inverse = cofactor(hessians, order);
-#if UF_DEBUG
-                    printf("Hessians: %g, %g, %g, %g\n", hessians[0][0], hessians[0][1], hessians[0][2], hessians[0][3]);
-                    printf("Inverse: %g, %g, %g, %g\n", inverse[0][0], inverse[0][1], inverse[0][2], inverse[0][3]);
-#endif
                     double matmul[4] = {0, 0, 0, 0};
                     for (i=0; i<4; ++i) {
                         matmul[i] = 0;
@@ -425,13 +481,22 @@ void LagrangeTorch::computeLagrangeParameters(
                 }
                 count = count + 1;
             }
+            if (my_rank == 0) {
+                std::cout << "myrank 0 idx " << idx << std::endl;
+                std::cout << "torch Lag " << myLagrangesTorch[idx*4] << " c++ Lag " << lambdas[0] << std::endl;
+                std::cout << "torch Lag " << myLagrangesTorch[idx*4+1] << " c++ Lag " << lambdas[1] << std::endl;
+                std::cout << "torch Lag " << myLagrangesTorch[idx*4+2] << " c++ Lag " << lambdas[2] << std::endl;
+                std::cout << "torch Lag " << myLagrangesTorch[idx*4+3] << " c++ Lag " << lambdas[3] << std::endl;
+            }
         }
+#endif
     }
     MPI_Barrier(MPI_COMM_WORLD);
     end = MPI_Wtime();
     if (my_rank == 0) {
         printf ("%d Time Taken for Lagrange Computations: %f %f\n", mySpecies, end-start, end-start1);
     }
+#if 0
     double* breg_recon = new double[myLocalElements];
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
@@ -511,16 +576,19 @@ void LagrangeTorch::computeLagrangeParameters(
                            (myLagranges[x+3])*V4[myVxCount*myVyCount*idx+i];
                     }
                     new_recon_one[i] = recon_one[i] * exp(-nK[i]);
-#if UF_DEBUG
-                    if (my_rank == 0) {
-                        printf ("Node %d, post nK %f, x %d, y %d, n %d %g\n", idx, nK[i], i/37, i%37, idx, new_recon_one[i]);
-                    }
-#endif
                 }
             }
         }
     }
     compareQoIs(reconData, new_recon);
+#else
+    std::cout << "Recon data size " << new_recon_vec.size() << std::endl;
+    double* new_recon = new_recon_vec.data();
+    for (int kk = 0; kk < 100; ++kk) {
+        std::cout << "recon " << reconData[kk] << " recon pp " << new_recon[kk] << std::endl;
+    }
+    compareQoIs(reconData, new_recon);
+#endif
     return;
 }
 
