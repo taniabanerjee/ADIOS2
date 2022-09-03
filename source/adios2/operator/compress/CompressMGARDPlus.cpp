@@ -385,7 +385,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         {
             printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
         }
-        optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), pq_yes);
+        optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
         bufferOutOffset += mgardBufferSize;
     }
     else if (compression_method == 1)
@@ -413,7 +413,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         {
             printf("Time taken for SZ decompression: %f\n", (end - start));
         }
-        optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), pq_yes);
+        optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
         bufferOutOffset += szBufferSize;
     }
     else if (compression_method == 2)
@@ -441,7 +441,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         {
             printf("Time taken for ZFP decompression: %f\n", (end - start));
         }
-        optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), pq_yes);
+        optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
         bufferOutOffset += zfpBufferSize;
     }
     else if (compression_method == 3)
@@ -698,7 +698,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // apply post processing
         // recon_vec shape: (1, nmesh, nx, ny)
-        optim.computeLagrangeParameters(recon_vec.data(), pq_yes);
+        optim.computeLagrangeParameters(recon_vec.data(), blockCount);
         std::cout << "Lagrange is ready" << std::endl;
         // if (my_rank == 0)
         {
@@ -862,7 +862,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // apply post processing
         // recon_vec shape: (1, nmesh, nx, ny)
-        optim.computeLagrangeParameters(recon_vec.data(), pq_yes);
+        optim.computeLagrangeParameters(recon_vec.data(), blockCount);
         std::cout << "Lagrange is ready" << std::endl;
 
         // for (auto &batch : *loader)
@@ -915,7 +915,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 #endif
     if (bufferVersion != 1)
     {
-        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset);
+        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["precision"].c_str());
         bufferOutOffset += ppsize;
     }
 
