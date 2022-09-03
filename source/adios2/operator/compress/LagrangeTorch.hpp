@@ -24,15 +24,8 @@ class LagrangeTorch : public LagrangeOptimizer
         void computeLagrangeParameters(const double* reconstructedData,
                 const int applyPQ);
         size_t getTableSize();
-        size_t putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset);
-        size_t putResultV1(char* &bufferOut, size_t &bufferOutOffset);
-        size_t putResultV2(char* &bufferOut, size_t &bufferOutOffset);
-        char* setDataFromCharBufferV1(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
-        void setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
-        void setDataFromCharBuffer2(double* &dataOut, const char* bufferIn, size_t bufferOffset, size_t bufferSize);
-        void readCharBuffer(const char* bufferIn, size_t bufferOffset,
-                size_t bufferSize);
+        char* setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
 
     private:
         // APIs
@@ -46,21 +39,19 @@ class LagrangeTorch : public LagrangeOptimizer
         void setVth2();
         void setVth2(std::vector <double> &vth,
             std::vector <double> &vth2);
-        void compute_C_qois(int iphi, std::vector <double> &density,
-            std::vector <double> &upara, std::vector <double> &tperp,
-            std::vector <double> &tpara, std::vector <double> &n0,
-            std::vector <double> &t0, const double* dataIn);
+        void compute_C_qois(int iphi, at::Tensor &density,
+            at::Tensor &upara, at::Tensor &tperp,
+            at::Tensor &tpara, at::Tensor &n0,
+            at::Tensor &t0, at::Tensor &dataIn);
         bool isConverged(std::vector <double> difflist, double eB, int count);
-        void compareQoIs(const double* reconData,
-            const double* bregData);
-        void compareErrorsPD(const double* reconData, const double* bregData, int rank);
-        void compareErrorsQoI(std::vector <double> &x,
-            std::vector <double> &y, std::vector <double> &z,
+        void compareQoIs(at::Tensor& reconData, at::Tensor& bregData);
+        void compareErrorsPD(at::Tensor& dataIn, at::Tensor& reconData, at::Tensor& bregData, const char* etype, int rank);
+        void compareErrorsQoI(at::Tensor &x, at::Tensor &y, at::Tensor &z,
             const char* qoi, int rank);
-        double rmseErrorPD(const double* y, double &e, double &maxv,
+        double rmseErrorPD(at::Tensor& y, double &e, double &maxv,
             double &minv, double &ysize);
-        double rmseError(std::vector <double> &rqoi,
-            std::vector <double> &bqoi, double &e, double &maxv,
+        double rmseError(at::Tensor &rqoi,
+            at::Tensor& bqoi, double &e, double &maxv,
             double &minv, int &ysize);
         double determinant(double a[4][4], double k);
         double** cofactor(double num[4][4], double f);
@@ -88,6 +79,7 @@ class LagrangeTorch : public LagrangeOptimizer
         at::Tensor myMuQoiTorch;
         at::Tensor myVthTorch;
         at::Tensor myVth2Torch;
+        at::Tensor myLagrangesTorch;
         static at::TensorOptions ourGPUOptions;
         static at::TensorOptions ourCPUOptions;
 };
