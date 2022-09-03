@@ -22,52 +22,25 @@ class LagrangeTorch : public LagrangeOptimizer
                 const double* dataIn);
         // Compute Lagrange Parameters
         void computeLagrangeParameters(const double* reconstructedData,
-                const int applyPQ);
+                adios2::Dims blockCount);
         size_t getTableSize();
-        size_t putResult(char* &bufferOut, size_t &bufferOutOffset);
+        size_t putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
         char* setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
 
     private:
         // APIs
         void readF0Params(const std::string meshFile);
         void setVolume();
-        void setVolume(std::vector <double> &vol);
         void setVp();
-        void setVp(std::vector <double> &vp);
         void setMuQoi();
-        void setMuQoi(std::vector <double> &muqoi);
         void setVth2();
-        void setVth2(std::vector <double> &vth,
-            std::vector <double> &vth2);
         void compute_C_qois(int iphi, at::Tensor &density,
             at::Tensor &upara, at::Tensor &tperp,
             at::Tensor &tpara, at::Tensor &n0,
             at::Tensor &t0, at::Tensor &dataIn);
-        bool isConverged(std::vector <double> difflist, double eB, int count);
         void compareQoIs(at::Tensor& reconData, at::Tensor& bregData);
         void compareErrorsPD(at::Tensor& dataIn, at::Tensor& reconData, at::Tensor& bregData, const char* etype, int rank);
-        void compareErrorsQoI(at::Tensor &x, at::Tensor &y, at::Tensor &z,
-            const char* qoi, int rank);
-        double rmseErrorPD(at::Tensor& y, double &e, double &maxv,
-            double &minv, double &ysize);
-        double rmseError(at::Tensor &rqoi,
-            at::Tensor& bqoi, double &e, double &maxv,
-            double &minv, int &ysize);
-        double determinant(double a[4][4], double k);
-        double** cofactor(double num[4][4], double f);
-        double** transpose(double num[4][4], double fac[4][4], double r);
-        void initializeClusterCenters(double* &clusters,
-            double* lagarray, int numObjs);
-        void quantizeLagranges(int offset, int* &membership,
-            double* &cluster);
-        void initializeClusterCentersMPI(double* &clusters, int numP,
-            int myRank, double* lagarray, int numObjs);
-        void quantizeLagrangesMPI(int offset, int* &membership,
-            double* &cluster);
-        size_t putPQIndexes(char* &bufferOut, size_t &bufferOutOffset);
-        size_t putLagrangeParameters(char* &bufferOut,
-                    size_t &bufferOutOffset);
-        size_t getPQIndexes(const char* bufferIn);
+        size_t putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
 
     private:
         // Members
