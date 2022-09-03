@@ -913,15 +913,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
     // for your second double number and so on
 #endif
-    if (bufferVersion == 1)
+    if (bufferVersion != 1)
     {
-        size_t ppsize = optim.putResultV1(bufferOut, bufferOutOffset);
-        bufferOutOffset += ppsize;
-        // printf ("Rank %d PQ indexes %zu\n", my_rank, ppsize);
-    }
-    else
-    {
-        size_t ppsize = optim.putResultV2(bufferOut, bufferOutOffset);
+        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset);
         bufferOutOffset += ppsize;
     }
 
@@ -989,7 +983,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // data somehow to improve its accuracy :)
     LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species);
     double *doubleData = reinterpret_cast<double *>(dataOut);
-    dataOut = optim.setDataFromCharBufferV1(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
+    dataOut = optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
 
     return sizeOut;
 }
