@@ -120,17 +120,16 @@ void LagrangeTorch::computeLagrangeParameters(
         double PDeB = pow(myMaxValue*1e-05, 2);
 
         int maxIter = 50;
-        auto options = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
-        auto lambdas_torch = torch::zeros({myNodeCount,4}, options);
-        auto gradients_torch = torch::zeros({myNodeCount,4}, options);
-        auto hessians_torch = torch::zeros({myNodeCount,4,4}, options);
-        auto L2_den = torch::zeros({myNodeCount, maxIter+1}, options);
-        auto L2_upara = torch::zeros({myNodeCount, maxIter+1}, options);
-        auto L2_tperp = torch::zeros({myNodeCount, maxIter+1}, options);
-        auto L2_rpara = torch::zeros({myNodeCount, maxIter+1}, options);
-        auto L2_pd = torch::zeros({myNodeCount, maxIter+1}, options);
+        auto lambdas_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
+        auto gradients_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
+        auto hessians_torch = torch::zeros({myNodeCount,4,4}, ourGPUOptions);
+        auto L2_den = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
+        auto L2_upara = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
+        auto L2_tperp = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
+        auto L2_rpara = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
+        auto L2_pd = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
 
-        auto K = torch::zeros({myNodeCount,myVxCount,myVyCount}, options);
+        auto K = torch::zeros({myNodeCount,myVxCount,myVyCount}, ourGPUOptions);
         int count = 0;
         int converged = 0;
 
