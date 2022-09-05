@@ -11,6 +11,7 @@
 #include "adios2/helper/adiosFunctions.h"
 #include <omp.h>
 #include <string_view>
+#include <c10/cuda/CUDACachingAllocator.h>
 
 // Define static class members
 at::TensorOptions LagrangeTorch::ourGPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
@@ -73,6 +74,7 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
 void LagrangeTorch::computeLagrangeParameters(
     const double* reconData, adios2::Dims blockCount)
 {
+    c10::cuda::CUDACachingAllocator::emptyCache();
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     double start, end;
@@ -93,17 +95,42 @@ void LagrangeTorch::computeLagrangeParameters(
         std::vector<double> D(myNodeCount, 0);
         auto f0_f_torch = myDataInTorch[iphi];
         auto D_torch = (f0_f_torch * myVolumeTorch).sum({1, 2});
+        std::cout << "f0f " << f0_f_torch << std::endl;
+        std::cout << "s_den_ " << D_torch << std::endl;
 
         std::vector<double> U(myNodeCount, 0);
         std::vector<double> Tperp(myNodeCount, 0);
         auto U_torch = ((f0_f_torch * myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount})).sum({1, 2}))/D_torch;
+        std::cout << "u_para_ " << U_torch << std::endl;
         auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1,2}))/D_torch/mySmallElectronCharge;
+        std::cout << "T_perp_ " <<  Tperp_torch << std::endl;
 
         std::vector<double> Tpara(myNodeCount, 0);
         std::vector<double> Rpara(myNodeCount, 0);
         auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch.reshape({myNodeCount, 1})/myVthTorch.reshape({myNodeCount, 1})),2);
         auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({myNodeCount, 1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1, 2}))/D_torch/mySmallElectronCharge;
+        std::cout << "T_para_ " << Tpara_torch << std::endl;
         auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch/myVthTorch), 2);
+        FILE* fp = fopen("torchden.txt", "w");
+        for (int kk=0; kk<myNodeCount; ++kk) {
+            fprintf(fp, "%f\n", D_torch[kk].item().to<double>());
+        }
+        fclose(fp);
+        fp = fopen("torchupar.txt", "w");
+        for (int kk=0; kk<myNodeCount; ++kk) {
+            fprintf(fp, "%f\n", U_torch[kk].item().to<double>());
+        }
+        fclose(fp);
+        fp = fopen("torchtper.txt", "w");
+        for (int kk=0; kk<myNodeCount; ++kk) {
+            fprintf(fp, "%f\n", Tperp_torch[kk].item().to<double>());
+        }
+        fclose(fp);
+        fp = fopen("torchtpara.txt", "w");
+        for (int kk=0; kk<myNodeCount; ++kk) {
+            fprintf(fp, "%f\n", Tpara_torch[kk].item().to<double>());
+        }
+        fclose(fp);
 
         int count_unLag = 0;
         std::vector <int> node_unconv;
@@ -119,7 +146,7 @@ void LagrangeTorch::computeLagrangeParameters(
         double TparaEB = pow(maxTpara*1e-05, 2);
         double PDeB = pow(myMaxValue*1e-05, 2);
 
-        int maxIter = 50;
+        int maxIter = 1;
         auto lambdas_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
         auto gradients_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
         auto hessians_torch = torch::zeros({myNodeCount,4,4}, ourGPUOptions);
@@ -162,6 +189,22 @@ void LagrangeTorch::computeLagrangeParameters(
             auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
             auto l4 = lambdas_torch.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
             K = l1 + l2 + l3 + l4;
+            std::cout << "Count " << count << " Gradients " << gradients_torch << std::endl;
+            std::cout << "Count " << count << " Hessians " << hessians_torch << std::endl;
+            std::cout << "Count " << count << " Hessians inverse " << hessians_torch.inverse() << std::endl;
+            std::cout << "Count " << count << " L1 " << lambdas_torch.index({Slice(None), 0}) << std::endl;
+            std::cout << "Count " << count << " L2 " << lambdas_torch.index({Slice(None), 1}) << std::endl;
+            std::cout << "Count " << count << " L3 " << lambdas_torch.index({Slice(None), 2}) << std::endl;
+            std::cout << "Count " << count << " L4 " << lambdas_torch.index({Slice(None), 3}) << std::endl;
+            // std::cout << "Count " << count << " V3_torch " << V3_torch << std::endl;
+            // std::cout << "Count " << count << " V4_torch " << V4_torch << std::endl;
+            std::cout << "Count " << count << " K " << K << std::endl;
+            std::cout << "Count " << count << " exp(-K) " << at::exp(-K) << std::endl;
+            std::cout << "Count " << count << " Recon " << recondatain[iphi][0][0] << std::endl;
+            std::cout << "Count " << count << " Vol " << myVolumeTorch[0][0][0] << std::endl;
+            std::cout << "Count " << count << " V2_torch " << V2_torch[0][0][0] << std::endl;
+            std::cout << "Count " << count << " V3_torch " << V3_torch[0][0][0] << std::endl;
+            std::cout << "Count " << count << " V4_torch " << V4_torch[0][0][0] << std::endl;
             count = count + 1;
             if (count % 10 == 0) {
                 auto breg_result = recondatain[iphi]*at::exp(-K);
@@ -374,6 +417,7 @@ void LagrangeTorch::readF0Params(const std::string meshFile)
 
 void LagrangeTorch::setVolume()
 {
+#if 0
     auto vp_vol_torch = torch::ones({myF0Nvp[0]*2+1}, ourGPUOptions);
     vp_vol_torch[0] = 0.5;
     vp_vol_torch[-1] = 0.5;
@@ -387,31 +431,88 @@ void LagrangeTorch::setVolume()
     at::Tensor cx = args[0].contiguous();
     at::Tensor cy = args[1].contiguous();
     at::Tensor mu_vp_vol_torch = at::transpose(cx, 0, 1) * at::transpose(cy, 0, 1);
+    std::cout << "mu_vp_vol_torch " << mu_vp_vol_torch << std::endl;
     auto f0_grid_vol = myGridVolumeTorch[mySpecies];
-    myVolumeTorch = at::multiply(f0_grid_vol.reshape({myNodeCount,1}), mu_vp_vol_torch.reshape({1,myVxCount*myVyCount}));
-    myVolumeTorch = myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount});
+    std::cout << "f0_grid_vol " << f0_grid_vol << std::endl;
+    // myVolumeTorch = at::multiply(f0_grid_vol.reshape({myNodeCount,1,1}), mu_vp_vol_torch.reshape({1,myVxCount,myVyCount}));
+    // myVolumeTorch = f0_grid_vol.reshape({myNodeCount,1,1}) * mu_vp_vol_torch.reshape({1,myVxCount,myVyCount});
+    myVolumeTorch = f0_grid_vol.reshape({myNodeCount,1,1}) * mu_vp_vol_torch.reshape({1,myVxCount,myVyCount});
+    // myVolumeTorch = myVolumeTorch.reshape({myNodeCount, myVxCount, myVyCount});
+    std::cout << "myVolumeTorch sizes" << myVolumeTorch.sizes() << std::endl;
+    std::cout << "myVolumeTorch " << myVolumeTorch << std::endl;
+    std::cout << "myVolumeTorch[0][32][0] " << myVolumeTorch[0][32][0].item().to<double>() << std::endl;
+    std::cout << "myVxCount " << myVxCount << std::endl;
+    std::cout << "myVyCount " << myVyCount << std::endl;
+#else
+    std::vector<double> vp_vol;
+    vp_vol.push_back(0.5);
+    for (int ii = 1; ii<myF0Nvp[0]*2; ++ii) {
+        vp_vol.push_back(1.0);
+    }
+    vp_vol.push_back(0.5);
+
+    std::vector<double> mu_vol;
+    mu_vol.push_back(0.5);
+    for (int ii = 1; ii<myF0Nmu[0]; ++ii) {
+        mu_vol.push_back(1.0);
+    }
+    mu_vol.push_back(0.5);
+
+    std::vector<double> mu_vp_vol;
+    for (int ii=0; ii<mu_vol.size(); ++ii) {
+        for (int jj=0; jj<vp_vol.size(); ++jj) {
+            mu_vp_vol.push_back(mu_vol[ii] * vp_vol[jj]);
+        }
+    }
+    int indexOffset = mySpecies==1 ? myNodeCount : 0;
+    for (int ii=0; ii<myNodeCount; ++ii) {
+        for (int jj=0; jj<mu_vp_vol.size(); ++jj) {
+            myVolume.push_back(myGridVolume[indexOffset+ii] * mu_vp_vol[jj]);
+        }
+    }
+    myVolumeTorch = torch::from_blob((void *)myVolume.data(), {myNodeCount, myVxCount, myVyCount}, torch::kFloat64).to(torch::kCUDA);
+    std::cout << "myVolumeTorch sizes" << myVolumeTorch.sizes() << std::endl;
+    std::cout << "myVolumeTorch " << myVolumeTorch << std::endl;
+    std::cout << "myVolumeTorch[0][32][0] " << myVolumeTorch[0][32][0].item().to<double>() << std::endl;
+#endif
     return;
 }
 
 void LagrangeTorch::setVp()
 {
-    myVpTorch = at::multiply(at::arange(-myF0Nvp[0], myF0Nvp[0]+1, ourGPUOptions), at::Scalar(myF0Dvp[0]));
+    for (int ii = -myF0Nvp[0]; ii<myF0Nvp[0]+1; ++ii) {
+        myVp.push_back(ii*myF0Dvp[0]);
+    }
+    myVpTorch = torch::from_blob((void *)myVp.data(), {myVyCount}, torch::kFloat64).to(torch::kCUDA);
     return;
 }
 
 void LagrangeTorch::setMuQoi()
 {
-    auto mu = at::multiply(at::arange(myF0Nmu[0]+1, ourGPUOptions), at::Scalar(myF0Dsmu[0]));
-    myMuQoiTorch = at::pow(mu, at::Scalar(2));
-
+    // auto mu = at::multiply(at::arange(myF0Nmu[0]+1, ourGPUOptions), at::Scalar(myF0Dsmu[0]));
+    // myMuQoiTorch = at::pow(mu, at::Scalar(2));
+    for (int ii = 0; ii<myF0Nmu[0]+1; ++ii) {
+        myMuQoi.push_back(pow(ii*myF0Dsmu[0], 2));
+    }
+    myMuQoiTorch = torch::from_blob((void *)myMuQoi.data(), {myVxCount}, torch::kFloat64).to(torch::kCUDA);
     return;
 }
 
 void LagrangeTorch::setVth2()
 {
-    auto f0_T_ev_torch = myF0TEvTorch[mySpecies];
-    myVth2Torch = at::multiply(f0_T_ev_torch, at::Scalar(mySmallElectronCharge/myParticleMass));
-    myVthTorch = at::sqrt(myVth2Torch);
+    // auto f0_T_ev_torch = myF0TEvTorch[mySpecies];
+    // myVth2Torch = at::multiply(f0_T_ev_torch, at::Scalar(mySmallElectronCharge/myParticleMass));
+    // myVthTorch = at::sqrt(myVth2Torch);
+    double value = 0;
+    int indexOffset = mySpecies==1 ? myNodeCount : 0;
+    for (int ii=0; ii<myNodeCount; ++ii) {
+        // Access f0_T_ev with an offset of myNodeCount to get to the electrons
+        value = myF0TEv[indexOffset+ii]*mySmallElectronCharge/myParticleMass;
+        myVth2.push_back(value);
+        myVth.push_back(sqrt(value));
+    }
+    myVth2Torch = torch::from_blob((void *)myVth2.data(), {myNodeCount}, torch::kFloat64).to(torch::kCUDA);
+    myVthTorch = torch::from_blob((void *)myVth.data(), {myNodeCount}, torch::kFloat64).to(torch::kCUDA);
 }
 
 void LagrangeTorch::compute_C_qois(int iphi, at::Tensor &density, at::Tensor &upara, at::Tensor &tperp, at::Tensor &tpara, at::Tensor &n0, at::Tensor &t0, at::Tensor &dataInTorch)
