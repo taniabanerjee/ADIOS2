@@ -6,6 +6,7 @@
 #include <mpi.h>
 #include <string.h>
 #include <map>
+#include <iostream>
 #include "LagrangeOptimizer.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
@@ -133,7 +134,7 @@ void LagrangeOptimizer::computeParamsAndQoIs(const std::string meshFile,
 }
 
 void LagrangeOptimizer::computeLagrangeParameters(
-    const double* reconData, const int applyPQ)
+    const double* reconData, adios2::Dims blockCount)
 {
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
@@ -509,6 +510,7 @@ void LagrangeOptimizer::computeLagrangeParameters(
     double* breg_recon = new double[myLocalElements];
     memset(breg_recon, 0, myLocalElements*sizeof(double));
     double* new_recon = breg_recon;
+    int applyPQ = 0;
     if (applyPQ) {
         double nK[myVxCount*myVyCount];
         myLagrangeIndexesDensity = new int[myPlaneCount*myNodeCount];
@@ -910,6 +912,71 @@ size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
     return intbytes;
 }
 
+char* LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
+    const char* bufferIn, size_t sizeOut)
+{
+    size_t bufferOffset = getPQIndexes(bufferIn);
+    FILE* fp = fopen("PqMeshInfo.bin", "rb");
+    fread(&myNumClusters, sizeof(int), 1, fp);
+    fread(myDensityTable, sizeof(double), myNumClusters, fp);
+    fread(myUparaTable, sizeof(double), myNumClusters, fp);
+    fread(myTperpTable, sizeof(double), myNumClusters, fp);
+    fread(myRparaTable, sizeof(double), myNumClusters, fp);
+    int str_length = 0;
+    fread(&str_length, sizeof(int), 1, fp);
+    char meshFile[str_length];
+    fread(meshFile, sizeof(char), str_length, fp);
+    fclose(fp);
+    readF0Params(std::string(meshFile, 0, str_length));
+    std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
+    double nK[myVxCount*myVyCount];
+    int i, j, k, l, m;
+    myLocalElements = myNodeCount*myPlaneCount*myVxCount*myVyCount;
+    for (i=0; i<myLocalElements; ++i) {
+        if (!(reconData[i] > 0)) {
+            ((double*)reconData)[i] = myEpsilon;
+        }
+    }
+    setVolume();
+    setVp();
+    setMuQoi();
+    setVth2();
+    for (k=0; k<myNodeCount*myVxCount*myVyCount; ++k) {
+        i = int(k/(myVxCount*myVyCount));
+        j = int (k%myVxCount);
+        l = int(k%(myVxCount*myVyCount));
+        m = int(l/myVyCount);
+        V2[k] = myVolume[k] * myVth[i] * myVp[j];
+        V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
+        V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
+    }
+    int iphi, idx;
+    for (iphi=0; iphi<myPlaneCount; ++iphi) {
+        for (idx = 0; idx<myNodeCount; ++idx) {
+            const double* recon_one = &reconData[myNodeCount*myVxCount*
+                  myVyCount*iphi + myVxCount*myVyCount*idx];
+            int m1 = myLagrangeIndexesDensity[iphi*myNodeCount + idx];
+            int m2 = myLagrangeIndexesUpara[iphi*myNodeCount + idx];
+            int m3 = myLagrangeIndexesTperp[iphi*myNodeCount + idx];
+            int m4 = myLagrangeIndexesRpara[iphi*myNodeCount + idx];
+            double c1 = myDensityTable[m1];
+            double c2 = myUparaTable[m2];
+            double c3 = myTperpTable[m3];
+            double c4 = myRparaTable[m4];
+            for (i=0; i<myVxCount * myVyCount; ++i) {
+                nK[i] = (c1)*myVolume[myVxCount*myVyCount*idx+i]+
+                       (c2)*V2[myVxCount*myVyCount*idx+i] +
+                       (c3)*V3[myVxCount*myVyCount*idx+i] +
+                       (c4)*V4[myVxCount*myVyCount*idx+i];
+                ((double*)recon_one)[i] = recon_one[i] * exp(-nK[i]);
+            }
+        }
+    }
+    return reinterpret_cast<char*>(reconData);
+}
+
 char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
     const char* bufferIn, size_t sizeOut)
 {
@@ -975,7 +1042,7 @@ char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
     return reinterpret_cast<char*>(reconData);
 }
 
-size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
+size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision)
 {
     // TODO: after your algorithm is done, put the result into
     // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
@@ -1067,6 +1134,7 @@ size_t LagrangeOptimizer::putResult(char* &bufferOut, size_t &bufferOutOffset)
     return intcount*sizeof(int);
 }
 
+#if 0
 void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     const char* bufferIn, size_t bufferTotalSize)
 {
@@ -1200,6 +1268,7 @@ void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     }
 #endif
 }
+#endif
 
 size_t LagrangeOptimizer::putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset)
 {
