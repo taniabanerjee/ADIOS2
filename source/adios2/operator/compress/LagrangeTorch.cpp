@@ -95,20 +95,43 @@ void LagrangeTorch::computeLagrangeParameters(
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         std::vector<double> D(myNodeCount, 0);
         auto f0_f_torch = myDataInTorch[iphi];
-        auto D_torch = (f0_f_torch * myVolumeTorch);
-        auto D_torch_sum = D_torch.sum({1, 2});
+        auto D_torch = (f0_f_torch * myVolumeTorch).sum({1, 2});
+        // std::cout << "f0f " << f0_f_torch << std::endl;
+        // std::cout << "s_den_ " << D_torch << std::endl;
 
         std::vector<double> U(myNodeCount, 0);
         std::vector<double> Tperp(myNodeCount, 0);
-        auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
-        auto U_torch_sum = U_torch.sum({1, 2})/D_torch_sum;
-        auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
+        auto U_torch = ((f0_f_torch * myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount})).sum({1, 2}))/D_torch;
+        // std::cout << "u_para_ " << U_torch << std::endl;
+        auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1,2}))/D_torch/mySmallElectronCharge;
+        // std::cout << "T_perp_ " <<  Tperp_torch << std::endl;
 
         std::vector<double> Tpara(myNodeCount, 0);
         std::vector<double> Rpara(myNodeCount, 0);
-        auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({myNodeCount, 1})/myVthTorch.reshape({myNodeCount, 1})),2);
-        auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({myNodeCount, 1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1, 2}))/D_torch_sum/mySmallElectronCharge;
-        auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
+        auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch.reshape({myNodeCount, 1})/myVthTorch.reshape({myNodeCount, 1})),2);
+        auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({myNodeCount, 1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1, 2}))/D_torch/mySmallElectronCharge;
+        // std::cout << "T_para_ " << Tpara_torch << std::endl;
+        auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch/myVthTorch), 2);
+        FILE* fp = fopen("torchden.txt", "w");
+        for (int kk=0; kk<myNodeCount; ++kk) {
+            fprintf(fp, "%f\n", D_torch[kk].item().to<double>());
+        }
+        fclose(fp);
+        fp = fopen("torchupar.txt", "w");
+        for (int kk=0; kk<myNodeCount; ++kk) {
+            fprintf(fp, "%f\n", U_torch[kk].item().to<double>());
+        }
+        fclose(fp);
+        fp = fopen("torchtper.txt", "w");
+        for (int kk=0; kk<myNodeCount; ++kk) {
+            fprintf(fp, "%f\n", Tperp_torch[kk].item().to<double>());
+        }
+        fclose(fp);
+        fp = fopen("torchtpara.txt", "w");
+        for (int kk=0; kk<myNodeCount; ++kk) {
+            fprintf(fp, "%f\n", Tpara_torch[kk].item().to<double>());
+        }
+        fclose(fp);
 
         int count_unLag = 0;
         std::vector <int> node_unconv;
@@ -464,6 +487,13 @@ void LagrangeTorch::compute_C_qois(int iphi, at::Tensor &density, at::Tensor &up
     return;
 }
 
+void dump(torch::Tensor ten, char* vname, int rank)
+{
+    char fname[255];
+    sprintf(fname, "qoi-%s-%d.pt", vname, rank);
+    torch::save(ten, fname);
+}
+
 void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
 {
     int iphi;
@@ -477,6 +507,10 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
     at::Tensor rt0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
+        // dump(rdensity, "rdensity", my_rank);
+        // dump(rupara, "rupara", my_rank);
+        // dump(rtperp, "rtperp", my_rank);
+        // dump(rtpara, "rtpara", my_rank);
     }
     at::Tensor bdensity;
     at::Tensor bupara;
