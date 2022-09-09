@@ -47,7 +47,7 @@ struct Options
 {
     size_t batch_size = 128;
     size_t iterations = 100;
-    size_t batch_log_interval = 1000;
+    size_t batch_log_interval = 1000000000;
     size_t epoch_log_interval = 20;
     torch::DeviceType device = torch::kCUDA;
     size_t batch_max = 0;
@@ -422,11 +422,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
         bufferOutOffset += mgardBufferSize;
 
-        dump((void *)dataIn, blockCount, "forg", my_rank);
-        dump((void *)tmpDecompressBuffer.data(), blockCount, "fbar", my_rank);
-        double nbytes_org = (double) (blockCount[0] * blockCount[1] * blockCount[2] * blockCount[3] * 8);
-        double nbytes_compressed = (double) mgardBufferSize;
-        printf("%d MGARD compression org, compressed, ratio: %g %g %g\n", my_rank, nbytes_org, nbytes_compressed, nbytes_org/nbytes_compressed);
+        // dump((void *)dataIn, blockCount, "forg", my_rank);
+        // dump((void *)tmpDecompressBuffer.data(), blockCount, "fbar", my_rank);
+        // double nbytes_org = (double) (blockCount[0] * blockCount[1] * blockCount[2] * blockCount[3] * 8);
+        // double nbytes_compressed = (double) mgardBufferSize;
+        // printf("%d MGARD compression org, compressed, ratio: %g %g %g\n", my_rank, nbytes_org, nbytes_compressed, nbytes_org/nbytes_compressed);
     }
     else if (compression_method == 1)
     {
@@ -676,8 +676,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // forg and docode shape: (nmesh, nx, ny)
         auto diff = ds.forg - decode;
-        dump(ds.forg, "forg", my_rank);
-        dump(decode, "fdecode", my_rank);
+        // dump(ds.forg, "forg", my_rank);
+        // dump(decode, "fdecode", my_rank);
         // std::cout << "forg min,max = " << ds.forg.min().item<double>() << " " << ds.forg.max().item<double>()
                   // << std::endl;
         // std::cout << "decode min,max = " << decode.min().item<double>() << " " << decode.max().item<double>()
@@ -687,7 +687,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // use MGARD to compress the residuals
         auto perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
         std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
-        dump(perm_diff, "fdiff", my_rank);
+        // dump(perm_diff, "fdiff", my_rank);
 
         // reserve space in output buffer to store MGARD buffer size
         size_t offsetForDecompresedData = offset;
@@ -733,7 +733,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             torch::from_blob((void *)tmpDecompressBuffer.data(),
                              {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64)
                 .permute({0, 2, 1, 3});
-        dump(decompressed_residual_data, "fdiff_recon", my_rank);
+        // dump(decompressed_residual_data, "fdiff_recon", my_rank);
         auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
         // recon_data shape (1, nmesh, nx, ny) and make it contiguous in memory
         recon_data = recon_data.contiguous().cpu();

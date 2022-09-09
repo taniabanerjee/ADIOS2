@@ -95,21 +95,21 @@ void LagrangeTorch::computeLagrangeParameters(
         std::vector<double> D(myNodeCount, 0);
         auto f0_f_torch = myDataInTorch[iphi];
         auto D_torch = (f0_f_torch * myVolumeTorch).sum({1, 2});
-        std::cout << "f0f " << f0_f_torch << std::endl;
-        std::cout << "s_den_ " << D_torch << std::endl;
+        // std::cout << "f0f " << f0_f_torch << std::endl;
+        // std::cout << "s_den_ " << D_torch << std::endl;
 
         std::vector<double> U(myNodeCount, 0);
         std::vector<double> Tperp(myNodeCount, 0);
         auto U_torch = ((f0_f_torch * myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount})).sum({1, 2}))/D_torch;
-        std::cout << "u_para_ " << U_torch << std::endl;
+        // std::cout << "u_para_ " << U_torch << std::endl;
         auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1,2}))/D_torch/mySmallElectronCharge;
-        std::cout << "T_perp_ " <<  Tperp_torch << std::endl;
+        // std::cout << "T_perp_ " <<  Tperp_torch << std::endl;
 
         std::vector<double> Tpara(myNodeCount, 0);
         std::vector<double> Rpara(myNodeCount, 0);
         auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch.reshape({myNodeCount, 1})/myVthTorch.reshape({myNodeCount, 1})),2);
         auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({myNodeCount, 1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1, 2}))/D_torch/mySmallElectronCharge;
-        std::cout << "T_para_ " << Tpara_torch << std::endl;
+        // std::cout << "T_para_ " << Tpara_torch << std::endl;
         auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch/myVthTorch), 2);
         FILE* fp = fopen("torchden.txt", "w");
         for (int kk=0; kk<myNodeCount; ++kk) {
@@ -472,8 +472,8 @@ void LagrangeTorch::setVolume()
     }
     myVolumeTorch = torch::from_blob((void *)myVolume.data(), {myNodeCount, myVxCount, myVyCount}, torch::kFloat64).to(torch::kCUDA);
     std::cout << "myVolumeTorch sizes" << myVolumeTorch.sizes() << std::endl;
-    std::cout << "myVolumeTorch " << myVolumeTorch << std::endl;
-    std::cout << "myVolumeTorch[0][32][0] " << myVolumeTorch[0][32][0].item().to<double>() << std::endl;
+    // std::cout << "myVolumeTorch " << myVolumeTorch << std::endl;
+    // std::cout << "myVolumeTorch[0][32][0] " << myVolumeTorch[0][32][0].item().to<double>() << std::endl;
 #endif
     return;
 }
@@ -534,6 +534,13 @@ void LagrangeTorch::compute_C_qois(int iphi, at::Tensor &density, at::Tensor &up
     return;
 }
 
+void dump(torch::Tensor ten, char* vname, int rank)
+{
+    char fname[255];
+    sprintf(fname, "qoi-%s-%d.pt", vname, rank);
+    torch::save(ten, fname);
+}
+
 void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
 {
     int iphi;
@@ -547,6 +554,10 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
     at::Tensor rt0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
+        // dump(rdensity, "rdensity", my_rank);
+        // dump(rupara, "rupara", my_rank);
+        // dump(rtperp, "rtperp", my_rank);
+        // dump(rtpara, "rtpara", my_rank);
     }
     at::Tensor bdensity;
     at::Tensor bupara;
