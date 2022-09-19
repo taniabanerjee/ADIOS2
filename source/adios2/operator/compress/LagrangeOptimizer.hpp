@@ -19,7 +19,7 @@ class LagrangeOptimizer
                 const double* dataIn);
         // Compute Lagrange Parameters
         void computeLagrangeParameters(const double* reconstructedData,
-                const int applyPQ);
+                adios2::Dims blockCount);
         // Get the particular species
         uint8_t getSpecies();
         // Get the plane offset
@@ -39,11 +39,11 @@ class LagrangeOptimizer
         // Get the number of bytes needed to store the PQ table
         size_t getTableSize();
         size_t putResultNoPQ(char* &bufferOut, size_t &bufferOutOffset);
-        size_t putResult(char* &bufferOut, size_t &bufferOutOffset);
+        size_t putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
         size_t putResultV1(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResultV2(char* &bufferOut, size_t &bufferOutOffset);
         char* setDataFromCharBufferV1(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
-        void setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
+        char* setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
         void setDataFromCharBuffer2(double* &dataOut, const char* bufferIn, size_t bufferOffset, size_t bufferSize);
         void readCharBuffer(const char* bufferIn, size_t bufferOffset,
                 size_t bufferSize);
@@ -108,7 +108,8 @@ class LagrangeOptimizer
         static const int myNumSpecies = 2;
         const char* mySpeciesList[myNumSpecies] = {"electron", "ion"};
         double mySpeciesCharge[myNumSpecies] = {1.6022e-19, 1.6022e-19};
-        double mySpeciesMass[myNumSpecies] = {9.1093E-31, 1.6720E-27};
+        // double mySpeciesMass[myNumSpecies] = {9.1093E-31, 1.6720E-27};
+        double mySpeciesMass[myNumSpecies] = {3.344e-29, 3.344e-27};
         double mySmallElectronCharge;
         double myParticleMass;
         // Mesh Parameters
