@@ -464,6 +464,13 @@ void LagrangeTorch::compute_C_qois(int iphi, at::Tensor &density, at::Tensor &up
     return;
 }
 
+void dump(torch::Tensor ten, char* vname, int rank)
+{
+    char fname[255];
+    sprintf(fname, "qoi-%s-%d.pt", vname, rank);
+    torch::save(ten, fname);
+}
+
 void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
 {
     int iphi;
@@ -477,6 +484,10 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
     at::Tensor rt0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
+        // dump(rdensity, "rdensity", my_rank);
+        // dump(rupara, "rupara", my_rank);
+        // dump(rtperp, "rtperp", my_rank);
+        // dump(rtpara, "rtpara", my_rank);
     }
     at::Tensor bdensity;
     at::Tensor bupara;
