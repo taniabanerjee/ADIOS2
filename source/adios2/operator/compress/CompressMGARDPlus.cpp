@@ -472,6 +472,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         auto loader =
             torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(dataset), options.batch_size);
         torch::optim::Adam optimizer(model->parameters(), torch::optim::AdamOptions(1e-3 /*learning rate*/));
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -539,6 +540,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             const char *mname = get_param(m_Parameters, "ae", "").c_str();
             torch::load(model, mname);
         }
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -560,6 +562,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // encodes shape is (nmesh, latent_dim), where nmesh = number of total mesh nodes this process has
         auto encode = torch::cat(encode_vector, 0);
         // std::cout << "encode.sizes = " << encode.sizes() << std::endl;
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -597,6 +600,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                 encode[j, i] = clusters[membership[j]];
         }
         // std::cout << "kmean is done " << std::endl;
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -618,6 +622,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         auto decode = torch::cat(decode_vector, 0);
         decode = decode.to(torch::kFloat64).reshape({-1, ds.nx, ds.ny});
         // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -650,6 +655,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         size_t offsetForDecompresedData = offset;
         offset += sizeof(size_t);
         // std::cout << "residual data is ready" << std::endl;
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -664,6 +670,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut + offset);
         // size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type, bufferOut + offset);
         // std::cout << "mgard is ready" << std::endl;
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -678,6 +685,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         mgard.InverseOperate(bufferOut + offset, mgardBufferSize, tmpDecompressBuffer.data());
         // std::cout << "mgard inverse is ready" << std::endl;
         offset += mgardBufferSize;
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -700,6 +708,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // recon_vec shape: (1, nmesh, nx, ny)
         optim.computeLagrangeParameters(recon_vec.data(), blockCount);
         // std::cout << "Lagrange is ready" << std::endl;
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
@@ -879,6 +888,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // With this total decompressed output, compute Lagrange parameters
         // Figure out PD and QoI errors
 
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();

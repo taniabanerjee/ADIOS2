@@ -59,6 +59,12 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
                   .permute({0, 2, 1, 3});
     myDataInTorch = datain;
     readF0Params(meshFile);
+    MPI_Barrier(MPI_COMM_WORLD);
+    end = MPI_Wtime();
+    if (my_rank == 0) {
+        printf ("%d Time Taken for File Reading: %f\n", mySpecies, (end-start));
+    }
+    start = MPI_Wtime();
     setVolume();
     setVp();
     setMuQoi();
@@ -67,7 +73,7 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     MPI_Barrier(MPI_COMM_WORLD);
     end = MPI_Wtime();
     if (my_rank == 0) {
-        printf ("%d Time Taken for QoI Computation: %f\n", mySpecies, (end-start));
+        printf ("%d Time Taken for QoI param Computation: %f\n", mySpecies, (end-start));
     }
 }
 
@@ -533,4 +539,7 @@ void LagrangeTorch::compareErrorsPD(at::Tensor& dataIn, at::Tensor& reconData, a
     MPI_Allreduce(&pd_size_a, &pd_s_a, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
     MPI_Allreduce(&pd_min_a, &pd_omin_a, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
     MPI_Allreduce(&pd_max_a, &pd_omax_a, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    if (rank == 0) {
+        std::cout << ((int) mySpecies) << " Overall " << etype << " Error: " << sqrt(pd_e_b/pd_s_b)/(pd_omax_b-pd_omin_b) << " " << sqrt(pd_e_a/pd_s_a)/(pd_omax_a-pd_omin_a) << std::endl;
+    }
 }
