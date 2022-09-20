@@ -714,6 +714,13 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         //     printf("Time taken for residual: %f\n", (end - start));
         // }
         GPTLstop("residual");
+        // std::cout << "residual data is ready" << std::endl;
+        MPI_Barrier(MPI_COMM_WORLD);
+        if (my_rank == 0)
+        {
+            double end = MPI_Wtime();
+            printf("Time taken for residual: %f\n", (end - start));
+        }
 
         // apply MGARD operate.
         GPTLstart("mgard");
@@ -730,6 +737,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         //     printf("Time taken for mgard: %f\n", (end - start));
         // }
         GPTLstop("mgard");
+        MPI_Barrier(MPI_COMM_WORLD);
+        if (my_rank == 0)
+        {
+            double end = MPI_Wtime();
+            printf("Time taken for mgard: %f\n", (end - start));
+        }
 
         GPTLstart("mgard-decomp");
         // start = MPI_Wtime();
@@ -945,6 +958,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // With this total decompressed output, compute Lagrange parameters
         // Figure out PD and QoI errors
 
+        MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
         {
             double end = MPI_Wtime();
