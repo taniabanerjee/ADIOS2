@@ -403,28 +403,33 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     if (compression_method == 0)
     {
         CompressMGARD mgard(m_Parameters);
-        MPI_Barrier(MPI_COMM_WORLD);
-        double start = MPI_Wtime();
+        // MPI_Barrier(MPI_COMM_WORLD);
+        // double start = MPI_Wtime();
+        GPTLstart("mgard");
         size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type, bufferOut + bufferOutOffset);
+        std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
 
-        MPI_Barrier(MPI_COMM_WORLD);
-        double end = MPI_Wtime();
-        if (my_rank == 0)
-        {
-            printf("%d Time taken for MGARD compression: %f\n", optim.getSpecies(), (end - start));
-        }
+        GPTLstop("mgard");
+        // MPI_Barrier(MPI_COMM_WORLD);
+        // double end = MPI_Wtime();
+        // if (my_rank == 0)
+        // {
+            // printf("%d Time taken for MGARD compression: %f\n", optim.getSpecies(), (end - start));
+        // }
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
         std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
 
-        MPI_Barrier(MPI_COMM_WORLD);
-        start = MPI_Wtime();
+        // MPI_Barrier(MPI_COMM_WORLD);
+        // start = MPI_Wtime();
+        GPTLstart("mgard decompress");
         mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
-        MPI_Barrier(MPI_COMM_WORLD);
-        end = MPI_Wtime();
-        if (my_rank == 0)
-        {
-            printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
-        }
+        GPTLstop("mgard decompress");
+        // MPI_Barrier(MPI_COMM_WORLD);
+        // end = MPI_Wtime();
+        // if (my_rank == 0)
+        // {
+            // printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
+        // }
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
         bufferOutOffset += mgardBufferSize;
 
@@ -810,8 +815,10 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         torch::jit::script::Module module;
         try
         {
+            GPTLstart("load model");
             // Deserialize the ScriptModule from a file using torch::jit::load().
             module = torch::jit::load(mname);
+            GPTLstop("load model");
         }
         catch (const c10::Error &e)
         {
@@ -822,11 +829,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         Options options;
         options.batch_size = 128;
         int latent_dim = atoi(get_param(m_Parameters, "latent_dim", "5").c_str());;
+        GPTLstart("prep");
         auto ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]});
         auto dataset = ds.map(torch::data::transforms::Stack<>());
         const size_t dataset_size = dataset.size().value();
         auto loader = torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset),
                                                                                               options.batch_size);
+        GPTLstop("prep");
+
+        GPTLstart("encode");
         std::vector<torch::Tensor> encode_vector;
         for (auto &batch : *loader)
         {
@@ -838,9 +849,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         }
         // encodes shape is (nmesh, latent_dim), where nmesh = number of total mesh nodes this process has
         auto encode = torch::cat(encode_vector, 0);
+        GPTLstop("encode");
         // std::cout << "encode.sizes = " << encode.sizes() << std::endl;
-
+#if 0
         // Kmean
+        GPTLstart("kmean");
         *reinterpret_cast<int *>(bufferOut) = latent_dim;
         int offset = sizeof(int);
         int numObjs = encode.size(0);
@@ -866,13 +879,16 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             // write to decode input
 
             // We update encode tensor directly
-            for (int j = 0; j < numObjs; ++j)
-                encode[j, i] = clusters[membership[j]];
+            // for (int j = 0; j < numObjs; ++j)
+                // encode[j, i] = clusters[membership[j]];
         }
         // std::cout << "kmean is done " << std::endl;
-
+        GPTLstop("kmean");
+#endif
         // Decode
+        GPTLstart("decode");
         std::vector<torch::Tensor> decode_vector;
+        int numObjs = encode.size(0);
         for (int i = 0; i < numObjs; i += options.batch_size)
         {
             auto batch = encode.slice(0, i, i + options.batch_size < numObjs ? i + options.batch_size : numObjs);
@@ -885,8 +901,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         auto decode = torch::cat(decode_vector, 0);
         decode = decode.to(torch::kFloat64).reshape({-1, ds.nx, ds.ny});
         // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
-
+        GPTLstop("decode");
         // Un-normalize
+        // GPTLstart("residual");
         auto mu = ds.mu;
         auto sig = ds.sig;
         // std::cout << "mu.sizes = " << mu.sizes() << std::endl;
@@ -895,6 +912,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         decode = decode + mu.reshape({-1, 1, 1});
         // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
 
+#if 0
         // forg and docode shape: (nmesh, nx, ny)
         auto diff = ds.forg - decode;
         // std::cout << "forg min,max = " << ds.forg.min().item<double>() << " " << ds.forg.max().item<double>()
@@ -911,15 +929,19 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         size_t offsetForDecompresedData = offset;
         offset += sizeof(size_t);
         // std::cout << "residual data is ready" << std::endl;
+        GPTLstop("residual");
 
         // apply MGARD operate.
+        GPTLstart("mgard");
         // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
         CompressMGARD mgard(m_Parameters);
         size_t mgardBufferSize =
             mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut + offset);
         // size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type, bufferOut + offset);
         // std::cout << "mgard is ready" << std::endl;
+        GPTLstop("mgard");
 
+        GPTLstart("mgard-decomp");
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
 
         // use MGARD decompress
@@ -927,6 +949,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         mgard.InverseOperate(bufferOut + offset, mgardBufferSize, tmpDecompressBuffer.data());
         // std::cout << "mgard inverse is ready" << std::endl;
         offset += mgardBufferSize;
+        GPTLstop("mgard-decomp");
 
         // reconstruct data from the residuals
         auto decompressed_residual_data =
@@ -934,6 +957,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                              {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64)
                 .permute({0, 2, 1, 3});
         auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
+#endif
+        GPTLstart("Lagrange");
+        auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny});
         // recon_data shape (1, nmesh, nx, ny) and make it contiguous in memory
         recon_data = recon_data.contiguous().cpu();
         std::vector<double> recon_vec(recon_data.data_ptr<double>(),
@@ -942,6 +968,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // apply post processing
         // recon_vec shape: (1, nmesh, nx, ny)
         optim.computeLagrangeParameters(recon_vec.data(), blockCount);
+        GPTLstop("Lagrange");
         // std::cout << "Lagrange is ready" << std::endl;
 
         // for (auto &batch : *loader)
@@ -964,6 +991,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             double end = MPI_Wtime();
             printf("Time taken for Training: %f\n", (end - start));
         }
+        int offset = 0;
         bufferOutOffset += offset;
     }
     GPTLstop("total");
