@@ -13,6 +13,10 @@
 #include <string_view>
 #include <c10/cuda/CUDACachingAllocator.h>
 
+#include <gptl.h>
+#include <gptlmpi.h>
+
+
 // Define static class members
 at::TensorOptions LagrangeTorch::ourGPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
 at::TensorOptions LagrangeTorch::ourCPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
@@ -58,23 +62,27 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     auto datain = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
                   .permute({0, 2, 1, 3});
     myDataInTorch = datain;
+    GPTLstart("read mesh file");
     readF0Params(meshFile);
-    MPI_Barrier(MPI_COMM_WORLD);
-    end = MPI_Wtime();
-    if (my_rank == 0) {
-        printf ("%d Time Taken for File Reading: %f\n", mySpecies, (end-start));
-    }
+    GPTLstop("read mesh file");
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // end = MPI_Wtime();
+    // if (my_rank == 0) {
+        // printf ("%d Time Taken for File Reading: %f\n", mySpecies, (end-start));
+    // }
     start = MPI_Wtime();
+    GPTLstart("compute params");
     setVolume();
     setVp();
     setMuQoi();
     setVth2();
     myMaxValue = myDataInTorch.max().item().to<double>();;
-    MPI_Barrier(MPI_COMM_WORLD);
-    end = MPI_Wtime();
-    if (my_rank == 0) {
-        printf ("%d Time Taken for QoI param Computation: %f\n", mySpecies, (end-start));
-    }
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // end = MPI_Wtime();
+    // if (my_rank == 0) {
+    //     printf ("%d Time Taken for QoI param Computation: %f\n", mySpecies, (end-start));
+    // }
+    GPTLstop("compute params");
 }
 
 void LagrangeTorch::computeLagrangeParameters(
@@ -83,8 +91,9 @@ void LagrangeTorch::computeLagrangeParameters(
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     double start, end;
-    MPI_Barrier(MPI_COMM_WORLD);
-    start = MPI_Wtime();
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // start = MPI_Wtime();
+    GPTLstart("compute lambdas");
     int ii, i, j, k, l, m;
     auto recondatain = torch::from_blob((void *)reconData, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
                   .permute({0, 2, 1, 3});
@@ -130,7 +139,7 @@ void LagrangeTorch::computeLagrangeParameters(
         double TparaEB = pow(maxTpara*1e-05, 2);
         double PDeB = pow(myMaxValue*1e-05, 2);
 
-        int maxIter = 50;
+        int maxIter = 10;
         auto lambdas_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
         auto gradients_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
         auto hessians_torch = torch::zeros({myNodeCount,4,4}, ourGPUOptions);
@@ -167,7 +176,7 @@ void LagrangeTorch::computeLagrangeParameters(
             hessians_torch.index_put_({Slice(None), 3, 1}, hessians_torch.index({Slice(None), 1, 3}));
             hessians_torch.index_put_({Slice(None), 3, 2}, hessians_torch.index({Slice(None), 2, 3}));
             hessians_torch.index_put_({Slice(None), 3, 3}, (recondatain[iphi]*at::pow(V4_torch, 2)*at::exp(-K)).sum({1,2}));
-            lambdas_torch = lambdas_torch - at::squeeze(at::bmm(hessians_torch.inverse(), gradients_torch.reshape({myNodeCount, 4, 1})));
+            lambdas_torch = lambdas_torch - at::squeeze(at::bmm(torch::linalg::pinv(hessians_torch), gradients_torch.reshape({myNodeCount, 4, 1})));
             auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
             auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
             auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
@@ -214,11 +223,12 @@ void LagrangeTorch::computeLagrangeParameters(
         tensors.push_back(outputs);
         myLagrangesTorch = lambdas_torch;
     }
-    MPI_Barrier(MPI_COMM_WORLD);
-    end = MPI_Wtime();
-    if (my_rank == 0) {
-        printf ("%d Time Taken for Lagrange Computations: %f\n", mySpecies, end-start);
-    }
+    GPTLstop("compute lambdas");
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // end = MPI_Wtime();
+    // if (my_rank == 0) {
+    //     printf ("%d Time Taken for Lagrange Computations: %f\n", mySpecies, end-start);
+    // }
     at::Tensor combined = at::concat(tensors).reshape({myPlaneCount, myNodeCount, myVxCount, myVyCount});
     compareQoIs(recondatain, combined);
     return;
