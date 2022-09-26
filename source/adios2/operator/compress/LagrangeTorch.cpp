@@ -99,7 +99,8 @@ void LagrangeTorch::computeLagrangeParameters(
                   .permute({0, 2, 1, 3});
     double maxDataValue = myDataInTorch.max().item().to<double>();
     double minDataValue = myDataInTorch.min().item().to<double>();
-    recondatain = at::clamp(recondatain, at::Scalar(minDataValue), at::Scalar(maxDataValue));
+    // recondatain = at::clamp(recondatain, at::Scalar(100), at::Scalar(maxDataValue));
+    recondatain = at::clamp(recondatain, at::Scalar(100));
     auto V2_torch = myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
     auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
@@ -162,7 +163,7 @@ void LagrangeTorch::computeLagrangeParameters(
         double TparaEB = pow(maxTpara*1e-05, 2);
         double PDeB = pow(myMaxValue*1e-05, 2);
 
-        int maxIter = 10;
+        int maxIter = 50;
         auto lambdas_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
         auto gradients_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
         auto hessians_torch = torch::zeros({myNodeCount,4,4}, ourGPUOptions);
@@ -199,7 +200,32 @@ void LagrangeTorch::computeLagrangeParameters(
             hessians_torch.index_put_({Slice(None), 3, 1}, hessians_torch.index({Slice(None), 1, 3}));
             hessians_torch.index_put_({Slice(None), 3, 2}, hessians_torch.index({Slice(None), 2, 3}));
             hessians_torch.index_put_({Slice(None), 3, 3}, (recondatain[iphi]*at::pow(V4_torch, 2)*at::exp(-K)).sum({1,2}));
-            lambdas_torch = lambdas_torch - at::squeeze(at::bmm(torch::linalg::pinv(hessians_torch), gradients_torch.reshape({myNodeCount, 4, 1})));
+#ifdef UF_DEBUG
+            if (my_rank == 0) {
+                std::ofstream myfile;
+                std::string fname = "gradient-itr" + std::to_string(count) + ".txt";
+                myfile.open(fname.c_str());
+                myfile << gradients_torch << std::endl;
+                myfile << "element 93125" << std::endl;
+                myfile << "gradients 93125" << std::endl;
+                myfile << gradients_torch.index({93125, Slice(None)}) << std::endl;
+                myfile << "D_torch_sum 93125" << std::endl;
+                myfile << D_torch_sum.index({93125}) << std::endl;
+                myfile << "myVolumeTorch 93125" << std::endl;
+                myfile << myVolumeTorch.index({93125, Slice(None), Slice(None)}) << std::endl;
+                myfile << "Recon data 93125" << std::endl;
+                myfile << recondatain[iphi].index({93125, Slice(None), Slice(None)}) << std::endl;
+                myfile.close();
+            }
+#endif
+            try {
+                lambdas_torch = lambdas_torch - at::squeeze(at::bmm(at::inverse(hessians_torch), gradients_torch.reshape({myNodeCount, 4, 1})));
+            }
+            catch (const c10::Error& e) {
+                std::cout << "Need to compute pseudoinverse for hessians_torch" << std::endl;
+                std::cout << hessians_torch << std::endl;
+                lambdas_torch = lambdas_torch - at::squeeze(at::bmm(torch::linalg::pinv(hessians_torch), gradients_torch.reshape({myNodeCount, 4, 1})));
+            }
             auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
             auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
             auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
@@ -233,9 +259,11 @@ void LagrangeTorch::computeLagrangeParameters(
                     {
                         // std::cout << "All nodes converged at iteration " << count << std::endl;
                         converged = 1;
-                        break;
                     }
                 }
+            }
+            if (converged == 1) {
+                break;
             }
         }
         if (count == maxIter && converged == 0)
