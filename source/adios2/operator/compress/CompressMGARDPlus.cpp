@@ -382,7 +382,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 #endif
 
     // Instantiate LagrangeTorch
-    LagrangeTorch optim(m_Parameters["species"].c_str());
+    LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["precision"].c_str());
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -393,6 +393,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
+    PutParameter(bufferOut, bufferOutOffset, optim.getPrecision());
     PutParameter(bufferOut, bufferOutOffset, compression_method);
     PutParameter(bufferOut, bufferOutOffset, optim.getPlaneOffset());
     PutParameter(bufferOut, bufferOutOffset, optim.getNodeOffset());
@@ -580,7 +581,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             {
                 train(pg, model, *loader, optimizer, epoch, dataset_size, options);
             }
-            // if (rank==0) torch::save(model, "xgcf_ae_model.pt");
+            std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) +  ".pt";
+            torch::save(model, fname.c_str());
 
             // This is just for testing purpose.
             // We load a pre-trained model anyway to ensure the rest of the computation is stable.
@@ -686,7 +688,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // Un-normalize
         GPTLstart("residual");
-        // start = MPI_Wtime();
         auto mu = ds.mu;
         auto sig = ds.sig;
         // std::cout << "mu.sizes = " << mu.sizes() << std::endl;
@@ -694,30 +695,51 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         decode = decode * sig.reshape({-1, 1, 1});
         decode = decode + mu.reshape({-1, 1, 1});
         // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+        // step 1: compute NRMSE of all nodes
+        // for (int ii=0; ii<blockCount[0]; ++ii) {
+            // for (jj=0; jj<blockCount[2]; ++jj) {
+            // }
+        // }
+        // step 2: get the nodes with higher errors and compute residuals
+        // step 3: construct MGARD input
+        // step 4: construct map of nodes
 
         // forg and docode shape: (nmesh, nx, ny)
         auto diff = ds.forg - decode;
-        // dump(ds.forg, "forg", my_rank);
-        // dump(decode, "fdecode", my_rank);
         // std::cout << "forg min,max = " << ds.forg.min().item<double>() << " " << ds.forg.max().item<double>()
                   // << std::endl;
         // std::cout << "decode min,max = " << decode.min().item<double>() << " " << decode.max().item<double>()
                   // << std::endl;
         // std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
+        // std::cout << "orig sizes = " << ds.forg.sizes() << " " << "decode sizes = " << decode.sizes() << std::endl;
+        double pd_max_b, pd_max_a;
+        double pd_min_b, pd_min_a;
+        double pd_omin_b;
+        double pd_omax_b;
+        pd_max_a = pd_max_b = ds.forg.max().item().to<double>();
+        pd_min_a = pd_min_b = ds.forg.min().item().to<double>();
+        MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        auto nrmse = at::sqrt(at::pow(diff, 2).sum({1,2}))/(pd_omax_b-pd_omin_b);
+        auto nrmse_index = at::where((nrmse > 0.001));
+        // std::cout << "nrmse sizes " << nrmse.sizes() << std::endl;
+        using namespace torch::indexing;
+        auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
+        if (my_rank == 0) {
+            std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
+            std::cout << "nrmse indexes " << nrmse_index << std::endl;
+            std::cout << "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl;
+            std::cout << "diff_reduced sizes " << diff_reduced.sizes() << std::endl;
+        }
 
         // use MGARD to compress the residuals
-        auto perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
+        auto perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
         std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
-        // dump(perm_diff, "fdiff", my_rank);
 
         // reserve space in output buffer to store MGARD buffer size
         size_t offsetForDecompresedData = offset;
         offset += sizeof(size_t);
-        // if (my_rank == 0)
-        // {
-        //     double end = MPI_Wtime();
-        //     printf("Time taken for residual: %f\n", (end - start));
-        // }
+        // std::cout << "residual data is ready" << std::endl;
         GPTLstop("residual");
         // std::cout << "residual data is ready" << std::endl;
         MPI_Barrier(MPI_COMM_WORLD);
@@ -727,21 +749,17 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             printf("Time taken for residual: %f\n", (end - start));
         }
 
+        Dims bC = blockCount;
+        bC[2] = nrmse_index[0].sizes()[0];
+        // std::cout << "block Count orig " << blockCount << std::endl;
+        // std::cout << "block Count reduced " << bC << std::endl;
         // apply MGARD operate.
         GPTLstart("mgard");
-        // start = MPI_Wtime();
         // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
         CompressMGARD mgard(m_Parameters);
         size_t mgardBufferSize =
-            mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut + offset);
+            mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, bC, type, bufferOut + offset);
         std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
-        // size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type, bufferOut + offset);
-        // std::cout << "mgard is ready" << std::endl;
-        // if (my_rank == 0)
-        // {
-        //     double end = MPI_Wtime();
-        //     printf("Time taken for mgard: %f\n", (end - start));
-        // }
         GPTLstop("mgard");
         MPI_Barrier(MPI_COMM_WORLD);
         if (my_rank == 0)
@@ -751,7 +769,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         }
 
         GPTLstart("mgard-decomp");
-        // start = MPI_Wtime();
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
 
         // use MGARD decompress
@@ -759,23 +776,45 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         mgard.InverseOperate(bufferOut + offset, mgardBufferSize, tmpDecompressBuffer.data());
         // std::cout << "mgard inverse is ready" << std::endl;
         offset += mgardBufferSize;
-        // if (my_rank == 0)
-        // {
-        //     double end = MPI_Wtime();
-        //     printf("Time taken for mgard-decomp: %f\n", (end - start));
-        // }
         GPTLstop("mgard-decomp");
 
         // reconstruct data from the residuals
-        GPTLstart("Lagrange");
-        // start = MPI_Wtime();
         auto decompressed_residual_data =
             torch::from_blob((void *)tmpDecompressBuffer.data(),
-                             {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64)
+                             {blockCount[0], blockCount[1], bC[2], blockCount[3]}, torch::kFloat64)
                 .permute({0, 2, 1, 3});
-        // dump(decompressed_residual_data, "fdiff_recon", my_rank);
-        auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
+        // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
+        auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
+        // std::cout << "res sizes 1 " << res.sizes() << std::endl;
+        res.index_put_({Slice(None), nrmse_index[0], Slice(None), Slice(None)}, decompressed_residual_data);
+        // std::cout << "res sizes 2 " << res.sizes() << std::endl;
+        auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + res;
+        // std::cout << "decode sizes " << decode.reshape({1, -1, ds.nx, ds.ny}).sizes() << std::endl;
         recon_data = recon_data.permute({0, 2, 1, 3});
+        // auto recon_data = decode + diff;
+        // recon_data = recon_data.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3});
+        // std::cout << "recon data sizes " << recon_data.sizes() << std::endl;
+#if UF_DEBUG
+        auto recon_data_interm = decode.reshape({1, -1, ds.nx, ds.ny}) + diff;
+        recon_data_interm = recon_data_interm.contiguous().cpu();
+        auto datain_t = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1]
+, blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCPU)
+                  .permute({0, 2, 1, 3});
+        double pd_b = at::pow((datain_t-recon_data_interm),2).sum().item().to<double>();
+        double pd_size_b, pd_size_a;
+        pd_max_a = pd_max_b = datain_t.max().item().to<double>();
+        pd_min_a = pd_min_b = datain_t.min().item().to<double>();
+        pd_size_a = pd_size_b = recon_data_interm.numel();
+        // get total error for recon
+        double pd_e_b;
+        double pd_s_b;
+        MPI_Allreduce(&pd_b, &pd_e_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        if (my_rank == 0) {
+            std::cout << " PD error: " << sqrt(pd_e_b/pd_s_b)/(pd_omax_b-pd_omin_b) << std::endl;
+        }
+#endif
+        GPTLstart("Lagrange");
         // recon_data shape (1, nmesh, nx, ny) and make it contiguous in memory
         recon_data = recon_data.contiguous().cpu();
         std::vector<double> recon_vec(recon_data.data_ptr<double>(),
@@ -784,13 +823,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // apply post processing
         // recon_vec shape: (1, nmesh, nx, ny)
         optim.computeLagrangeParameters(recon_vec.data(), blockCount);
-        // std::cout << "Lagrange is ready" << std::endl;
-        // if (my_rank == 0)
-        // {
-        //     double end = MPI_Wtime();
-        //     printf("Time taken for Lagrange: %f\n", (end - start));
-        // }
         GPTLstop("Lagrange");
+        bufferOutOffset += offset;
 
         // for (auto &batch : *loader)
         // {
@@ -913,6 +947,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         decode = decode * sig.reshape({-1, 1, 1});
         decode = decode + mu.reshape({-1, 1, 1});
         // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
+        // step 1: compute NRMSE of all nodes
+        // for (int ii=0; ii<blockCount[0]; ++ii) {
+            // for (jj=0; jj<blockCount[2]; ++jj) {
+            // }
+        // }
+        // step 2: get the nodes with higher errors and compute residuals
+        // step 3: construct MGARD input
+        // step 4: construct map of nodes
 
         // forg and docode shape: (nmesh, nx, ny)
         auto diff = ds.forg - decode;
@@ -922,9 +964,28 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                   // << std::endl;
         // std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
         // std::cout << "orig sizes = " << ds.forg.sizes() << " " << "decode sizes = " << decode.sizes() << std::endl;
+        double pd_max_b, pd_max_a;
+        double pd_min_b, pd_min_a;
+        double pd_omin_b;
+        double pd_omax_b;
+        pd_max_a = pd_max_b = ds.forg.max().item().to<double>();
+        pd_min_a = pd_min_b = ds.forg.min().item().to<double>();
+        MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        auto nrmse = at::sqrt(at::pow(diff, 2).sum({1,2}))/(pd_omax_b-pd_omin_b);
+        auto nrmse_index = at::where((nrmse > 0.001));
+        // std::cout << "nrmse sizes " << nrmse.sizes() << std::endl;
+        using namespace torch::indexing;
+        auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
+        if (my_rank == 0) {
+            std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
+            std::cout << "nrmse indexes " << nrmse_index << std::endl;
+            std::cout << "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl;
+            std::cout << "diff_reduced sizes " << diff_reduced.sizes() << std::endl;
+        }
 
         // use MGARD to compress the residuals
-        auto perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
+        auto perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
         std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
 
         // reserve space in output buffer to store MGARD buffer size
@@ -933,15 +994,17 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // std::cout << "residual data is ready" << std::endl;
         GPTLstop("residual");
 
+        Dims bC = blockCount;
+        bC[2] = nrmse_index[0].sizes()[0];
+        // std::cout << "block Count orig " << blockCount << std::endl;
+        // std::cout << "block Count reduced " << bC << std::endl;
         // apply MGARD operate.
         GPTLstart("mgard");
         // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
         CompressMGARD mgard(m_Parameters);
         size_t mgardBufferSize =
-            mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut + offset);
+            mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, bC, type, bufferOut + offset);
         std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
-        // size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type, bufferOut + offset);
-        // std::cout << "mgard is ready" << std::endl;
         GPTLstop("mgard");
 
         GPTLstart("mgard-decomp");
@@ -957,9 +1020,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // reconstruct data from the residuals
         auto decompressed_residual_data =
             torch::from_blob((void *)tmpDecompressBuffer.data(),
-                             {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64)
+                             {blockCount[0], blockCount[1], bC[2], blockCount[3]}, torch::kFloat64)
                 .permute({0, 2, 1, 3});
-        auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
+        // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
+        auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
+        // std::cout << "res sizes 1 " << res.sizes() << std::endl;
+        res.index_put_({Slice(None), nrmse_index[0], Slice(None), Slice(None)}, decompressed_residual_data);
+        // std::cout << "res sizes 2 " << res.sizes() << std::endl;
+        auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + res;
+        // std::cout << "decode sizes " << decode.reshape({1, -1, ds.nx, ds.ny}).sizes() << std::endl;
         recon_data = recon_data.permute({0, 2, 1, 3});
         // auto recon_data = decode + diff;
         // recon_data = recon_data.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3});
@@ -972,20 +1041,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                   .permute({0, 2, 1, 3});
         double pd_b = at::pow((datain_t-recon_data_interm),2).sum().item().to<double>();
         double pd_size_b, pd_size_a;
-        double pd_min_b, pd_min_a;
-        double pd_max_b, pd_max_a;
         pd_max_a = pd_max_b = datain_t.max().item().to<double>();
         pd_min_a = pd_min_b = datain_t.min().item().to<double>();
         pd_size_a = pd_size_b = recon_data_interm.numel();
         // get total error for recon
         double pd_e_b;
         double pd_s_b;
-        double pd_omin_b;
-        double pd_omax_b;
         MPI_Allreduce(&pd_b, &pd_e_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
         MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
-        MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         if (my_rank == 0) {
             std::cout << " PD error: " << sqrt(pd_e_b/pd_s_b)/(pd_omax_b-pd_omin_b) << std::endl;
         }
@@ -1069,6 +1132,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // DecompressV2 and keep this function for decompressing lagacy data.
 
     const uint8_t species = GetParameter<uint8_t>(bufferIn, bufferInOffset);
+    const uint8_t precision = GetParameter<uint8_t>(bufferIn, bufferInOffset);
     const uint8_t compression_method = GetParameter<uint8_t>(bufferIn, bufferInOffset);
     const size_t planeOffset = GetParameter<size_t>(bufferIn, bufferInOffset);
     const size_t nodeOffset = GetParameter<size_t>(bufferIn, bufferInOffset);
@@ -1103,7 +1167,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species);
+    LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision);
     double *doubleData = reinterpret_cast<double *>(dataOut);
     dataOut = optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
 

@@ -7,9 +7,9 @@ class LagrangeOptimizer
 {
     public:
         // Constructor
-        LagrangeOptimizer(const char* species);
+        LagrangeOptimizer(const char* species, const char* precision);
         LagrangeOptimizer(size_t planeOffset, size_t nodeOffset,
-            size_t p, size_t n, size_t vx, size_t vy, uint8_t species);
+            size_t p, size_t n, size_t vx, size_t vy, const uint8_t species, const uint8_t precision);
 
         // Destructor
         ~LagrangeOptimizer();
@@ -21,7 +21,8 @@ class LagrangeOptimizer
         void computeLagrangeParameters(const double* reconstructedData,
                 adios2::Dims blockCount);
         // Get the particular species
-        uint8_t getSpecies();
+        const uint8_t getSpecies();
+        const uint8_t getPrecision();
         // Get the plane offset
         size_t getPlaneOffset();
         // Get the node offset
@@ -95,6 +96,7 @@ class LagrangeOptimizer
         // Members
         // Actual data being compressed and related parameters
         uint8_t mySpecies;
+        uint8_t myPrecision;
         std::vector <double> myDataIn;
         long unsigned int myPlaneOffset;
         long unsigned int myNodeOffset;
