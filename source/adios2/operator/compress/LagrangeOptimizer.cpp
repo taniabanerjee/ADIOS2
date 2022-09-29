@@ -17,7 +17,7 @@
 
 // int mpi_kmeans(double*, int, int, int, float, int*&, double*&);
 
-LagrangeOptimizer::LagrangeOptimizer(const char* species)
+LagrangeOptimizer::LagrangeOptimizer(const char* species, const char* precision)
 {
     // Initialize charge and mass variables
     for (int i=0; i<myNumSpecies; ++i) {
@@ -28,6 +28,10 @@ LagrangeOptimizer::LagrangeOptimizer(const char* species)
             mySpecies = i;
         }
     }
+    myPrecision = 0;
+    if (!strcmp(precision, "single")) {
+        myPrecision = 1;
+    }
     myNumClusters = 256;
     myEpsilon = 100;
     useKMeansMPI = 0;
@@ -35,12 +39,13 @@ LagrangeOptimizer::LagrangeOptimizer(const char* species)
 
 LagrangeOptimizer::LagrangeOptimizer(size_t planeOffset,
     size_t nodeOffset, size_t p, size_t n, size_t vx, size_t vy,
-    const uint8_t species)
+    const uint8_t species, const uint8_t precision)
 {
     // Initialize charge and mass variables
     mySmallElectronCharge = mySpeciesCharge[species];
     myParticleMass = mySpeciesMass[species];
     mySpecies = species;
+    myPrecision = precision;
     // Change it if it is for electrons
     myPlaneOffset = planeOffset;
     myNodeOffset = nodeOffset;
@@ -692,9 +697,14 @@ void LagrangeOptimizer::quantizeLagrangesMPI(int offset, int* &membership, doubl
     return;
 }
 
-uint8_t LagrangeOptimizer::getSpecies()
+const uint8_t LagrangeOptimizer::getSpecies()
 {
     return mySpecies;
+}
+
+const uint8_t LagrangeOptimizer::getPrecision()
+{
+    return myPrecision;
 }
 
 size_t LagrangeOptimizer::getPlaneOffset()

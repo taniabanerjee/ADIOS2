@@ -21,15 +21,15 @@
 at::TensorOptions LagrangeTorch::ourGPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
 at::TensorOptions LagrangeTorch::ourCPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
 
-LagrangeTorch::LagrangeTorch(const char* species)
-  : LagrangeOptimizer(species)
+LagrangeTorch::LagrangeTorch(const char* species, const char* precision)
+  : LagrangeOptimizer(species, precision)
 {
 }
 
 LagrangeTorch::LagrangeTorch(size_t planeOffset,
     size_t nodeOffset, size_t p, size_t n, size_t vx, size_t vy,
-    const uint8_t species)
-  : LagrangeOptimizer(planeOffset, nodeOffset, p, n, vx, vy, species)
+    const uint8_t species, const uint8_t precision)
+  : LagrangeOptimizer(planeOffset, nodeOffset, p, n, vx, vy, species, precision)
 {
 }
 
@@ -247,6 +247,14 @@ void LagrangeTorch::computeLagrangeParameters(
         {
             std::cout << "All nodes did not converge on rank " << my_rank << std::endl;
         }
+        if (myPrecision == 1) {
+            auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
+            auto l1 = lambdas_torch_32.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
+            auto l2 = lambdas_torch_32.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
+            auto l3 = lambdas_torch_32.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
+            auto l4 = lambdas_torch_32.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
+            K = l1 + l2 + l3 + l4;
+        }
         auto outputs = recondatain[iphi]*at::exp(-K);
         tensors.push_back(outputs);
         myLagrangesTorch = lambdas_torch;
@@ -267,7 +275,7 @@ size_t LagrangeTorch::putLagrangeParameters(char* &bufferOut, size_t &bufferOutO
     auto datain = myLagrangesTorch.contiguous().cpu();
     std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
     myLagranges = datain_vec.data();
-    if (!strcmp(precision, "float"))
+    if (!strcmp(precision, "single"))
     {
         int i, count = 0;
         int numObjs = myPlaneCount*myNodeCount;

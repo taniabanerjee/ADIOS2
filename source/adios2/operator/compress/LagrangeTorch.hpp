@@ -10,9 +10,9 @@ class LagrangeTorch : public LagrangeOptimizer
 {
     public:
         // Constructor
-        LagrangeTorch(const char* species);
+        LagrangeTorch(const char* species, const char* precision);
         LagrangeTorch(size_t planeOffset, size_t nodeOffset,
-            size_t p, size_t n, size_t vx, size_t vy, uint8_t species);
+            size_t p, size_t n, size_t vx, size_t vy, const uint8_t species, const uint8_t precision);
 
         // Destructor
         ~LagrangeTorch();
