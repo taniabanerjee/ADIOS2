@@ -725,12 +725,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // std::cout << "nrmse sizes " << nrmse.sizes() << std::endl;
         using namespace torch::indexing;
         auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
-        if (my_rank == 0) {
-            std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
-            std::cout << "nrmse indexes " << nrmse_index << std::endl;
-            std::cout << "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl;
-            std::cout << "diff_reduced sizes " << diff_reduced.sizes() << std::endl;
-        }
+        // if (my_rank == 0) {
+            // std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
+            // std::cout << "nrmse indexes " << nrmse_index << std::endl;
+            // std::cout << "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl;
+            // std::cout << "diff_reduced sizes " << diff_reduced.sizes() << std::endl;
+        // }
 
         // use MGARD to compress the residuals
         auto perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
@@ -833,14 +833,16 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     {
         MPI_Barrier(MPI_COMM_WORLD);
         double start = MPI_Wtime();
+        // const char *mname = m_Parameters["ae"].c_str();
         const char *mname = m_Parameters["ae"].c_str();
+        std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) +  ".pt";
         // std::cout << "Module name:" << mname;
         torch::jit::script::Module module;
         try
         {
             GPTLstart("load model");
             // Deserialize the ScriptModule from a file using torch::jit::load().
-            module = torch::jit::load(mname);
+            module = torch::jit::load(fname.c_str());
             GPTLstop("load model");
         }
         catch (const c10::Error &e)
@@ -964,12 +966,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // std::cout << "nrmse sizes " << nrmse.sizes() << std::endl;
         using namespace torch::indexing;
         auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
-        if (my_rank == 0) {
-            std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
-            std::cout << "nrmse indexes " << nrmse_index << std::endl;
-            std::cout << "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl;
-            std::cout << "diff_reduced sizes " << diff_reduced.sizes() << std::endl;
-        }
+        // if (my_rank == 0) {
+            // std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
+            // std::cout << "nrmse indexes " << nrmse_index << std::endl;
+            // std::cout << "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl;
+            // std::cout << "diff_reduced sizes " << diff_reduced.sizes() << std::endl;
+        // }
 
         // use MGARD to compress the residuals
         auto perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
