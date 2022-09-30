@@ -57,7 +57,7 @@ struct Options
     bool use_ddp = 0;
 };
 
-constexpr int defaultTimeout = 20;
+constexpr int defaultTimeout = 60;
 
 // Custom Dataset class
 class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
@@ -592,7 +592,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         else
         {
             // (2022/08) jyc: We can restart from the model saved in python.
-            const char *mname = get_param(m_Parameters, "ae", "").c_str();
+            std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) +  ".pt";
+            const char *mname = fname.c_str();
             torch::load(model, mname);
         }
         // if (my_rank == 0)
@@ -695,14 +696,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         decode = decode * sig.reshape({-1, 1, 1});
         decode = decode + mu.reshape({-1, 1, 1});
         // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
-        // step 1: compute NRMSE of all nodes
-        // for (int ii=0; ii<blockCount[0]; ++ii) {
-            // for (jj=0; jj<blockCount[2]; ++jj) {
-            // }
-        // }
-        // step 2: get the nodes with higher errors and compute residuals
-        // step 3: construct MGARD input
-        // step 4: construct map of nodes
 
         // forg and docode shape: (nmesh, nx, ny)
         auto diff = ds.forg - decode;
@@ -722,18 +715,24 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         auto nrmse = at::sqrt(at::pow(diff, 2).sum({1,2}))/(pd_omax_b-pd_omin_b);
         auto nrmse_index = at::where((nrmse > 0.001));
-        // std::cout << "nrmse sizes " << nrmse.sizes() << std::endl;
-        using namespace torch::indexing;
-        auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
-        // if (my_rank == 0) {
+        int resNodes = nrmse_index[0].sizes()[0];
+        at::Tensor perm_diff;
+        if (resNodes == optim.getNodeCount()) {
+            perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
+        }
+        else {
+            using namespace torch::indexing;
+            auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
             // std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
-            // std::cout << "nrmse indexes " << nrmse_index << std::endl;
-            // std::cout << "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl;
-            // std::cout << "diff_reduced sizes " << diff_reduced.sizes() << std::endl;
-        // }
+            // if (my_rank == 0) {
+                // std::cout << "nrmse indexes " << nrmse_index << std::endl;
+                // std::cout << "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl;
+                // std::cout << "diff_reduced sizes " << diff_reduced.sizes() << std::endl;
+            // }
+            perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
+        }
 
         // use MGARD to compress the residuals
-        auto perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
         std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
 
         // reserve space in output buffer to store MGARD buffer size
@@ -784,11 +783,18 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                              {blockCount[0], blockCount[1], bC[2], blockCount[3]}, torch::kFloat64)
                 .permute({0, 2, 1, 3});
         // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
-        auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
-        // std::cout << "res sizes 1 " << res.sizes() << std::endl;
-        res.index_put_({Slice(None), nrmse_index[0], Slice(None), Slice(None)}, decompressed_residual_data);
-        // std::cout << "res sizes 2 " << res.sizes() << std::endl;
-        auto recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + res;
+        at::Tensor recon_data;
+        if (resNodes == optim.getNodeCount()) {
+            recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
+        }
+        else {
+            using namespace torch::indexing;
+            auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
+            // std::cout << "res sizes 1 " << res.sizes() << std::endl;
+            res.index_put_({Slice(None), nrmse_index[0], Slice(None), Slice(None)}, decompressed_residual_data);
+            // std::cout << "res sizes 2 " << res.sizes() << std::endl;
+            recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + res;
+        }
         // std::cout << "decode sizes " << decode.reshape({1, -1, ds.nx, ds.ny}).sizes() << std::endl;
         recon_data = recon_data.permute({0, 2, 1, 3});
         // auto recon_data = decode + diff;
@@ -846,16 +852,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     {
         MPI_Barrier(MPI_COMM_WORLD);
         double start = MPI_Wtime();
-        // const char *mname = m_Parameters["ae"].c_str();
         const char *mname = m_Parameters["ae"].c_str();
-        std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) +  ".pt";
         // std::cout << "Module name:" << mname;
         torch::jit::script::Module module;
         try
         {
             GPTLstart("load model");
             // Deserialize the ScriptModule from a file using torch::jit::load().
-            module = torch::jit::load(fname.c_str());
+            module = torch::jit::load(mname);
             GPTLstop("load model");
         }
         catch (const c10::Error &e)
