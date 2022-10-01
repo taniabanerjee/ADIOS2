@@ -399,6 +399,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
     uint8_t train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
+    float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
+    std::cout << "use_ddp " << options.use_ddp << " train " << train_yes << " use_pretrain " << use_pretrain << " ae_thresh " << ae_thresh << std::endl;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
@@ -586,10 +588,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             if (use_pretrain)
             {
                 // load a pre-trained model
-                const char *mname = get_param(m_Parameters, "ae", "").c_str();
+                // const char *mname = get_param(m_Parameters, "ae", "").c_str();
+                std::string fname = "xgcf_ae_model_0.pt";
                 if (my_rank == 0)
-                    std::cout << "Load pre-trained: " << mname << std::endl;
-                torch::load(model, mname);
+                    std::cout << "Load pre-trained: " << fname.c_str() << std::endl;
+                torch::load(model, fname.c_str());
             }
 
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
@@ -736,7 +739,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
         MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         auto nrmse = at::sqrt(at::pow(diff, 2).sum({1, 2})) / (pd_omax_b - pd_omin_b);
-        auto nrmse_index = at::where((nrmse > 0.001));
+        auto nrmse_index = at::where((nrmse > ae_thresh));
         int resNodes = nrmse_index[0].sizes()[0];
         at::Tensor perm_diff;
         if (resNodes == optim.getNodeCount())
