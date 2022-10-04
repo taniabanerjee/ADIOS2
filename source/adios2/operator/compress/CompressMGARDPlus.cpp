@@ -731,8 +731,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
         // std::cout << "orig sizes = " << ds.forg.sizes() << " " << "decode sizes = " << decode.sizes() << std::endl;
         auto diff2 = (ds.forg - decode)*(ds.forg - decode);
-        double diff_min = diff.min().item().to<double>();
-        double diff_max = diff.max().item().to<double>();
+        double diff_min = diff.abs().min().item().to<double>();
+        double diff_max = diff.abs().max().item().to<double>();
         double diff2_sum = diff2.sum().item().to<double>();
         int64_t diff_cnt = diff.numel();
         double diff_allmin = 0.0;
