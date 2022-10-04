@@ -730,6 +730,24 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // << std::endl;
         // std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
         // std::cout << "orig sizes = " << ds.forg.sizes() << " " << "decode sizes = " << decode.sizes() << std::endl;
+        auto diff2 = (ds.forg - decode)*(ds.forg - decode);
+        double diff_min = diff.min().item().to<double>();
+        double diff_max = diff.max().item().to<double>();
+        double diff2_sum = diff2.sum().item().to<double>();
+        int64_t diff_cnt = diff.numel();
+        double diff_allmin = 0.0;
+        double diff_allmax = 0.0;
+        double diff2_allsum = 0.0;
+        int64_t diff_allcnt = 0;
+        MPI_Allreduce(&diff_min, &diff_allmin, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(&diff_max, &diff_allmax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        MPI_Allreduce(&diff2_sum, &diff2_allsum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(&diff_cnt, &diff_allcnt, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+        if (my_rank == 0) 
+        {
+            printf("Error min,max,mse: %g %g %g\n", diff_allmin, diff_allmax, diff2_allsum/(double)diff_allcnt);
+        }
+
         double pd_max_b, pd_max_a;
         double pd_min_b, pd_min_a;
         double pd_omin_b;
@@ -986,24 +1004,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // << std::endl;
         // std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
         // std::cout << "orig sizes = " << ds.forg.sizes() << " " << "decode sizes = " << decode.sizes() << std::endl;
-        auto diff2 = (ds.forg - decode)*(ds.forg - decode);
-        double diff_min = diff.min().item().to<double>();
-        double diff_max = diff.max().item().to<double>();
-        double diff2_sum = diff2.sum().item().to<double>();
-        int64_t diff_cnt = diff.numel();
-        double diff_allmin = 0.0;
-        double diff_allmax = 0.0;
-        double diff2_allsum = 0.0;
-        int64_t diff_allcnt = 0;
-        MPI_Allreduce(&diff_min, &diff_allmin, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
-        MPI_Allreduce(&diff_max, &diff_allmax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-        MPI_Allreduce(&diff2_sum, &diff2_allsum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        MPI_Allreduce(&diff_cnt, &diff_allcnt, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
-        if (my_rank == 0) 
-        {
-            printf("Error min,max,mse: %g %g %g\n", diff_allmin, diff_allmax, diff2_allsum/(double)diff_allcnt);
-        }
-
         double pd_max_b, pd_max_a;
         double pd_min_b, pd_min_a;
         double pd_omin_b;
