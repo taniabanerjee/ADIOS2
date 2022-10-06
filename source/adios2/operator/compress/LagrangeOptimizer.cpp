@@ -32,6 +32,9 @@ LagrangeOptimizer::LagrangeOptimizer(const char* species, const char* precision)
     if (!strcmp(precision, "single")) {
         myPrecision = 1;
     }
+    else if (!strcmp(precision, "half")) {
+        myPrecision = 2;
+    }
     myNumClusters = 256;
     myEpsilon = 100;
     useKMeansMPI = 0;

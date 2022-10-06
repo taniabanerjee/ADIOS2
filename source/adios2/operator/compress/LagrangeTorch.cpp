@@ -255,6 +255,20 @@ void LagrangeTorch::computeLagrangeParameters(
             auto l4 = lambdas_torch_32.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
             K = l1 + l2 + l3 + l4;
         }
+        else if (myPrecision == 2) {
+            auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
+            auto lambdas_torch_16 = lambdas_torch_32.to(torch::kFloat16);
+            // if (my_rank == 0) {
+                // std::cout << "Lambdas 32" << lambdas_torch_32 << std::endl;
+                // std::cout << "Lambdas 16" << lambdas_torch_16 << std::endl;
+                // std::cout << "Lambdas 64" << lambdas_torch << std::endl;
+            // }
+            auto l1 = lambdas_torch_16.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
+            auto l2 = lambdas_torch_16.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
+            auto l3 = lambdas_torch_16.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
+            auto l4 = lambdas_torch_16.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
+            K = l1 + l2 + l3 + l4;
+        }
         auto outputs = recondatain[iphi]*at::exp(-K);
         tensors.push_back(outputs);
         myLagrangesTorch = lambdas_torch;
