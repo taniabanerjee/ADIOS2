@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
+#include <random>
 
 #include <cstdio>
 #include <iostream>
@@ -186,20 +187,56 @@ template <typename DataLoader>
 void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataLoader &loader,
            torch::optim::Optimizer &optimizer, size_t epoch, size_t dataset_size, Options &options)
 {
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+
     model->train();
 
     size_t batch_idx = 0;
     double batch_loss = 0;
+    int append = 0;
 
     for (auto &batch : loader)
     {
         batch_idx++;
         auto data = batch.data.to(options.device);
-        // std::cout << "Batch: data = " << data.sizes() << std::endl;
+        std::cout << "Batch: data = " << data.sizes() << std::endl;
         optimizer.zero_grad();
         auto output = model->forward(data);
-        auto loss = torch::nn::MSELoss()(output, data);
-        loss.backward();
+        std::cout << "output: data = " << output.sizes() << std::endl;
+        auto mse = at::divide(at::pow((output-data), 2).sum({1}), at::Scalar(1521));
+        std::ofstream myfile;
+        std::string fname = "mse-d3d" + std::to_string(my_rank) + ".txt";
+        if (append == 0) {
+            myfile.open(fname.c_str());
+            append = 1;
+        }
+        else {
+            myfile.open(fname.c_str(), std::ios_base::app);
+        }
+        myfile << mse << std::endl;
+        myfile.close();
+        auto mseloss = at::divide(mse.sum({0}), at::Scalar(128));
+        at::Tensor loss;
+        /*
+        if (epoch % 20 == 0) {
+            auto weights = torch::ones({options.batch_size}, torch::kFloat64).to(torch::kCUDA);
+            auto mse_index = at::where(((mse > 0.0019)&(mse < 0.0021)));
+            using namespace torch::indexing;
+            auto w = torch::ones({mse_index[0].sizes()}, torch::kFloat64).to(torch::kCUDA);
+            auto new_weights = at::multiply(w, at::Scalar(100));
+            weights.index_put_({mse_index[0]}, new_weights);
+            mse = at::multiply(mseloss, weights);
+            loss = at::divide(mse.sum({0}), at::Scalar(128));
+            std::cout << "weighted mse loss: data = " << loss << std::endl;
+            loss.backward();
+        }
+        else {
+        */
+            loss = torch::nn::MSELoss()(output, data);
+            std::cout << "loss: data = " << loss << std::endl;
+            loss.backward();
+        // }
 
         if (options.use_ddp)
         {
@@ -237,8 +274,6 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
     }
     if (epoch % options.epoch_log_interval == 0)
     {
-        int my_rank;
-        MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
         int comm_size;
         MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
         double myLoss = batch_loss / batch_idx;
@@ -318,28 +353,35 @@ CompressMGARDPlus::CompressMGARDPlus(const Params &parameters)
 
 void initClusterCenters(float *&clusters, float *lagarray, int numObjs, int numClusters)
 {
+    int i;
     clusters = new float[numClusters];
-    assert(clusters != NULL);
-
-    srand(time(NULL));
-    float *myNumbers = new float[numClusters];
-    /*
-    std::map<int, int> mymap;
-    for (int i = 0; i < numClusters; ++i)
-    {
-        int index = rand() % numObjs;
-        while (mymap.find(index) != mymap.end())
-        {
-            index = rand() % numObjs;
+    if (numClusters < numObjs) {
+        std::vector <int> numbers;
+        for (i=0; i<numObjs; ++i) {
+            numbers.push_back(i);
         }
-        clusters[i] = lagarray[index];
-        mymap[index] = i;
+        unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
+        std::shuffle(numbers.begin(), numbers.end(), std::default_random_engine(seed));
+        for (i = 0; i < numClusters; ++i)
+        {
+            clusters[i] = lagarray[numbers[i]];
+        }
     }
-    */
-    for (int i = 0; i < numObjs; ++i)
-    {
-        int index = rand() % numClusters;
-        clusters[index] = lagarray[i];
+    else if (numObjs == numClusters) {
+        for (i = 0; i < numClusters; ++i)
+        {
+            clusters[i] = lagarray[i];
+        }
+    }
+    else {
+        for (i = 0; i < numObjs; ++i)
+        {
+            clusters[i] = lagarray[i];
+        }
+        for (i = numObjs; i < numClusters; ++i)
+        {
+            clusters[i] = -99999999;
+        }
     }
 }
 
@@ -663,24 +705,41 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         //     printf("Time taken for encode: %f\n", (end - start));
         // }
         GPTLstop("encode");
+        int offset = sizeof(int);
+        int numObjs = encode.size(0);
 
         // Kmean
         GPTLstart("kmean");
         // start = MPI_Wtime();
         *reinterpret_cast<int *>(bufferOut) = latent_dim;
-        int offset = sizeof(int);
-        int numObjs = encode.size(0);
         for (int i = 0; i < latent_dim; ++i)
         {
             // subselect each column from encode
-            float *pq_input = encode.slice(1, i, i + 1).contiguous().data_ptr<float>();
+            auto pq_input_t = encode.slice(1, i, i + 1).contiguous().to(torch::kCPU);
+            auto unique_elem = at::_unique(pq_input_t);
+            auto elem = std::get<0>(unique_elem);
+            std::cout << " Unique: " << elem.sizes() << std::endl;
+            std::cout << elem << std::endl;
+            float* unique_e = elem.data_ptr<float>();
+            std::cout << " pqinput: " << elem.sizes()[0] << std::endl;
+            float *pq_input = pq_input_t.data_ptr<float>();
+            for (int j = 0; j < numObjs; ++j)
+                std::cout << pq_input[j] << std::endl;
             float pq_threshold = 0.0001;
             int numClusters = pow(2, pqbits);
             float *clusters = new float[numClusters];
-            initClusterCenters(clusters, pq_input, numObjs, numClusters);
+            initClusterCenters(clusters, unique_e, elem.sizes()[0], numClusters);
             int *membership = new int[numObjs];
             memset(membership, 0, numObjs * sizeof(int));
             kmeans_float(pq_input, numObjs, numClusters, pq_threshold, membership, clusters);
+#if UF_DEBUG
+            std::cout << "Print clusters:" << std::endl;
+            for (int j = 0; j < numClusters; ++j)
+                std::cout << clusters[j] << std::endl;
+            std::cout << "Print membership:" << std::endl;
+            for (int j = 0; j < numObjs; ++j)
+                std::cout << membership[j] << " " << pq_input[j] << " " << clusters[membership[j]] << std::endl;
+#endif
             // write PQ table
             for (int j = 0; j < numClusters; ++j)
                 *reinterpret_cast<float *>(bufferOut + offset + j * sizeof(float)) = clusters[j];
@@ -693,7 +752,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
             // We update encode tensor directly
             for (int j = 0; j < numObjs; ++j)
-                encode[j, i] = clusters[membership[j]];
+                encode[j][i] = clusters[membership[j]];
         }
         // if (my_rank == 0)
         // {
@@ -751,7 +810,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         pd_min_a = pd_min_b = ds.forg.min().item().to<double>();
         MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
         MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-        auto nrmse = at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(33*37))), at::Scalar(pd_omax_b - pd_omin_b));
+        auto nrmse = at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(39*39))), at::Scalar(pd_omax_b - pd_omin_b));
+        std::ofstream myfile;
+        std::string fname = "nrmse-d3d" + std::to_string(my_rank) + ".txt";
+        myfile.open(fname.c_str());
+        myfile << nrmse << std::endl;
+        myfile.close();
         auto nrmse_index = at::where((nrmse > ae_thresh));
         int resNodes = nrmse_index[0].sizes()[0];
         at::Tensor perm_diff;
@@ -1047,14 +1111,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         at::Tensor perm_diff;
         at::Tensor recon_data;
         int data_ceil = int(optim.getNodeCount() * 0.94);
-        Dims bc = blockCount;
+        Dims bC = blockCount;
         if (resNodes > data_ceil)
         {
             perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
-            bc[2] = optim.getNodeCount();
+            bC[2] = optim.getNodeCount();
         }
         else if (resNodes > data_ceil) {
-            recon_data = decode.shape({1, -1, ds.nx, ds.ny});
+            recon_data = decode.reshape({1, -1, ds.nx, ds.ny});
             perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
             // perm_diff is never used later
         }
@@ -1078,7 +1142,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                     }
                 }
                 nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(torch::kCUDA);
-                resNodes = nmrse_index[0].sizes()[0];
+                resNodes = nrmse_index[0].sizes()[0];
             }
             using namespace torch::indexing;
             auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
@@ -1088,7 +1152,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             // diff_reduced.sizes() << std::endl;
             // }
             perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
-            bc[2] = nrmse_index[0].sizes()[0];
+            bC[2] = nrmse_index[0].sizes()[0];
         }
         // use MGARD to compress the residuals
         std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
@@ -1124,8 +1188,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // reconstruct data from the residuals
         auto decompressed_residual_data =
             torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], bC[2], blockCount[3]},
-                             torch::kFloat64)
-                .permute({0, 2, 1, 3});
+                             torch::kFloat64).permute({0, 2, 1, 3});
         // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
         if (resNodes > data_ceil)
         {
