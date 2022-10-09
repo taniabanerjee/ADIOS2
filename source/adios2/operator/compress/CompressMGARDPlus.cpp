@@ -810,7 +810,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         pd_min_a = pd_min_b = ds.forg.min().item().to<double>();
         MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
         MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-        auto nrmse = at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(39*39))), at::Scalar(pd_omax_b - pd_omin_b));
+        int vx = optim.getVxCount();
+        int vy = optim.getVyCount();
+        auto nrmse = at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(vx*vy))), at::Scalar(pd_omax_b - pd_omin_b));
         std::ofstream myfile;
         std::string fname = "nrmse-d3d" + std::to_string(my_rank) + ".txt";
         myfile.open(fname.c_str());
