@@ -200,43 +200,10 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
     {
         batch_idx++;
         auto data = batch.data.to(options.device);
-        std::cout << "Batch: data = " << data.sizes() << std::endl;
         optimizer.zero_grad();
         auto output = model->forward(data);
-        std::cout << "output: data = " << output.sizes() << std::endl;
-        auto mse = at::divide(at::pow((output-data), 2).sum({1}), at::Scalar(1521));
-        std::ofstream myfile;
-        std::string fname = "mse-d3d" + std::to_string(my_rank) + ".txt";
-        if (append == 0) {
-            myfile.open(fname.c_str());
-            append = 1;
-        }
-        else {
-            myfile.open(fname.c_str(), std::ios_base::app);
-        }
-        myfile << mse << std::endl;
-        myfile.close();
-        auto mseloss = at::divide(mse.sum({0}), at::Scalar(128));
-        at::Tensor loss;
-        /*
-        if (epoch % 20 == 0) {
-            auto weights = torch::ones({options.batch_size}, torch::kFloat64).to(torch::kCUDA);
-            auto mse_index = at::where(((mse > 0.0019)&(mse < 0.0021)));
-            using namespace torch::indexing;
-            auto w = torch::ones({mse_index[0].sizes()}, torch::kFloat64).to(torch::kCUDA);
-            auto new_weights = at::multiply(w, at::Scalar(100));
-            weights.index_put_({mse_index[0]}, new_weights);
-            mse = at::multiply(mseloss, weights);
-            loss = at::divide(mse.sum({0}), at::Scalar(128));
-            std::cout << "weighted mse loss: data = " << loss << std::endl;
-            loss.backward();
-        }
-        else {
-        */
-            loss = torch::nn::MSELoss()(output, data);
-            std::cout << "loss: data = " << loss << std::endl;
-            loss.backward();
-        // }
+        auto loss = torch::nn::MSELoss()(output, data);
+        loss.backward();
 
         if (options.use_ddp)
         {
@@ -583,7 +550,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         auto dataset = ds.map(torch::data::transforms::Stack<>());
         const size_t dataset_size = dataset.size().value();
         auto loader =
-            torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(dataset), options.batch_size);
+            // torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(dataset), options.batch_size);
+            torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset), options.batch_size);
         torch::optim::Adam optimizer(model->parameters(), torch::optim::AdamOptions(1e-3 /*learning rate*/));
         // if (my_rank == 0)
         // {
@@ -718,13 +686,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             auto pq_input_t = encode.slice(1, i, i + 1).contiguous().to(torch::kCPU);
             auto unique_elem = at::_unique(pq_input_t);
             auto elem = std::get<0>(unique_elem);
-            std::cout << " Unique: " << elem.sizes() << std::endl;
-            std::cout << elem << std::endl;
             float* unique_e = elem.data_ptr<float>();
-            std::cout << " pqinput: " << elem.sizes()[0] << std::endl;
             float *pq_input = pq_input_t.data_ptr<float>();
-            for (int j = 0; j < numObjs; ++j)
-                std::cout << pq_input[j] << std::endl;
             float pq_threshold = 0.0001;
             int numClusters = pow(2, pqbits);
             float *clusters = new float[numClusters];
@@ -885,7 +848,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         size_t mgardBufferSize =
             mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, bC, type, bufferOut + offset);
         // std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
-        std::cout << my_rank << " - mgard size:" << mgardBufferSize << " :num images " << bC[2] << std::endl;
+        std::ofstream myfile;
+        std::string fname = "mgard-size-iter_" + std::to_string(my_rank) + ".txt";
+        myfile.open(fname.c_str());
+        myfile << my_rank << " - mgard size:" << mgardBufferSize << " :num images " << bC[2] << std::endl;
+        myfile.close();
         GPTLstop("mgard");
 
         GPTLstart("mgard-decomp");
