@@ -415,10 +415,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     options.use_ddp = atoi(get_param(m_Parameters, "use_ddp", "0").c_str());
     options.batch_size = atoi(get_param(m_Parameters, "batch_size", "128").c_str());
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
-    uint8_t train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
+    int train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
     float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
     int pqbits = atoi(get_param(m_Parameters, "pqbits", "8").c_str());
+    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << std::endl;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
@@ -782,6 +783,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         myfile << nrmse << std::endl;
         myfile.close();
         auto nrmse_index = at::where((nrmse > ae_thresh));
+        // std::cout << "Rank " << my_rank << " NRMSE index " << nrmse_index << std::endl;
         int resNodes = nrmse_index[0].sizes()[0];
         at::Tensor perm_diff;
         at::Tensor recon_data;
@@ -803,7 +805,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                 std::vector<long> nrmse_vec(nrmse_index[0].data_ptr<long>(),
                              nrmse_index[0].data_ptr<long>() + nrmse_index[0].numel());
                 // std::cout << "nrmse values torch " << nrmse_index[0] << std::endl;
-                std::cout << "nrmse values vec " << nrmse_vec << std::endl;
+                // std::cout << "nrmse values vec " << nrmse_vec << std::endl;
                 auto nrmse_sorted_index = at::argsort(nrmse);
                 // std::cout << "nrmse sorted index " << nrmse_sorted_index << std::endl;
                 while (nrmse_vec.size() < 4) {
@@ -811,7 +813,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                         int value = nrmse_sorted_index[ii].item().to<long>();
                         if (std::find(nrmse_vec.begin(), nrmse_vec.end(), value) == nrmse_vec.end()){
                             nrmse_vec.push_back(value);
-                            std::cout << "found value " << value << std::endl;
+                            // std::cout << "found value " << value << std::endl;
                             break;
                         }
                     }
@@ -821,7 +823,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             }
             using namespace torch::indexing;
             auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
-            std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
+            // std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
             // std::endl; if (my_rank == 0) { std::cout << "nrmse indexes " << nrmse_index << std::endl; std::cout <<
             // "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl; std::cout << "diff_reduced sizes " <<
             // diff_reduced.sizes() << std::endl;
@@ -920,8 +922,13 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // apply post processing
         // recon_vec shape: (1, nmesh, nx, ny)
-        optim.computeLagrangeParameters(recon_vec.data(), blockCount);
+        int unconvsize = optim.computeLagrangeParameters(recon_vec.data(), blockCount);
         GPTLstop("Lagrange");
+        offset += unconvsize;
+        fname = "unconv-size-iter_" + std::to_string(my_rank) + ".txt";
+        myfile.open(fname.c_str());
+        myfile << my_rank << " - unconv size:" << unconvsize << std::endl;
+        myfile.close();
         bufferOutOffset += offset;
 
         // for (auto &batch : *loader)
@@ -1084,15 +1091,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                 std::vector<long> nrmse_vec(nrmse_index[0].data_ptr<long>(),
                              nrmse_index[0].data_ptr<long>() + nrmse_index[0].numel());
                 // std::cout << "nrmse values torch " << nrmse_index[0] << std::endl;
-                std::cout << "nrmse values vec " << nrmse_vec << std::endl;
+                // std::cout << "nrmse values vec " << nrmse_vec << std::endl;
                 auto nrmse_sorted_index = at::argsort(nrmse);
-                std::cout << "nrmse sorted index " << nrmse_sorted_index << std::endl;
+                // std::cout << "nrmse sorted index " << nrmse_sorted_index << std::endl;
                 while (nrmse_vec.size() < 4) {
                     for (int ii=0; ii<optim.getNodeCount(); ++ii) {
                         int value = nrmse_sorted_index[ii].item().to<long>();
                         if (std::find(nrmse_vec.begin(), nrmse_vec.end(), value) == nrmse_vec.end()){
                             nrmse_vec.push_back(value);
-                            std::cout << "found value " << value << std::endl;
+                            // std::cout << "found value " << value << std::endl;
                             break;
                         }
                     }
@@ -1102,7 +1109,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             }
             using namespace torch::indexing;
             auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
-            std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
+            // std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
             // std::endl; if (my_rank == 0) { std::cout << "nrmse indexes " << nrmse_index << std::endl; std::cout <<
             // "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl; std::cout << "diff_reduced sizes " <<
             // diff_reduced.sizes() << std::endl;

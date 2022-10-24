@@ -21,7 +21,7 @@ class LagrangeTorch : public LagrangeOptimizer
                 adios2::Dims blockStart, adios2::Dims blockCount,
                 const double* dataIn);
         // Compute Lagrange Parameters
-        void computeLagrangeParameters(const double* reconstructedData,
+        int computeLagrangeParameters(const double* reconstructedData,
                 adios2::Dims blockCount);
         size_t getTableSize();
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
