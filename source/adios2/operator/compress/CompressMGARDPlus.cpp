@@ -777,11 +777,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         int vx = optim.getVxCount();
         int vy = optim.getVyCount();
         auto nrmse = at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(vx*vy))), at::Scalar(pd_omax_b - pd_omin_b));
-        std::ofstream myfile;
-        std::string fname = "nrmse-d3d" + std::to_string(my_rank) + ".txt";
-        myfile.open(fname.c_str());
-        myfile << nrmse << std::endl;
-        myfile.close();
+        // std::ofstream myfile;
+        // std::string fname = "nrmse-d3d" + std::to_string(my_rank) + ".txt";
+        // myfile.open(fname.c_str());
+        // myfile << nrmse << std::endl;
+        // myfile.close();
         auto nrmse_index = at::where((nrmse > ae_thresh));
         // std::cout << "Rank " << my_rank << " NRMSE index " << nrmse_index << std::endl;
         int resNodes = nrmse_index[0].sizes()[0];
@@ -938,7 +938,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         int unconvsize = optim.computeLagrangeParameters(recon_vec.data(), blockCount);
         GPTLstop("Lagrange");
         offset += unconvsize;
-        fname = "unconv-size-iter_" + std::to_string(my_rank) + ".txt";
+        std::ofstream myfile;
+        std::string fname = "unconv-size-iter_" + std::to_string(my_rank) + ".txt";
         myfile.open(fname.c_str());
         myfile << my_rank << " - unconv size:" << unconvsize << std::endl;
         myfile.close();

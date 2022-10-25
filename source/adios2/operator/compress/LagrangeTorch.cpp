@@ -180,6 +180,7 @@ int LagrangeTorch::computeLagrangeParameters(
         int converged = 0;
         std::vector<int> unconvergedPlaneIndex;
         std::vector<int> unconvergedNodeIndex;
+        std::map<int, int> unconvergedMap;
 
         using namespace torch::indexing;
         while (count < maxIter)
@@ -286,12 +287,10 @@ int LagrangeTorch::computeLagrangeParameters(
         if (count == maxIter && converged == 0)
         {
             std::cout << "All nodes did not converge on rank " << my_rank << std::endl;
-#if UF_DEBUG
             size_t vecIndex = 0;
             for (vecIndex=0; vecIndex<unconvergedPlaneIndex.size(); ++vecIndex) {
                 std::cout << "Unconverged node: " << unconvergedPlaneIndex[vecIndex] << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
             }
-#endif
         }
         if (myPrecision == 1) {
             auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
@@ -331,6 +330,7 @@ int LagrangeTorch::computeLagrangeParameters(
             unconverged_images += numelements;
             for (int ii=0; ii<numelements; ++ii) {
                 outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, myDataInTorch.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
+                unconvergedMap[unique_e[ii]] = 1;
             }
         }
         // Check for any infs
@@ -347,6 +347,7 @@ int LagrangeTorch::computeLagrangeParameters(
             unconverged_images += numelements;
             for (int ii=0; ii<numelements; ++ii) {
                 outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, myDataInTorch.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
+                unconvergedMap[unique_e[ii]] = 1;
             }
         }
         // Check for any very high values
@@ -363,23 +364,30 @@ int LagrangeTorch::computeLagrangeParameters(
             unconverged_images += numelements;
             for (int ii=0; ii<numelements; ++ii) {
                 outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, myDataInTorch.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
+                unconvergedMap[unique_e[ii]] = 1;
             }
         }
         size_t vecIndex = 0;
         unconverged_images += unconvergedNodeIndex.size();
         for (vecIndex=0; vecIndex<unconvergedPlaneIndex.size(); ++vecIndex) {
-            outputs.index_put_({unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}, myDataInTorch.index({unconvergedPlaneIndex[vecIndex], unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}));
+            auto search = unconvergedMap.find(unconvergedNodeIndex[vecIndex]);
+            if (search == unconvergedMap.end()) {
+                outputs.index_put_({unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}, myDataInTorch.index({unconvergedPlaneIndex[vecIndex], unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}));
+            }
         }
         tensors.push_back(outputs);
         myLagrangesTorch = lambdas_torch;
         unconverged_size += unconverged_images*sizeof(double)*myVxCount*myVyCount; // size of images
         unconverged_size += unconverged_images*sizeof(int)*2; // plane and node indexes
-        unconverged_size += 1*sizeof(int); // how many images are represented as is
+        unconverged_size += 1; // how many images are represented as is
     }
     GPTLstop("compute lambdas");
     at::Tensor combined = at::concat(tensors).reshape({myPlaneCount, myNodeCount, myVxCount, myVyCount});
     compareQoIs(recondatain, combined);
-    if (unconverged_images > 0) {
+    if (unconverged_images > 256) {
+        std::cout << "Error: number of unconverged images > 256. Please lower allowed error bound." << std::endl;
+    }
+    else if (unconverged_images > 0) {
         std::cout << "Unconverged images " << unconverged_images << " and sizes " << unconverged_size << std::endl;
     }
     return unconverged_size;
@@ -653,7 +661,7 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
 #ifdef UF_DEBUG
-        if (my_rank == 136) {
+        if (my_rank == 0) {
             std::cout << "Reconstructed density" << std::endl;
             dump(rdensity, "rdensity", my_rank);
             std::cout << "Reconstructed upara" << std::endl;
@@ -682,6 +690,18 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
     at::Tensor reft0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, refdensity, refupara, reftperp, reftpara, refn0, reft0, myDataInTorch);
+#ifdef UF_DEBUG
+        if (my_rank == 0) {
+            std::cout << "Reconstructed density" << std::endl;
+            dump(refdensity, "refdensity", my_rank);
+            std::cout << "Reconstructed upara" << std::endl;
+            dump(refupara, "refupara", my_rank);
+            std::cout << "Reconstructed tperp" << std::endl;
+            dump(reftperp, "reftperp", my_rank);
+            std::cout << "Reconstructed tpara" << std::endl;
+            dump(reftpara, "reftpara", my_rank);
+        }
+#endif
     }
     compareErrorsPD(myDataInTorch, reconData, bregData, "PD", my_rank);
     compareErrorsPD(refdensity, rdensity, bdensity, "density", my_rank);
