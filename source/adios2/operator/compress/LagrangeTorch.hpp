@@ -41,6 +41,9 @@ class LagrangeTorch : public LagrangeOptimizer
         void compareQoIs(at::Tensor& reconData, at::Tensor& bregData);
         void compareErrorsPD(at::Tensor& dataIn, at::Tensor& reconData, at::Tensor& bregData, const char* etype, int rank);
         size_t putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
+        void getUnconvergedIndexes(at::Tensor &diff, std::vector<long>& unconvergedNodeIndex, std::map<long, long> &unconvergedMap);
+        int lambdaIterationsRound(int maxIter, double stepsize, at::Tensor &lambdas_torch, std::vector<long>& unconvergedNodeIndex, int nodes, at::Tensor &recon_torch, at::Tensor &orig_torch, at::Tensor &v_torch, at::Tensor &v2_torch, at::Tensor &v3_torch, at::Tensor &v4_torch, at::Tensor &d_torch, at::Tensor &u_torch, at::Tensor &t_torch, at::Tensor &r_torch, double DeB, double UeB, double TperpEB, double TparaEB, double PDeB);
+
 
     private:
         // Members
