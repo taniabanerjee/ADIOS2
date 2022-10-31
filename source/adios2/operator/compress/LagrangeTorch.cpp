@@ -85,6 +85,129 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     GPTLstop("compute params");
 }
 
+void LagrangeTorch::getUnconvergedIndexes(at::Tensor &diff, std::vector<long>& unconvergedNodeIndex, std::map<long, long> &unconvergedMap)
+{
+    diff = diff.reshape({diff.numel()}).contiguous().cpu();
+    // auto diff_reduced = L2_diff.index({diff});
+    std::vector<long> diffvec(diff.data_ptr<long>(),
+            diff.data_ptr<long>() + diff.numel());
+
+    for (long diffindex: diffvec) {
+        auto search = unconvergedMap.find(diffindex);
+        if (search == unconvergedMap.end()) {
+            unconvergedNodeIndex.push_back(diffindex);
+            unconvergedMap[diffindex] = 1;
+        }
+    }
+}
+
+int LagrangeTorch::lambdaIterationsRound(int maxIter, double stepsize, at::Tensor &lambdas_torch, std::vector<long>& unconvergedNodeIndex, int nodes, at::Tensor &recon_torch, at::Tensor &orig_torch, at::Tensor &v_torch, at::Tensor &v2_torch, at::Tensor &v3_torch, at::Tensor &v4_torch, at::Tensor &d_torch, at::Tensor &u_torch, at::Tensor &t_torch, at::Tensor &r_torch, double DeB, double UeB, double TperpEB, double TparaEB, double PDeB)
+{
+    auto aD_torch = d_torch*mySmallElectronCharge;
+    auto gradients_torch = torch::zeros({nodes,4}, ourGPUOptions);
+    auto hessians_torch = torch::zeros({nodes,4,4}, ourGPUOptions);
+    auto L2_den = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
+    auto L2_upara = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
+    auto L2_tperp = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
+    auto L2_rpara = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
+    auto L2_pd = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
+
+    auto K = torch::zeros({nodes,myVxCount,myVyCount}, ourGPUOptions);
+    int count = 0;
+    int converged = 0;
+
+    using namespace torch::indexing;
+    while (count < maxIter)
+    {
+        gradients_torch.index_put_({Slice(None), 0}, (-((recon_torch*v_torch*at::exp(-K)).sum({1,2})) + d_torch));
+        gradients_torch.index_put_({Slice(None), 1}, (-((recon_torch*v2_torch*at::exp(-K)).sum({1,2})) + u_torch*d_torch));
+        gradients_torch.index_put_({Slice(None), 2}, (-((recon_torch*v3_torch*at::exp(-K)).sum({1,2})) + t_torch*aD_torch));
+        gradients_torch.index_put_({Slice(None), 3}, (-((recon_torch*v4_torch*at::exp(-K)).sum({1,2})) + r_torch*d_torch));
+        hessians_torch.index_put_({Slice(None), 0, 0}, (recon_torch*at::pow(v_torch,2)*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 0, 1}, (recon_torch*v_torch*v2_torch*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 0, 2}, (recon_torch*v_torch*v3_torch*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 0, 3}, (recon_torch*v_torch*v4_torch*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 1, 0}, hessians_torch.index({Slice(None), 0, 1}));
+        hessians_torch.index_put_({Slice(None), 1, 1}, (recon_torch*at::pow(v2_torch, 2)*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 1, 2}, (recon_torch*v2_torch*v3_torch*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 1, 3}, (recon_torch*v2_torch*v4_torch*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 2, 0}, hessians_torch.index({Slice(None), 0, 2}));
+        hessians_torch.index_put_({Slice(None), 2, 1}, hessians_torch.index({Slice(None), 1, 2}));
+        hessians_torch.index_put_({Slice(None), 2, 2}, (recon_torch*at::pow(v3_torch, 2)*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 2, 3}, (recon_torch*v3_torch*v4_torch*at::exp(-K)).sum({1,2}));
+        hessians_torch.index_put_({Slice(None), 3, 0}, hessians_torch.index({Slice(None), 0, 3}));
+        hessians_torch.index_put_({Slice(None), 3, 1}, hessians_torch.index({Slice(None), 1, 3}));
+        hessians_torch.index_put_({Slice(None), 3, 2}, hessians_torch.index({Slice(None), 2, 3}));
+        hessians_torch.index_put_({Slice(None), 3, 3}, (recon_torch*at::pow(v4_torch, 2)*at::exp(-K)).sum({1,2}));
+        try {
+            lambdas_torch = lambdas_torch - at::squeeze(at::bmm(at::inverse(hessians_torch), gradients_torch.reshape({nodes, 4, 1})));
+        }
+        catch (const c10::Error& e) {
+            std::cout << "Need to compute pseudoinverse for hessians_torch" << std::endl;
+            std::cout << hessians_torch << std::endl;
+            lambdas_torch = lambdas_torch - at::squeeze(at::bmm(torch::linalg::pinv(hessians_torch), gradients_torch.reshape({nodes, 4, 1})));
+        }
+        auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({nodes, 1, 1}) * v_torch;
+        auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({nodes, 1, 1}) * v2_torch;
+        auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({nodes, 1, 1}) * v3_torch;
+        auto l4 = lambdas_torch.index({Slice(None), 3}).reshape({nodes, 1, 1}) * v4_torch;
+        K = l1 + l2 + l3 + l4;
+        count = count + 1;
+        if (count % 1 == 0) {
+            auto breg_result = recon_torch*at::exp(-K);
+            auto update_D = (breg_result * v_torch).sum({1,2});
+            auto update_U = (breg_result * v2_torch).sum({1,2})/d_torch;
+            auto update_Tperp = (breg_result * v3_torch).sum({1,2})/aD_torch;
+            auto update_Rpara = (breg_result * v4_torch).sum({1,2})/d_torch;
+            auto rmse_pd = at::pow(breg_result - orig_torch, 2).sum({1,2});
+            L2_den.index_put_({Slice(None), count}, at::pow(update_D-d_torch, 2));
+            L2_upara.index_put_({Slice(None), count}, at::pow(update_U-u_torch, 2));
+            L2_tperp.index_put_({Slice(None), count}, at::pow(update_Tperp-t_torch, 2));
+            L2_rpara.index_put_({Slice(None), count}, at::pow(update_Rpara-r_torch, 2));
+            L2_pd.index_put_({Slice(None), count}, at::sqrt(rmse_pd));
+            if (count >= 2) {
+                auto L2_den_diff = (L2_den.index({Slice(None), count}) - L2_den.index({Slice(None), count - 1})).abs();
+                auto L2_upara_diff = (L2_upara.index({Slice(None), count}) - L2_upara.index({Slice(None), count - 1})).abs();
+                auto L2_tperp_diff = (L2_tperp.index({Slice(None), count}) - L2_tperp.index({Slice(None), count - 1})).abs();
+                auto L2_rpara_diff = (L2_rpara.index({Slice(None), count}) - L2_rpara.index({Slice(None), count - 1})).abs();
+                auto L2_pd_diff = (L2_pd.index({Slice(None), count}) - L2_pd.index({Slice(None), count - 1})).abs();
+                auto den_diff = torch::argwhere(L2_den_diff > DeB);
+                auto upara_diff = torch::argwhere(L2_upara_diff > UeB);
+                auto tperp_diff = torch::argwhere(L2_tperp_diff > TperpEB);
+                auto rpara_diff = torch::argwhere(L2_rpara_diff > TparaEB);
+                auto pd_diff = torch::argwhere(L2_pd_diff > PDeB);
+                if (den_diff.numel() == 0 && upara_diff.numel()==0 && tperp_diff.numel() == 0 && rpara_diff.numel() == 0 && pd_diff.numel() == 0)
+                {
+                    // std::cout << "All nodes converged at iteration " << count << std::endl;
+                    converged = 1;
+                }
+                else if (count == maxIter - 1) {
+                    std::map<long, long> unconvergedMap;
+                    if (den_diff.numel() > 0) {
+                        getUnconvergedIndexes(den_diff, unconvergedNodeIndex, unconvergedMap);
+                    }
+                    if (upara_diff.numel() > 0) {
+                        getUnconvergedIndexes(upara_diff, unconvergedNodeIndex, unconvergedMap);
+                    }
+                    if (tperp_diff.numel() > 0) {
+                        getUnconvergedIndexes(tperp_diff, unconvergedNodeIndex, unconvergedMap);
+                    }
+                    if (rpara_diff.numel() > 0) {
+                        getUnconvergedIndexes(rpara_diff, unconvergedNodeIndex, unconvergedMap);
+                    }
+                    if (pd_diff.numel() > 0) {
+                        getUnconvergedIndexes(pd_diff, unconvergedNodeIndex, unconvergedMap);
+                    }
+                }
+            }
+        }
+        if (converged == 1) {
+            break;
+        }
+    }
+    return converged;
+}
+
 int LagrangeTorch::computeLagrangeParameters(
     const double* reconData, adios2::Dims blockCount)
 {
@@ -134,7 +257,6 @@ int LagrangeTorch::computeLagrangeParameters(
         double maxU = U_torch_sum.max().item().to<double>();
         double maxTperp = Tperp_torch.max().item().to<double>();
         double maxTpara = Rpara_torch.max().item().to<double>();
-        auto aD_torch = D_torch_sum*mySmallElectronCharge;
 
         double DeB = pow(maxD*1e-05, 2);
         double UeB = pow(maxU*1e-05, 2);
@@ -142,133 +264,51 @@ int LagrangeTorch::computeLagrangeParameters(
         double TparaEB = pow(maxTpara*1e-05, 2);
         double PDeB = pow(myMaxValue*1e-05, 2);
 
-        int maxIter = 50;
+        std::vector<long> unconvergedNodeIndex;
+        std::map<long, long> unconvergedMap;
         auto lambdas_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
-        auto gradients_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
-        auto hessians_torch = torch::zeros({myNodeCount,4,4}, ourGPUOptions);
-        auto L2_den = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
-        auto L2_upara = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
-        auto L2_tperp = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
-        auto L2_rpara = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
-        auto L2_pd = torch::zeros({myNodeCount, maxIter+1}, ourGPUOptions);
-
-        auto K = torch::zeros({myNodeCount,myVxCount,myVyCount}, ourGPUOptions);
-        int count = 0;
-        int converged = 0;
-        std::vector<int> unconvergedPlaneIndex;
-        std::vector<int> unconvergedNodeIndex;
-        std::map<int, int> unconvergedMap;
-
-        using namespace torch::indexing;
-        while (count < maxIter)
+        auto recon_data = recondatain[iphi];
+        auto orig_data = myDataInTorch[iphi];
+        int converged = lambdaIterationsRound(50, 1.0, lambdas_torch, unconvergedNodeIndex, myNodeCount, recon_data, orig_data, myVolumeTorch, V2_torch, V3_torch, V4_torch, D_torch_sum, U_torch_sum, Tperp_torch, Rpara_torch, DeB, UeB, TperpEB, TparaEB, PDeB);
+        int round = 1;
+        int maxRound = 2;
+        int maxIterArray[maxRound] {150, 200};
+        double stepSizeArray[maxRound] {0.2, 0.1};
+        while (converged == 0 && round <= maxRound)
         {
-            gradients_torch.index_put_({Slice(None), 0}, (-((recondatain[iphi]*myVolumeTorch*at::exp(-K)).sum({1,2})) + D_torch_sum));
-            gradients_torch.index_put_({Slice(None), 1}, (-((recondatain[iphi]*V2_torch*at::exp(-K)).sum({1,2})) + U_torch_sum*D_torch_sum));
-            gradients_torch.index_put_({Slice(None), 2}, (-((recondatain[iphi]*V3_torch*at::exp(-K)).sum({1,2})) + Tperp_torch*aD_torch));
-            gradients_torch.index_put_({Slice(None), 3}, (-((recondatain[iphi]*V4_torch*at::exp(-K)).sum({1,2})) + Rpara_torch*D_torch_sum));
-            hessians_torch.index_put_({Slice(None), 0, 0}, (recondatain[iphi]*at::pow(myVolumeTorch,2)*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 0, 1}, (recondatain[iphi]*myVolumeTorch*V2_torch*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 0, 2}, (recondatain[iphi]*myVolumeTorch*V3_torch*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 0, 3}, (recondatain[iphi]*myVolumeTorch*V4_torch*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 1, 0}, hessians_torch.index({Slice(None), 0, 1}));
-            hessians_torch.index_put_({Slice(None), 1, 1}, (recondatain[iphi]*at::pow(V2_torch, 2)*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 1, 2}, (recondatain[iphi]*V2_torch*V3_torch*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 1, 3}, (recondatain[iphi]*V2_torch*V4_torch*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 2, 0}, hessians_torch.index({Slice(None), 0, 2}));
-            hessians_torch.index_put_({Slice(None), 2, 1}, hessians_torch.index({Slice(None), 1, 2}));
-            hessians_torch.index_put_({Slice(None), 2, 2}, (recondatain[iphi]*at::pow(V3_torch, 2)*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 2, 3}, (recondatain[iphi]*V3_torch*V4_torch*at::exp(-K)).sum({1,2}));
-            hessians_torch.index_put_({Slice(None), 3, 0}, hessians_torch.index({Slice(None), 0, 3}));
-            hessians_torch.index_put_({Slice(None), 3, 1}, hessians_torch.index({Slice(None), 1, 3}));
-            hessians_torch.index_put_({Slice(None), 3, 2}, hessians_torch.index({Slice(None), 2, 3}));
-            hessians_torch.index_put_({Slice(None), 3, 3}, (recondatain[iphi]*at::pow(V4_torch, 2)*at::exp(-K)).sum({1,2}));
-#ifdef UF_DEBUG
-            // if (my_rank == 136) {
-                std::ofstream myfile;
-                std::string fname = "gradient-itr" + std::to_string(count) + "_" + std::to_string(my_rank) + ".txt";
-                myfile.open(fname.c_str());
-                myfile << gradients_torch << std::endl;
-                // myfile << "element 93125" << std::endl;
-                // myfile << "gradients 93125" << std::endl;
-                // myfile << gradients_torch.index({93125, Slice(None)}) << std::endl;
-                // myfile << "D_torch_sum 93125" << std::endl;
-                // myfile << D_torch_sum.index({93125}) << std::endl;
-                // myfile << "myVolumeTorch 93125" << std::endl;
-                // myfile << myVolumeTorch.index({93125, Slice(None), Slice(None)}) << std::endl;
-                // myfile << "Recon data 93125" << std::endl;
-                // myfile << recondatain[iphi].index({93125, Slice(None), Slice(None)}) << std::endl;
-                myfile.close();
-            // }
-#endif
-            try {
-                lambdas_torch = lambdas_torch - at::squeeze(at::bmm(at::inverse(hessians_torch), gradients_torch.reshape({myNodeCount, 4, 1})));
-            }
-            catch (const c10::Error& e) {
-                std::cout << "Need to compute pseudoinverse for hessians_torch" << std::endl;
-                std::cout << hessians_torch << std::endl;
-                lambdas_torch = lambdas_torch - at::squeeze(at::bmm(torch::linalg::pinv(hessians_torch), gradients_torch.reshape({myNodeCount, 4, 1})));
-            }
-            auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
-            auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
-            auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
-            auto l4 = lambdas_torch.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
-            K = l1 + l2 + l3 + l4;
-            count = count + 1;
-            if (count % 1 == 0) {
-                auto breg_result = recondatain[iphi]*at::exp(-K);
-                auto update_D = (breg_result * myVolumeTorch).sum({1,2});
-                auto update_U = (breg_result * V2_torch).sum({1,2})/D_torch_sum;
-                auto update_Tperp = (breg_result * V3_torch).sum({1,2})/aD_torch;
-                auto update_Rpara = (breg_result * V4_torch).sum({1,2})/D_torch_sum;
-                auto rmse_pd = at::pow(breg_result - myDataInTorch[iphi], 2).sum({1,2});
-                L2_den.index_put_({Slice(None), count}, at::pow(update_D-D_torch_sum, 2));
-                L2_upara.index_put_({Slice(None), count}, at::pow(update_U-U_torch_sum, 2));
-                L2_tperp.index_put_({Slice(None), count}, at::pow(update_Tperp-Tperp_torch, 2));
-                L2_rpara.index_put_({Slice(None), count}, at::pow(update_Rpara-Rpara_torch, 2));
-                L2_pd.index_put_({Slice(None), count}, at::sqrt(rmse_pd));
-                if (count >= 2) {
-                    auto L2_den_diff = (L2_den.index({Slice(None), count}) - L2_den.index({Slice(None), count - 1})).abs();
-                    auto L2_upara_diff = (L2_upara.index({Slice(None), count}) - L2_upara.index({Slice(None), count - 1})).abs();
-                    auto L2_tperp_diff = (L2_tperp.index({Slice(None), count}) - L2_tperp.index({Slice(None), count - 1})).abs();
-                    auto L2_rpara_diff = (L2_rpara.index({Slice(None), count}) - L2_rpara.index({Slice(None), count - 1})).abs();
-                    auto L2_pd_diff = (L2_pd.index({Slice(None), count}) - L2_pd.index({Slice(None), count - 1})).abs();
-                    auto den_diff = torch::argwhere(L2_den_diff > DeB);
-                    auto upara_diff = torch::argwhere(L2_upara_diff > UeB);
-                    auto tperp_diff = torch::argwhere(L2_tperp_diff > TperpEB);
-                    auto rpara_diff = torch::argwhere(L2_rpara_diff > TparaEB);
-                    auto pd_diff = torch::argwhere(L2_pd_diff > PDeB);
-                    if (den_diff.numel() == 0 && upara_diff.numel()==0 && tperp_diff.numel() == 0 && rpara_diff.numel() == 0 && pd_diff.numel() == 0)
-                    {
-                        // std::cout << "All nodes converged at iteration " << count << std::endl;
-                        converged = 1;
-                    }
-                    else if (count == maxIter - 1) {
-                        if (den_diff.numel() > 0) {
-                            den_diff = den_diff.reshape({den_diff.numel()}).contiguous().cpu();
-                            auto diff_reduced = L2_den_diff.index({den_diff});
-                            std::vector<long> diffvec(den_diff.data_ptr<long>(),
-                                    den_diff.data_ptr<long>() + den_diff.numel());
-
-                            for (long diffindex: diffvec) {
-                                unconvergedPlaneIndex.push_back(iphi);
-                                unconvergedNodeIndex.push_back((int)diffindex);
-                            }
-                        }
-                    }
-                }
-            }
-            if (converged == 1) {
-                break;
-            }
-        }
-        if (count == maxIter && converged == 0)
-        {
-            std::cout << "All nodes did not converge on rank " << my_rank << std::endl;
+            std::cout << "All nodes did not converge on rank " << my_rank << " on round " << round << std::endl;
             size_t vecIndex = 0;
-            for (vecIndex=0; vecIndex<unconvergedPlaneIndex.size(); ++vecIndex) {
-                std::cout << "Unconverged node: " << unconvergedPlaneIndex[vecIndex] << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
+            for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
+                std::cout << "Unconverged node (" << round << "): " << iphi << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
             }
+            auto unodes = torch::from_blob((void*)unconvergedNodeIndex.data(), vecIndex, torch::kInt64).to(torch::kCUDA);
+            auto ltorch = torch::zeros({unconvergedNodeIndex.size(),4}, ourGPUOptions);
+
+            using namespace torch::indexing;
+            auto recon_plane = recondatain[iphi];
+            auto recon_torch = recon_plane.index({unodes, Slice(None), Slice(None)});
+            auto orig_plane = myDataInTorch[iphi];
+            auto orig_torch = orig_plane.index({unodes, Slice(None), Slice(None)});
+            auto v_torch = myVolumeTorch.index({unodes, Slice(None), Slice(None)});
+            auto v2_torch = V2_torch.index({unodes, Slice(None), Slice(None)});
+            auto v3_torch = V3_torch.index({unodes, Slice(None), Slice(None)});
+            auto v4_torch = V4_torch.index({unodes, Slice(None), Slice(None)});
+            auto d_torch = D_torch_sum.index({unodes});
+            auto u_torch = U_torch_sum.index({unodes});
+            auto t_torch = Tperp_torch.index({unodes});
+            auto r_torch = Rpara_torch.index({unodes});
+            int nodes = unconvergedNodeIndex.size();
+            unconvergedNodeIndex.clear();
+            converged = lambdaIterationsRound(maxIterArray[round-1], stepSizeArray[round-1], ltorch, unconvergedNodeIndex, nodes, recon_torch, orig_torch, v_torch, v2_torch, v3_torch, v4_torch, d_torch, u_torch, t_torch, r_torch, DeB, UeB, TperpEB, TparaEB, PDeB);
+            for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
+                // std::cout << "Unconverged node (" << round << "): " << iphi << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
+                unconvergedNodeIndex[vecIndex] = unodes[unconvergedNodeIndex[vecIndex]].item<long>();
+            }
+            lambdas_torch.index_put_({unodes, Slice(None)}, ltorch);
+            round += 1;
         }
+        using namespace torch::indexing;
+        auto K = torch::zeros({myNodeCount,myVxCount,myVyCount}, ourGPUOptions);
         if (myPrecision == 1) {
             auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
             auto l1 = lambdas_torch_32.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
@@ -346,10 +386,10 @@ int LagrangeTorch::computeLagrangeParameters(
         }
         size_t vecIndex = 0;
         unconverged_images += unconvergedNodeIndex.size();
-        for (vecIndex=0; vecIndex<unconvergedPlaneIndex.size(); ++vecIndex) {
+        for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
             auto search = unconvergedMap.find(unconvergedNodeIndex[vecIndex]);
             if (search == unconvergedMap.end()) {
-                outputs.index_put_({unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}, myDataInTorch.index({unconvergedPlaneIndex[vecIndex], unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}));
+                outputs.index_put_({unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}, myDataInTorch.index({iphi, unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}));
             }
         }
         tensors.push_back(outputs);
@@ -667,7 +707,7 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
     at::Tensor reft0;
     for (iphi=0; iphi<myPlaneCount; ++iphi) {
         compute_C_qois(iphi, refdensity, refupara, reftperp, reftpara, refn0, reft0, myDataInTorch);
-#ifdef UF_DEBUG
+// #ifdef UF_DEBUG
         if (my_rank == 0) {
             std::cout << "Reconstructed density" << std::endl;
             dump(refdensity, "refdensity", my_rank);
@@ -678,7 +718,7 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
             std::cout << "Reconstructed tpara" << std::endl;
             dump(reftpara, "reftpara", my_rank);
         }
-#endif
+// #endif
     }
     compareErrorsPD(myDataInTorch, reconData, bregData, "PD", my_rank);
     compareErrorsPD(refdensity, rdensity, bdensity, "density", my_rank);
