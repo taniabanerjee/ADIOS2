@@ -12,6 +12,7 @@
 #define ADIOS2_OPERATOR_COMPRESS_COMPRESSMGARDPLUS_H_
 
 #include "adios2/core/Operator.h"
+#include <torch/torch.h>
 
 namespace adios2
 {
@@ -65,6 +66,8 @@ private:
         const size_t sizeIn, char *dataOut);
 
     Dims GetBlockDims(const char *bufferIn, size_t bufferInOffset);
+    double getPDError(double eb, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut);
+    double binarySearchEB(double lowereb, double uppereb, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut);
     std::string m_VersionInfo;
 };
 
