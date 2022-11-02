@@ -379,6 +379,83 @@ void dump(torch::Tensor ten, char *vname, int rank)
     torch::save(ten, fname);
 }
 
+double CompressMGARDPlus::binarySearchEB(double lowereb, double uppereb,
+at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut)
+{
+    double targetE = 0.03;
+    double accuracy = 0.001;
+    double e = getPDError(uppereb, perm_diff, blockStart, blockCount, type, bufferOut);
+    if (e < targetE) {
+        std::cout << "Upper error bound " << uppereb << " error " << e << std::endl;
+        return uppereb;
+    }
+    int partitions = 1000;
+    double error[partitions];
+    int i;
+    error[0] = lowereb;
+    error[partitions-1] = uppereb;
+    int low = 0, high = partitions-1;
+    for (i=1; i<partitions-1; ++i) error[i] = lowereb + i*uppereb/partitions;
+    while (low <= high) {
+        int mid = low + (high-low)/2;
+        e = getPDError(error[mid], perm_diff, blockStart, blockCount, type, bufferOut);
+        std::cout << "Mid " << mid << " error bound " << error[mid] << " error " << e << std::endl;
+        if (e < targetE) {
+            low = mid + 1;
+        }
+        else if (e > targetE) {
+            high = mid - 1;
+        }
+        else if (abs(e-targetE) < accuracy) {
+            std::cout << "Return error bound " << error[mid] << " error " << e << std::endl;
+            return error[mid];
+        }
+    }
+    std::cout << "Return error bound " << low << " " << error[low] << std::endl;
+    return error[low];
+}
+
+double CompressMGARDPlus::getPDError(double eb, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut)
+{
+    double pderror = 0;
+    m_Parameters["tolerance"] = std::to_string(eb).c_str();
+    CompressMGARD mgard(m_Parameters);
+    std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
+    size_t mgardBufferSize = mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut);
+    std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+    mgard.InverseOperate(bufferOut, mgardBufferSize, tmpDecompressBuffer.data());
+    // apply MGARD operate.
+    auto decompressed_residual_data =
+        torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], blockCount[2], blockCount[3]},
+                         torch::kFloat64);
+    pderror = at::sqrt(at::divide(at::pow((perm_diff-decompressed_residual_data),2).sum(), at::Scalar(perm_diff.numel()))).item().to<double>()/perm_diff.max().item().to<double>();
+#if 0
+    // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
+    if (resNodes > data_ceil)
+    {
+        recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
+    }
+    else
+    {
+        using namespace torch::indexing;
+        auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
+        // std::cout << "res sizes 1 " << res.sizes() << std::endl;
+        res.index_put_({Slice(None), nrmse_index[0], Slice(None), Slice(None)}, decompressed_residual_data);
+        // std::cout << "res sizes 2 " << res.sizes() << std::endl;
+        recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + res;
+    }
+    recon_data = recon_data.contiguous().cpu();
+    std::vector<double> recon_vec(recon_data.data_ptr<double>(),
+                                  recon_data.data_ptr<double>() + recon_data.numel());
+
+    // apply post processing
+    // recon_vec shape: (1, nmesh, nx, ny)
+    // // Return PD
+    double pderror = optim.computeLagrangeParametersE(recon_vec.data(), blockCount);
+#endif
+    return pderror;
+}
+
 size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, const Dims &blockCount,
                                   const DataType type, char *bufferOut)
 {
@@ -419,7 +496,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
     float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
     int pqbits = atoi(get_param(m_Parameters, "pqbits", "8").c_str());
-    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << std::endl;
+    double leb = std::stod(get_param(m_Parameters, "leb", "-1"));
+    double ueb = std::stod(get_param(m_Parameters, "ueb", "-1"));
+    std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << std::endl;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
@@ -1141,9 +1220,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstop("residual");
 
         if (resNodes > 0) {
-        // std::cout << "block Count orig " << blockCount << std::endl;
-        // std::cout << "block Count reduced " << bC << std::endl;
-        // apply MGARD operate.
+        GPTLstart("find eb");
+        if (leb > 0 && ueb > 0) {
+            m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, perm_diff, blockStart, bC, type, bufferOut+offset)).c_str();
+        }
+        GPTLstop("find eb");
         GPTLstart("mgard");
         // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
         CompressMGARD mgard(m_Parameters);
