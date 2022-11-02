@@ -332,7 +332,14 @@ int LagrangeTorch::computeLagrangeParameters(
         }
         using namespace torch::indexing;
         auto K = torch::zeros({myNodeCount,myVxCount,myVyCount}, ourGPUOptions);
-        if (myPrecision == 1) {
+        if (myPrecision == 0) {
+            auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
+            auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
+            auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
+            auto l4 = lambdas_torch.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
+            K = l1 + l2 + l3 + l4;
+        }
+        else if (myPrecision == 1) {
             auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
             auto l1 = lambdas_torch_32.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
             auto l2 = lambdas_torch_32.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
