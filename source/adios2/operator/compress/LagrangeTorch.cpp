@@ -76,6 +76,11 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     setVp();
     setMuQoi();
     setVth2();
+    // std::cout << "myVolumeTorch sizes " << myVolumeTorch.sizes() << std::endl;
+    // std::cout << "myVpTorch sizes " << myVpTorch.sizes() << std::endl;
+    // std::cout << "myMuQoiTorch sizes " << myMuQoiTorch.sizes() << std::endl;
+    // std::cout << "myVthTorch sizes " << myVthTorch.sizes() << std::endl;
+    // std::cout << "myVth2Torch sizes " << myVth2Torch.sizes() << std::endl;
     myMaxValue = myDataInTorch.max().item().to<double>();;
     // MPI_Barrier(MPI_COMM_WORLD);
     // end = MPI_Wtime();
@@ -220,194 +225,205 @@ int LagrangeTorch::computeLagrangeParameters(
     // start = MPI_Wtime();
     GPTLstart("compute lambdas");
     int ii, i, j, k, l, m;
-    auto recondatain = torch::from_blob((void *)reconData, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+    auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
                   .permute({0, 2, 1, 3});
+    // std::cout << "recondatain sizes " << recondatain.sizes() << std::endl;
+    auto origdatain = myDataInTorch.reshape({1, blockCount[0]*blockCount[2], blockCount[1], blockCount[3]});
+    // std::cout << "myDataInTorch sizes " << myDataInTorch.sizes() << std::endl;
+    // std::cout << "origdatain sizes " << origdatain.sizes() << std::endl;
     double maxDataValue = myDataInTorch.max().item().to<double>();
     double minDataValue = myDataInTorch.min().item().to<double>();
     // recondatain = at::clamp(recondatain, at::Scalar(100), at::Scalar(maxDataValue));
     recondatain = at::clamp(recondatain, at::Scalar(100));
-    auto V2_torch = myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
-    auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
-    auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
+    int nodes = myNodeCount*myPlaneCount;
+    auto V2_torch = myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
+    auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
+    auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
 
     int breg_index = 0;
     int iphi, idx;
     std::vector <at::Tensor> tensors;
-    for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        std::vector<double> D(myNodeCount, 0);
-        auto f0_f_torch = myDataInTorch[iphi];
-        auto D_torch = (f0_f_torch * myVolumeTorch);
-        auto D_torch_sum = D_torch.sum({1, 2});
+    iphi = 0;
+    std::vector<double> D(nodes, 0);
+    auto f0_f_torch = origdatain[iphi];
+    auto D_torch = (f0_f_torch * myVolumeTorch);
+    auto D_torch_sum = D_torch.sum({1, 2});
 
-        std::vector<double> U(myNodeCount, 0);
-        std::vector<double> Tperp(myNodeCount, 0);
-        auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
-        auto U_torch_sum = U_torch.sum({1, 2})/D_torch_sum;
-        auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
+    std::vector<double> U(nodes, 0);
+    std::vector<double> Tperp(nodes, 0);
+    auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
+    auto U_torch_sum = U_torch.sum({1, 2})/D_torch_sum;
+    auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
 
-        std::vector<double> Tpara(myNodeCount, 0);
-        std::vector<double> Rpara(myNodeCount, 0);
-        auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({myNodeCount, 1})/myVthTorch.reshape({myNodeCount, 1})),2);
-        auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({myNodeCount, 1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass).sum({1, 2}))/D_torch_sum/mySmallElectronCharge;
-        auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
+    std::vector<double> Tpara(nodes, 0);
+    std::vector<double> Rpara(nodes, 0);
+    auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
+    auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1, 2}))/D_torch_sum/mySmallElectronCharge;
+    auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
 
-        int count_unLag = 0;
-        std::vector <int> node_unconv;
-        double maxD = D_torch_sum.max().item().to<double>();
-        double maxU = U_torch_sum.max().item().to<double>();
-        double maxTperp = Tperp_torch.max().item().to<double>();
-        double maxTpara = Rpara_torch.max().item().to<double>();
+    // std::cout << "came here 4.1" << std::endl;
+    int count_unLag = 0;
+    std::vector <int> node_unconv;
+    double maxD = D_torch_sum.max().item().to<double>();
+    double maxU = U_torch_sum.max().item().to<double>();
+    double maxTperp = Tperp_torch.max().item().to<double>();
+    double maxTpara = Rpara_torch.max().item().to<double>();
 
-        double DeB = pow(maxD*1e-05, 2);
-        double UeB = pow(maxU*1e-05, 2);
-        double TperpEB = pow(maxTperp*1e-05, 2);
-        double TparaEB = pow(maxTpara*1e-05, 2);
-        double PDeB = pow(myMaxValue*1e-05, 2);
+    double DeB = pow(maxD*1e-05, 2);
+    double UeB = pow(maxU*1e-05, 2);
+    double TperpEB = pow(maxTperp*1e-05, 2);
+    double TparaEB = pow(maxTpara*1e-05, 2);
+    double PDeB = pow(myMaxValue*1e-05, 2);
 
-        std::vector<long> unconvergedNodeIndex;
-        std::map<long, long> unconvergedMap;
-        auto lambdas_torch = torch::zeros({myNodeCount,4}, ourGPUOptions);
-        auto recon_data = recondatain[iphi];
-        auto orig_data = myDataInTorch[iphi];
-        int converged = lambdaIterationsRound(50, 1.0, lambdas_torch, unconvergedNodeIndex, myNodeCount, recon_data, orig_data, myVolumeTorch, V2_torch, V3_torch, V4_torch, D_torch_sum, U_torch_sum, Tperp_torch, Rpara_torch, DeB, UeB, TperpEB, TparaEB, PDeB);
-        int round = 1;
-        int maxRound = 2;
-        int maxIterArray[maxRound] {150, 200};
-        double stepSizeArray[maxRound] {0.2, 0.1};
-        while (converged == 0 && round <= maxRound)
-        {
-            std::cout << "All nodes did not converge on rank " << my_rank << " on round " << round << std::endl;
-            size_t vecIndex = 0;
-            for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
-                std::cout << "Unconverged node (" << round << "): " << iphi << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
-            }
-            auto unodes = torch::from_blob((void*)unconvergedNodeIndex.data(), vecIndex, torch::kInt64).to(torch::kCUDA);
-            auto ltorch = torch::zeros({unconvergedNodeIndex.size(),4}, ourGPUOptions);
-
-            using namespace torch::indexing;
-            auto recon_plane = recondatain[iphi];
-            auto recon_torch = recon_plane.index({unodes, Slice(None), Slice(None)});
-            auto orig_plane = myDataInTorch[iphi];
-            auto orig_torch = orig_plane.index({unodes, Slice(None), Slice(None)});
-            auto v_torch = myVolumeTorch.index({unodes, Slice(None), Slice(None)});
-            auto v2_torch = V2_torch.index({unodes, Slice(None), Slice(None)});
-            auto v3_torch = V3_torch.index({unodes, Slice(None), Slice(None)});
-            auto v4_torch = V4_torch.index({unodes, Slice(None), Slice(None)});
-            auto d_torch = D_torch_sum.index({unodes});
-            auto u_torch = U_torch_sum.index({unodes});
-            auto t_torch = Tperp_torch.index({unodes});
-            auto r_torch = Rpara_torch.index({unodes});
-            int nodes = unconvergedNodeIndex.size();
-            unconvergedNodeIndex.clear();
-            converged = lambdaIterationsRound(maxIterArray[round-1], stepSizeArray[round-1], ltorch, unconvergedNodeIndex, nodes, recon_torch, orig_torch, v_torch, v2_torch, v3_torch, v4_torch, d_torch, u_torch, t_torch, r_torch, DeB, UeB, TperpEB, TparaEB, PDeB);
-            for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
-                // std::cout << "Unconverged node (" << round << "): " << iphi << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
-                unconvergedNodeIndex[vecIndex] = unodes[unconvergedNodeIndex[vecIndex]].item<long>();
-            }
-            lambdas_torch.index_put_({unodes, Slice(None)}, ltorch);
-            round += 1;
-        }
-        using namespace torch::indexing;
-        auto K = torch::zeros({myNodeCount,myVxCount,myVyCount}, ourGPUOptions);
-        if (myPrecision == 0) {
-            auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
-            auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
-            auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
-            auto l4 = lambdas_torch.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
-            K = l1 + l2 + l3 + l4;
-        }
-        else if (myPrecision == 1) {
-            auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
-            auto l1 = lambdas_torch_32.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
-            auto l2 = lambdas_torch_32.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
-            auto l3 = lambdas_torch_32.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
-            auto l4 = lambdas_torch_32.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
-            K = l1 + l2 + l3 + l4;
-        }
-        else if (myPrecision == 2) {
-            auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
-            auto lambdas_torch_16 = lambdas_torch_32.to(torch::kFloat16);
-            // if (my_rank == 0) {
-                // std::cout << "Lambdas 32" << lambdas_torch_32 << std::endl;
-                // std::cout << "Lambdas 16" << lambdas_torch_16 << std::endl;
-                // std::cout << "Lambdas 64" << lambdas_torch << std::endl;
-            // }
-            auto l1 = lambdas_torch_16.index({Slice(None), 0}).reshape({myNodeCount, 1, 1}) * myVolumeTorch;
-            auto l2 = lambdas_torch_16.index({Slice(None), 1}).reshape({myNodeCount, 1, 1}) * V2_torch;
-            auto l3 = lambdas_torch_16.index({Slice(None), 2}).reshape({myNodeCount, 1, 1}) * V3_torch;
-            auto l4 = lambdas_torch_16.index({Slice(None), 3}).reshape({myNodeCount, 1, 1}) * V4_torch;
-            K = l1 + l2 + l3 + l4;
-        }
-        auto outputs = recondatain[iphi]*at::exp(-K);
-        // Check for any nans
-        auto pda_isnan = at::isnan(outputs);
-        bool isPDnan = pda_isnan.any().item<bool>();
-        if (isPDnan) {
-            auto loc = torch::argwhere(pda_isnan == true);
-            // auto elems = at::_unique(loc.slice(1, 0, 1));
-            auto elems = loc.slice(1, 0, 1).contiguous().to(torch::kCPU);
-            auto unique_elems = at::_unique(elems);
-            auto elem = std::get<0>(unique_elems);
-            std::cout << "x loc " << elem << std::endl;
-            long* unique_e = elem.data_ptr<long>();
-            int numelements = elem.numel();
-            unconverged_images += numelements;
-            for (int ii=0; ii<numelements; ++ii) {
-                outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, myDataInTorch.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
-                unconvergedMap[unique_e[ii]] = 1;
-            }
-        }
-        // Check for any infs
-        pda_isnan = at::isinf(outputs);
-        isPDnan = pda_isnan.any().item<bool>();
-        if (isPDnan) {
-            auto loc = torch::argwhere(pda_isnan == true);
-            auto elems = loc.slice(1, 0, 1).contiguous().to(torch::kCPU);
-            auto unique_elems = at::_unique(elems);
-            auto elem = std::get<0>(unique_elems);
-            std::cout << "y loc " << elem << std::endl;
-            long* unique_e = elem.data_ptr<long>();
-            int numelements = elem.numel();
-            unconverged_images += numelements;
-            for (int ii=0; ii<numelements; ++ii) {
-                outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, myDataInTorch.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
-                unconvergedMap[unique_e[ii]] = 1;
-            }
-        }
-        // Check for any very high values
-        auto pos_outputs = at::abs(outputs);
-        auto high = torch::argwhere(pos_outputs > 1e25);
-        isPDnan = high.numel() > 0;
-        if (isPDnan) {
-            auto elems = high.slice(1, 0, 1).contiguous().to(torch::kCPU);
-            auto unique_elems = at::_unique(elems);
-            auto elem = std::get<0>(unique_elems);
-            std::cout << "z loc " << elem << std::endl;
-            long* unique_e = elem.data_ptr<long>();
-            int numelements = elem.numel();
-            unconverged_images += numelements;
-            for (int ii=0; ii<numelements; ++ii) {
-                outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, myDataInTorch.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
-                unconvergedMap[unique_e[ii]] = 1;
-            }
-        }
+    std::vector<long> unconvergedNodeIndex;
+    std::map<long, long> unconvergedMap;
+    auto lambdas_torch = torch::zeros({nodes,4}, ourGPUOptions);
+    auto recon_data = recondatain[iphi];
+    auto orig_data = origdatain[iphi];
+    int converged = lambdaIterationsRound(50, 1.0, lambdas_torch, unconvergedNodeIndex, nodes, recon_data, orig_data, myVolumeTorch, V2_torch, V3_torch, V4_torch, D_torch_sum, U_torch_sum, Tperp_torch, Rpara_torch, DeB, UeB, TperpEB, TparaEB, PDeB);
+    // std::cout << "came here 4.2" << std::endl;
+    int round = 1;
+    int maxRound = 2;
+    int maxIterArray[maxRound] {150, 200};
+    double stepSizeArray[maxRound] {0.2, 0.1};
+    while (converged == 0 && round <= maxRound)
+    {
+        std::cout << "All nodes did not converge on rank " << my_rank << " on round " << round << std::endl;
         size_t vecIndex = 0;
-        unconverged_images += unconvergedNodeIndex.size();
         for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
-            auto search = unconvergedMap.find(unconvergedNodeIndex[vecIndex]);
-            if (search == unconvergedMap.end()) {
-                outputs.index_put_({unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}, myDataInTorch.index({iphi, unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}));
-            }
+            std::cout << "Unconverged node (" << round << "): " << iphi << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
         }
-        tensors.push_back(outputs);
-        myLagrangesTorch = lambdas_torch;
-        unconverged_size += unconverged_images*sizeof(double)*myVxCount*myVyCount; // size of images
-        unconverged_size += unconverged_images*sizeof(int)*2; // plane and node indexes
-        unconverged_size += 1; // how many images are represented as is
+        auto unodes = torch::from_blob((void*)unconvergedNodeIndex.data(), vecIndex, torch::kInt64).to(torch::kCUDA);
+        auto ltorch = torch::zeros({unconvergedNodeIndex.size(),4}, ourGPUOptions);
+
+        using namespace torch::indexing;
+        auto recon_plane = recondatain[iphi];
+        auto recon_torch = recon_plane.index({unodes, Slice(None), Slice(None)});
+        auto orig_plane = origdatain[iphi];
+        auto orig_torch = orig_plane.index({unodes, Slice(None), Slice(None)});
+        auto v_torch = myVolumeTorch.index({unodes, Slice(None), Slice(None)});
+        auto v2_torch = V2_torch.index({unodes, Slice(None), Slice(None)});
+        auto v3_torch = V3_torch.index({unodes, Slice(None), Slice(None)});
+        auto v4_torch = V4_torch.index({unodes, Slice(None), Slice(None)});
+        auto d_torch = D_torch_sum.index({unodes});
+        auto u_torch = U_torch_sum.index({unodes});
+        auto t_torch = Tperp_torch.index({unodes});
+        auto r_torch = Rpara_torch.index({unodes});
+        int newnodes = unconvergedNodeIndex.size();
+        unconvergedNodeIndex.clear();
+        converged = lambdaIterationsRound(maxIterArray[round-1], stepSizeArray[round-1], ltorch, unconvergedNodeIndex, newnodes, recon_torch, orig_torch, v_torch, v2_torch, v3_torch, v4_torch, d_torch, u_torch, t_torch, r_torch, DeB, UeB, TperpEB, TparaEB, PDeB);
+        for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
+            // std::cout << "Unconverged node (" << round << "): " << iphi << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
+            unconvergedNodeIndex[vecIndex] = unodes[unconvergedNodeIndex[vecIndex]].item<long>();
+        }
+        lambdas_torch.index_put_({unodes, Slice(None)}, ltorch);
+        round += 1;
     }
+    // std::cout << "came here 4.3" << std::endl;
+    using namespace torch::indexing;
+    auto K = torch::zeros({nodes,myVxCount,myVyCount}, ourGPUOptions);
+    if (myPrecision == 0) {
+        auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({nodes, 1, 1}) * myVolumeTorch;
+        auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({nodes, 1, 1}) * V2_torch;
+        auto l3 = lambdas_torch.index({Slice(None), 2}).reshape({nodes, 1, 1}) * V3_torch;
+        auto l4 = lambdas_torch.index({Slice(None), 3}).reshape({nodes, 1, 1}) * V4_torch;
+        K = l1 + l2 + l3 + l4;
+    }
+    else if (myPrecision == 1) {
+        auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
+        auto l1 = lambdas_torch_32.index({Slice(None), 0}).reshape({nodes, 1, 1}) * myVolumeTorch;
+        auto l2 = lambdas_torch_32.index({Slice(None), 1}).reshape({nodes, 1, 1}) * V2_torch;
+        auto l3 = lambdas_torch_32.index({Slice(None), 2}).reshape({nodes, 1, 1}) * V3_torch;
+        auto l4 = lambdas_torch_32.index({Slice(None), 3}).reshape({nodes, 1, 1}) * V4_torch;
+        K = l1 + l2 + l3 + l4;
+    }
+    else if (myPrecision == 2) {
+        auto lambdas_torch_32 = lambdas_torch.to(torch::kFloat32);
+        auto lambdas_torch_16 = lambdas_torch_32.to(torch::kFloat16);
+        // if (my_rank == 0) {
+            // std::cout << "Lambdas 32" << lambdas_torch_32 << std::endl;
+            // std::cout << "Lambdas 16" << lambdas_torch_16 << std::endl;
+            // std::cout << "Lambdas 64" << lambdas_torch << std::endl;
+        // }
+        auto l1 = lambdas_torch_16.index({Slice(None), 0}).reshape({nodes, 1, 1}) * myVolumeTorch;
+        auto l2 = lambdas_torch_16.index({Slice(None), 1}).reshape({nodes, 1, 1}) * V2_torch;
+        auto l3 = lambdas_torch_16.index({Slice(None), 2}).reshape({nodes, 1, 1}) * V3_torch;
+        auto l4 = lambdas_torch_16.index({Slice(None), 3}).reshape({nodes, 1, 1}) * V4_torch;
+        K = l1 + l2 + l3 + l4;
+    }
+    auto outputs = recondatain[iphi]*at::exp(-K);
+    // Check for any nans
+    auto pda_isnan = at::isnan(outputs);
+    bool isPDnan = pda_isnan.any().item<bool>();
+    // std::cout << "came here 4.4" << std::endl;
+    if (isPDnan) {
+        auto loc = torch::argwhere(pda_isnan == true);
+        // auto elems = at::_unique(loc.slice(1, 0, 1));
+        auto elems = loc.slice(1, 0, 1).contiguous().to(torch::kCPU);
+        auto unique_elems = at::_unique(elems);
+        auto elem = std::get<0>(unique_elems);
+        std::cout << "x loc " << elem << std::endl;
+        long* unique_e = elem.data_ptr<long>();
+        int numelements = elem.numel();
+        unconverged_images += numelements;
+        for (int ii=0; ii<numelements; ++ii) {
+            outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, origdatain.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
+            unconvergedMap[unique_e[ii]] = 1;
+        }
+    }
+    // Check for any infs
+    pda_isnan = at::isinf(outputs);
+    isPDnan = pda_isnan.any().item<bool>();
+    if (isPDnan) {
+        auto loc = torch::argwhere(pda_isnan == true);
+        auto elems = loc.slice(1, 0, 1).contiguous().to(torch::kCPU);
+        auto unique_elems = at::_unique(elems);
+        auto elem = std::get<0>(unique_elems);
+        std::cout << "y loc " << elem << std::endl;
+        long* unique_e = elem.data_ptr<long>();
+        int numelements = elem.numel();
+        unconverged_images += numelements;
+        for (int ii=0; ii<numelements; ++ii) {
+            outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, origdatain.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
+            unconvergedMap[unique_e[ii]] = 1;
+        }
+    }
+    // Check for any very high values
+    auto pos_outputs = at::abs(outputs);
+    auto high = torch::argwhere(pos_outputs > 1e25);
+    isPDnan = high.numel() > 0;
+    if (isPDnan) {
+        auto elems = high.slice(1, 0, 1).contiguous().to(torch::kCPU);
+        auto unique_elems = at::_unique(elems);
+        auto elem = std::get<0>(unique_elems);
+        std::cout << "z loc " << elem << std::endl;
+        long* unique_e = elem.data_ptr<long>();
+        int numelements = elem.numel();
+        unconverged_images += numelements;
+        for (int ii=0; ii<numelements; ++ii) {
+            outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, origdatain.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
+            unconvergedMap[unique_e[ii]] = 1;
+        }
+    }
+    size_t vecIndex = 0;
+    unconverged_images += unconvergedNodeIndex.size();
+    for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
+        auto search = unconvergedMap.find(unconvergedNodeIndex[vecIndex]);
+        if (search == unconvergedMap.end()) {
+            outputs.index_put_({unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}, origdatain.index({iphi, unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}));
+        }
+    }
+    tensors.push_back(outputs);
+    // std::cout << "came here 4.5" << std::endl;
+    myLagrangesTorch = lambdas_torch;
+    unconverged_size += unconverged_images*sizeof(double)*myVxCount*myVyCount; // size of images
+    unconverged_size += unconverged_images*sizeof(int)*2; // plane and node indexes
+    unconverged_size += 1; // how many images are represented as is
+
     GPTLstop("compute lambdas");
-    at::Tensor combined = at::concat(tensors).reshape({myPlaneCount, myNodeCount, myVxCount, myVyCount});
+    at::Tensor combined = at::concat(tensors).reshape({1, nodes, myVxCount, myVyCount});
     compareQoIs(recondatain, combined);
+    // std::cout << "came here 4.9" << std::endl;
     if (unconverged_images > 256) {
         std::cout << "Error: number of unconverged images > 256. Please lower allowed error bound." << std::endl;
     }
@@ -573,7 +589,9 @@ void LagrangeTorch::readF0Params(const std::string meshFile)
     engine->Get(*var_ev, myF0TEv);
     engine->Close();
     myGridVolumeTorch = torch::from_blob((void *)myGridVolume.data(), {volumeShape[0], myNodeCount}, torch::kFloat64).to(torch::kCUDA);;
+    // std::cout << "myGridVolumeTorch sizes " << myGridVolumeTorch.sizes() << std::endl;
     myF0TEvTorch = torch::from_blob((void *)myF0TEv.data(), {evShape[0], myNodeCount}, torch::kFloat64).to(torch::kCUDA);;
+    // std::cout << "myF0TEvTorch sizes " << myF0TEvTorch.sizes() << std::endl;
 }
 
 void LagrangeTorch::setVolume()
@@ -617,6 +635,7 @@ void LagrangeTorch::setVolume()
     auto mu_vp_vol_torch=torch::from_blob((void *)mu_vp_vol.data(), {myVxCount, myVyCount}, torch::kFloat64).to(torch::kCUDA);
     auto f0_grid_vol = myGridVolumeTorch[mySpecies];
     myVolumeTorch = f0_grid_vol.reshape({myNodeCount,1,1}) * mu_vp_vol_torch.reshape({1,myVxCount,myVyCount});
+    myVolumeTorch = at::tile(myVolumeTorch, {myPlaneCount, 1, 1});
 #endif
     return;
 }
@@ -642,22 +661,28 @@ void LagrangeTorch::setVth2()
     auto f0_T_ev_torch = myF0TEvTorch[mySpecies];
     myVth2Torch = at::multiply(f0_T_ev_torch, at::Scalar(mySmallElectronCharge/myParticleMass));
     myVthTorch = at::sqrt(myVth2Torch);
+    myVth2Torch = at::tile(myVth2Torch, {myPlaneCount});
+    myVthTorch = at::tile(myVthTorch, {myPlaneCount});
 }
 
 void LagrangeTorch::compute_C_qois(int iphi, at::Tensor &density, at::Tensor &upara, at::Tensor &tperp, at::Tensor &tpara, at::Tensor &n0, at::Tensor &t0, at::Tensor &dataInTorch)
 {
-    int i, j, k;
+    int i, j, k, nodes=myPlaneCount*myNodeCount;
     auto f0_f = dataInTorch[iphi];
     auto den = f0_f * myVolumeTorch;
     density = den.sum({1, 2});
-    auto upar = f0_f * myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
+    // std::cout << "Density compute_C_qois " << density.sizes() << std::endl;
+    auto upar = f0_f * myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     upara = upar.sum({1, 2})/density;
+    // std::cout << "Upara compute_C_qois " << upara.sizes() << std::endl;
     auto upar_ = upara/myVthTorch;
-    auto tper = f0_f * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
+    auto tper = f0_f * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     tperp = tper.sum({1, 2})/density/mySmallElectronCharge;
-    auto en = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-upar_.reshape({myNodeCount, 1})/myVthTorch.reshape({myNodeCount, 1})),2);
-    auto T_par = ((f0_f * myVolumeTorch * en.reshape({myNodeCount, 1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass));
+    // std::cout << "Tperp compute_C_qois " << tperp.sizes() << std::endl;
+    auto en = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-upar_.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
+    auto T_par = ((f0_f * myVolumeTorch * en.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass));
     tpara = 2*T_par.sum({1, 2})/density/mySmallElectronCharge;
+    // std::cout << "Tpara compute_C_qois " << tpara.sizes() << std::endl;
     n0 = density;
     t0 = (2.0*tper.sum({1, 2}) + T_par.sum({1, 2}))/3.0;
     return;
@@ -673,7 +698,7 @@ void dump(torch::Tensor ten, char* vname, int rank)
 
 void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
 {
-    int iphi;
+    int iphi = 0;
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     at::Tensor rdensity;
@@ -682,8 +707,7 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
     at::Tensor rtpara;
     at::Tensor rn0;
     at::Tensor rt0;
-    for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
+    compute_C_qois(iphi, rdensity, rupara, rtperp, rtpara, rn0, rt0, reconData);
 #ifdef UF_DEBUG
         if (my_rank == 0) {
             std::cout << "Reconstructed density" << std::endl;
@@ -696,25 +720,25 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
             dump(rtpara, "rtpara", my_rank);
         }
 #endif
-    }
+    // std::cout << "came here 4.6" << std::endl;
     at::Tensor bdensity;
     at::Tensor bupara;
     at::Tensor btperp;
     at::Tensor btpara;
     at::Tensor bn0;
     at::Tensor bt0;
-    for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        compute_C_qois(iphi, bdensity, bupara, btperp, btpara, bn0, bt0, bregData);
-    }
+    // std::cout << "Breg data " << bregData.sizes() << std::endl;
+    compute_C_qois(iphi, bdensity, bupara, btperp, btpara, bn0, bt0, bregData);
+    auto origdatain = myDataInTorch.reshape({1, myPlaneCount*myNodeCount, myVxCount, myVyCount});
+    // std::cout << "came here 4.7" << std::endl;
     at::Tensor refdensity;
     at::Tensor refupara;
     at::Tensor reftperp;
     at::Tensor reftpara;
     at::Tensor refn0;
     at::Tensor reft0;
-    for (iphi=0; iphi<myPlaneCount; ++iphi) {
-        compute_C_qois(iphi, refdensity, refupara, reftperp, reftpara, refn0, reft0, myDataInTorch);
-// #ifdef UF_DEBUG
+    compute_C_qois(iphi, refdensity, refupara, reftperp, reftpara, refn0, reft0, origdatain);
+#ifdef UF_DEBUG
         if (my_rank == 0) {
             std::cout << "Reconstructed density" << std::endl;
             dump(refdensity, "refdensity", my_rank);
@@ -725,15 +749,16 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
             std::cout << "Reconstructed tpara" << std::endl;
             dump(reftpara, "reftpara", my_rank);
         }
-// #endif
-    }
-    compareErrorsPD(myDataInTorch, reconData, bregData, "PD", my_rank);
+#endif
+    // std::cout << "came here 4.8" << std::endl;
+    compareErrorsPD(origdatain, reconData, bregData, "PD", my_rank);
     compareErrorsPD(refdensity, rdensity, bdensity, "density", my_rank);
     compareErrorsPD(refupara, rupara, bupara, "upara", my_rank);
     compareErrorsPD(reftperp, rtperp, btperp, "tperp", my_rank);
     compareErrorsPD(reftpara, rtpara, btpara, "tpara", my_rank);
     compareErrorsPD(refn0, rn0, bn0, "n0", my_rank);
     compareErrorsPD(reft0, rt0, bt0, "T0", my_rank);
+    // std::cout << "came here 4.85" << std::endl;
     return;
 }
 
