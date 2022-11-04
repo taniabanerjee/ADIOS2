@@ -74,7 +74,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
     CustomDataset(double *data, std::vector<long int> dims)
     {
         assert(dims.size() == 4);
-        // std::cout << "CustomDataset: dims = " << dims << std::endl;
+        std::cout << "CustomDataset: dims = " << dims << std::endl;
 
         nx = (size_t)dims[1];
         ny = (size_t)dims[3];
@@ -109,9 +109,9 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
         // std::cout << "CustomDataset: sig = " << sig << std::endl;
 
         ds_size = fdata.size(0);
-        // std::cout << "CustomDataset: fdata.sizes = " << fdata.sizes() << std::endl;
-        // std::cout << "CustomDataset: ds_size = " << ds_size << std::endl;
-        // std::cout << "CustomDataset: nx, ny = " << nx << ", " << ny << std::endl;
+        std::cout << "CustomDataset: fdata.sizes = " << fdata.sizes() << std::endl;
+        std::cout << "CustomDataset: ds_size = " << ds_size << std::endl;
+        std::cout << "CustomDataset: nx, ny = " << nx << ", " << ny << std::endl;
     };
 
     torch::data::Example<> get(size_t index) override
@@ -421,6 +421,7 @@ double CompressMGARDPlus::getPDError(double eb, at::Tensor &perm_diff, Dims bloc
     m_Parameters["tolerance"] = std::to_string(eb).c_str();
     CompressMGARD mgard(m_Parameters);
     std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
+    std::cout << "Block Start " << blockStart << " " << blockCount << std::endl;
     size_t mgardBufferSize = mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut);
     std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
     mgard.InverseOperate(bufferOut, mgardBufferSize, tmpDecompressBuffer.data());
@@ -498,7 +499,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     int pqbits = atoi(get_param(m_Parameters, "pqbits", "8").c_str());
     double leb = std::stod(get_param(m_Parameters, "leb", "-1"));
     double ueb = std::stod(get_param(m_Parameters, "ueb", "-1"));
-    std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << std::endl;
+    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << std::endl;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
@@ -866,12 +867,13 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         int resNodes = nrmse_index[0].sizes()[0];
         at::Tensor perm_diff;
         at::Tensor recon_data;
-        int data_ceil = int(optim.getNodeCount()*0.94);
+        int nodeCount = optim.getNodeCount() * optim.getPlaneCount();
+        int data_ceil = int(nodeCount*0.94);
         Dims bC = blockCount;
         if (resNodes > data_ceil)
         {
             perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
-            bC[2] = optim.getNodeCount();
+            bC[2] = nodeCount;
         }
         else if (resNodes == 0) {
             recon_data = decode.reshape({1, -1, ds.nx, ds.ny});
@@ -888,7 +890,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                 auto nrmse_sorted_index = at::argsort(nrmse);
                 // std::cout << "nrmse sorted index " << nrmse_sorted_index << std::endl;
                 while (nrmse_vec.size() < 4) {
-                    for (int ii=0; ii<optim.getNodeCount(); ++ii) {
+                    // for (int ii=0; ii<optim.getNodeCount(); ++ii) {
+                    for (int ii=0; ii<nodeCount; ++ii) {
                         int value = nrmse_sorted_index[ii].item().to<long>();
                         if (std::find(nrmse_vec.begin(), nrmse_vec.end(), value) == nrmse_vec.end()){
                             nrmse_vec.push_back(value);
@@ -927,15 +930,20 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         }
 
         if (resNodes > 0) {
-        // std::cout << "block Count orig " << blockCount << std::endl;
-        // std::cout << "block Count reduced " << bC << std::endl;
-        // apply MGARD operate.
+        GPTLstart("find eb");
+        if (leb > 0 && ueb > 0) {
+            m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, perm_diff, {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut+offset)).c_str();
+            // std::cout << "came here 1" << std::endl;
+        }
+        GPTLstop("find eb");
         GPTLstart("mgard");
         // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
         CompressMGARD mgard(m_Parameters);
         size_t mgardBufferSize =
-            mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, bC, type, bufferOut + offset);
+            // mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, bC, type, bufferOut + offset);
+            mgard.Operate(reinterpret_cast<char *>(diff_data.data()), {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut + offset);
         // std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
+        // std::cout << "came here 2" << std::endl;
         std::ofstream myfile;
         std::string fname = "mgard-size-iter_" + std::to_string(my_rank) + ".txt";
         myfile.open(fname.c_str());
@@ -955,13 +963,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // use MGARD decompress
         std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(bC, helper::GetDataTypeSize(type)));
         mgard.InverseOperate(bufferOut + offset, mgardBufferSize, tmpDecompressBuffer.data());
+        // std::cout << "came here 3" << std::endl;
         // std::cout << "mgard inverse is ready" << std::endl;
         offset += mgardBufferSize;
         GPTLstop("mgard-decomp");
 
         // reconstruct data from the residuals
         auto decompressed_residual_data =
-            torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], bC[2], blockCount[3]},
+            // torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], bC[2], blockCount[3]},
+            torch::from_blob((void *)tmpDecompressBuffer.data(), {1, blockCount[1], bC[2], blockCount[3]},
                              torch::kFloat64)
                 .permute({0, 2, 1, 3});
         // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
@@ -972,13 +982,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         else
         {
             using namespace torch::indexing;
-            auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
+            // auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
+            auto res = at::zeros({1, blockCount[0]*blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
             // std::cout << "res sizes 1 " << res.sizes() << std::endl;
             res.index_put_({Slice(None), nrmse_index[0], Slice(None), Slice(None)}, decompressed_residual_data);
             // std::cout << "res sizes 2 " << res.sizes() << std::endl;
             recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + res;
         }
         }
+        // std::cout << "came here 4" << std::endl;
         // std::cout << "decode sizes " << decode.reshape({1, -1, ds.nx, ds.ny}).sizes() << std::endl;
         recon_data = recon_data.permute({0, 2, 1, 3});
         // auto recon_data = decode + diff;
@@ -1014,7 +1026,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // apply post processing
         // recon_vec shape: (1, nmesh, nx, ny)
-        int unconvsize = optim.computeLagrangeParameters(recon_vec.data(), blockCount);
+        // int unconvsize = optim.computeLagrangeParameters(recon_vec.data(), blockCount);
+        int unconvsize = optim.computeLagrangeParameters(recon_vec.data(), {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]});
+        // std::cout << "came here 5" << std::endl;
         GPTLstop("Lagrange");
         offset += unconvsize;
         std::ofstream myfile;
