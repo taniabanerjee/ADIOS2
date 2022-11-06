@@ -56,6 +56,7 @@ struct Options
     torch::DeviceType device = torch::kCUDA;
     size_t batch_max = 0;
     bool use_ddp = 0;
+    bool is_column_decomposition = 0;
 };
 
 constexpr int defaultTimeout = 60;
@@ -71,10 +72,10 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
     torch::Tensor mu;
     torch::Tensor sig;
 
-    CustomDataset(double *data, std::vector<long int> dims)
+    CustomDataset(double *data, std::vector<long int> dims, int isCol = 0)
     {
         assert(dims.size() == 4);
-        std::cout << "CustomDataset: dims = " << dims << std::endl;
+        // std::cout << "CustomDataset: dims = " << dims << std::endl;
 
         nx = (size_t)dims[1];
         ny = (size_t)dims[3];
@@ -84,9 +85,16 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
         // nnodes: number of xgc mesh nodes
         // nx: f0_nmu + 1
         // ny: 2 * f0_nvp + 1
-        fdata = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
+        if (!isCol) {
+            fdata = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
+        }
+        else {
+            fdata = torch::from_blob((void *)data, {1, dims[1], dims[2], dims[3]}, torch::kFloat64)
+                    .permute({0, 2, 1, 3})
+                    .reshape({-1, dims[1], dims[3]});
+        }
         assert(fdata.dim() == 3);
         assert(dims[0] == 1);
         forg = fdata.detach().clone();
@@ -109,9 +117,9 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
         // std::cout << "CustomDataset: sig = " << sig << std::endl;
 
         ds_size = fdata.size(0);
-        std::cout << "CustomDataset: fdata.sizes = " << fdata.sizes() << std::endl;
-        std::cout << "CustomDataset: ds_size = " << ds_size << std::endl;
-        std::cout << "CustomDataset: nx, ny = " << nx << ", " << ny << std::endl;
+        // std::cout << "CustomDataset: fdata.sizes = " << fdata.sizes() << std::endl;
+        // std::cout << "CustomDataset: ds_size = " << ds_size << std::endl;
+        // std::cout << "CustomDataset: nx, ny = " << nx << ", " << ny << std::endl;
     };
 
     torch::data::Example<> get(size_t index) override
@@ -379,27 +387,32 @@ void dump(torch::Tensor ten, char *vname, int rank)
     torch::save(ten, fname);
 }
 
-double CompressMGARDPlus::binarySearchEB(double lowereb, double uppereb,
-at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut)
+double CompressMGARDPlus::binarySearchEB(double lowereb, double uppereb, at::Tensor &orig, at::Tensor &decode,
+at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut, double vx, double vy, double pd_omax_b, double pd_omin_b)
 {
-    double targetE = 0.03;
+    double targetE = 0.09;
     double accuracy = 0.001;
-    double e = getPDError(uppereb, perm_diff, blockStart, blockCount, type, bufferOut);
+    double e = getPDError(uppereb, orig, decode, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
     if (e < targetE) {
         std::cout << "Upper error bound " << uppereb << " error " << e << std::endl;
         return uppereb;
     }
-    int partitions = 1000;
+    e = getPDError(lowereb, orig, decode, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
+    if (e > targetE) {
+        std::cout << "Lower error bound " << lowereb << " error " << e << std::endl;
+        return lowereb;
+    }
+    int partitions = 10000;
     double error[partitions];
     int i;
     error[0] = lowereb;
     error[partitions-1] = uppereb;
-    int low = 0, high = partitions-1;
+    int low = 0, high = partitions-1, mid;
     for (i=1; i<partitions-1; ++i) error[i] = lowereb + i*uppereb/partitions;
     while (low <= high) {
-        int mid = low + (high-low)/2;
-        e = getPDError(error[mid], perm_diff, blockStart, blockCount, type, bufferOut);
-        std::cout << "Mid " << mid << " error bound " << error[mid] << " error " << e << std::endl;
+        mid = low + (high-low)/2;
+        e = getPDError(error[mid], orig, decode, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
+        // std::cout << "Mid " << mid << " error bound " << error[mid] << " error " << e << std::endl;
         if (e < targetE) {
             low = mid + 1;
         }
@@ -407,21 +420,21 @@ at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, ch
             high = mid - 1;
         }
         else if (abs(e-targetE) < accuracy) {
-            std::cout << "Return error bound " << error[mid] << " error " << e << std::endl;
+            std::cout << "Return middle error bound " << mid << " " << error[mid] << " error " << e << std::endl;
             return error[mid];
         }
     }
-    std::cout << "Return error bound " << low << " " << error[low] << std::endl;
-    return error[low];
+    std::cout << "Return lowest error bound " << mid << " " << error[mid] << std::endl;
+    return error[mid];
 }
 
-double CompressMGARDPlus::getPDError(double eb, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut)
+double CompressMGARDPlus::getPDError(double eb, at::Tensor &orig, at::Tensor &decode, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut, double vx, double vy, double pd_omax_b, double pd_omin_b)
 {
     double pderror = 0;
     m_Parameters["tolerance"] = std::to_string(eb).c_str();
     CompressMGARD mgard(m_Parameters);
     std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
-    std::cout << "Block Start " << blockStart << " " << blockCount << std::endl;
+    // std::cout << "Block Start " << blockStart << " " << blockCount << std::endl;
     size_t mgardBufferSize = mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut);
     std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
     mgard.InverseOperate(bufferOut, mgardBufferSize, tmpDecompressBuffer.data());
@@ -429,7 +442,9 @@ double CompressMGARDPlus::getPDError(double eb, at::Tensor &perm_diff, Dims bloc
     auto decompressed_residual_data =
         torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], blockCount[2], blockCount[3]},
                          torch::kFloat64);
-    pderror = at::sqrt(at::divide(at::pow((perm_diff-decompressed_residual_data),2).sum(), at::Scalar(perm_diff.numel()))).item().to<double>()/perm_diff.max().item().to<double>();
+    // pderror = at::sqrt(at::divide(at::pow((orig-decode-decompressed_residual_data),2).sum(), at::Scalar(perm_diff.numel()))).item().to<double>()/perm_diff.max().item().to<double>();
+    auto diff = orig-decode-decompressed_residual_data;
+    pderror = at::max(at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(vx*vy))), at::Scalar(pd_omax_b - pd_omin_b))).item().to<double>();
 #if 0
     // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
     if (resNodes > data_ceil)
@@ -478,7 +493,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 #endif
 
     // Instantiate LagrangeTorch
-    LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["precision"].c_str());
+    LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str());
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -493,13 +508,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     options.use_ddp = atoi(get_param(m_Parameters, "use_ddp", "0").c_str());
     options.batch_size = atoi(get_param(m_Parameters, "batch_size", "128").c_str());
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
+    options.is_column_decomposition = atoi(get_param(m_Parameters, "decomp", "0").c_str());
     int train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
     float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
     int pqbits = atoi(get_param(m_Parameters, "pqbits", "8").c_str());
     double leb = std::stod(get_param(m_Parameters, "leb", "-1"));
     double ueb = std::stod(get_param(m_Parameters, "ueb", "-1"));
-    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << std::endl;
+    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << " decomp " << options.is_column_decomposition << std::endl;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
@@ -513,14 +529,27 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     GPTLstart("total");
     if (compression_method == 0)
     {
+#if 0
+        if (leb > 0 && ueb > 0) {
+            size_t offset = 0;
+            auto perm_diff = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA);
+            m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, perm_diff, {0, 0, 0, 0}, blockCount, type, bufferOut+offset, vx, vy, pd_omax_b, pd_omin_b)).c_str();
+            // std::cout << "came here 1" << std::endl;
+        }
+#endif
+        // m_Parameters["tolerance"] = std::to_string(1e17+my_rank * 1e15);
+        // std::cout << "tolerance " << m_Parameters["tolerance"] << std::endl;
         CompressMGARD mgard(m_Parameters);
         // MPI_Barrier(MPI_COMM_WORLD);
         // double start = MPI_Wtime();
         GPTLstart("mgard");
         size_t mgardBufferSize = mgard.Operate(dataIn, blockStart, blockCount, type, bufferOut + bufferOutOffset);
-        std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
-
         GPTLstop("mgard");
+        std::ofstream myfile;
+        std::string fname = "mgard-size-iter_" + std::to_string(my_rank) + ".txt";
+        myfile.open(fname.c_str());
+        myfile << my_rank << " - mgard size:" << mgardBufferSize << " :num images " << blockCount[2] << std::endl;
+        myfile.close();
 
         // MPI_Barrier(MPI_COMM_WORLD);
         // double end = MPI_Wtime();
@@ -542,7 +571,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // {
         // printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
         // }
+        GPTLstart("Lagrange");
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
+        GPTLstop("Lagrange");
         bufferOutOffset += mgardBufferSize;
 
         // dump((void *)dataIn, blockCount, "forg", my_rank);
@@ -556,56 +587,49 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     {
         CompressSZ sz(m_Parameters);
         MPI_Barrier(MPI_COMM_WORLD);
-        double start = MPI_Wtime();
+        GPTLstart("sz");
         size_t szBufferSize = sz.Operate(dataIn, blockStart, blockCount, type, bufferOut + bufferOutOffset);
+        GPTLstop("sz");
 
-        double end = MPI_Wtime();
-        if (my_rank == 0)
-        {
-            printf("Time taken for SZ compression: %f\n", (end - start));
-            printf("Size after SZ compression: %zu\n", szBufferSize);
-        }
+        std::ofstream myfile;
+        std::string fname = "sz-size-iter_" + std::to_string(my_rank) + ".txt";
+        myfile.open(fname.c_str());
+        myfile << my_rank << " - sz size:" << szBufferSize << " :num images " << blockCount[2] << std::endl;
+        myfile.close();
         PutParameter(bufferOut, offsetForDecompresedData, szBufferSize);
         std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
 
-        MPI_Barrier(MPI_COMM_WORLD);
-        start = MPI_Wtime();
+        GPTLstart("sz-decomp");
         sz.InverseOperate(bufferOut + bufferOutOffset, szBufferSize, tmpDecompressBuffer.data());
-        MPI_Barrier(MPI_COMM_WORLD);
-        end = MPI_Wtime();
-        if (my_rank == 0)
-        {
-            printf("Time taken for SZ decompression: %f\n", (end - start));
-        }
+        GPTLstop("sz-decomp");
+        GPTLstart("Lagrange");
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
+        GPTLstop("Lagrange");
         bufferOutOffset += szBufferSize;
     }
     else if (compression_method == 2)
     {
+        m_Parameters["prec"] = "";
         CompressZFP zfp(m_Parameters);
-        MPI_Barrier(MPI_COMM_WORLD);
-        double start = MPI_Wtime();
+        GPTLstart("zfp");
         size_t zfpBufferSize = zfp.Operate(dataIn, blockStart, blockCount, type, bufferOut + bufferOutOffset);
+        GPTLstop("zfp");
 
-        double end = MPI_Wtime();
-        if (my_rank == 0)
-        {
-            printf("Time taken for ZFP compression: %f\n", (end - start));
-            printf("Size after ZFP compression: %zu\n", zfpBufferSize);
-        }
+        std::ofstream myfile;
+        std::string fname = "zfp-size-iter_" + std::to_string(my_rank) + ".txt";
+        myfile.open(fname.c_str());
+        myfile << my_rank << " - zfp size:" << zfpBufferSize << " :num images " << blockCount[2] << std::endl;
+        myfile.close();
+
         PutParameter(bufferOut, offsetForDecompresedData, zfpBufferSize);
         std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
 
-        MPI_Barrier(MPI_COMM_WORLD);
-        start = MPI_Wtime();
+        GPTLstart("zfp decomp");
         zfp.InverseOperate(bufferOut + bufferOutOffset, zfpBufferSize, tmpDecompressBuffer.data());
-        MPI_Barrier(MPI_COMM_WORLD);
-        end = MPI_Wtime();
-        if (my_rank == 0)
-        {
-            printf("Time taken for ZFP decompression: %f\n", (end - start));
-        }
+        GPTLstop("zfp decomp");
+        GPTLstart("Lagrange");
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
+        GPTLstop("Lagrange");
         bufferOutOffset += zfpBufferSize;
     }
     else if (compression_method == 3)
@@ -627,11 +651,18 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         GPTLstart("prep");
         // double start = MPI_Wtime();
+        // std::cout << "Is Column decomposition " << options.is_column_decomposition << std::endl;
+        auto train_ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, options.is_column_decomposition);
+        auto train_dataset = train_ds.map(torch::data::transforms::Stack<>());
+        const size_t train_dataset_size = train_dataset.size().value();
+        // std::cout << "Train dataset size " << train_dataset_size << std::endl;
+        auto train_loader =
+            torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(train_dataset), options.batch_size);
+
         auto ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]});
         auto dataset = ds.map(torch::data::transforms::Stack<>());
         const size_t dataset_size = dataset.size().value();
-        auto loader =
-            // torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(dataset), options.batch_size);
+        auto encode_loader =
             torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset), options.batch_size);
         torch::optim::Adam optimizer(model->parameters(), torch::optim::AdamOptions(1e-3 /*learning rate*/));
         // if (my_rank == 0)
@@ -699,7 +730,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
             {
-                train(pg, model, *loader, optimizer, epoch, dataset_size, options);
+                train(pg, model, *train_loader, optimizer, epoch, dataset_size, options);
             }
 
             int eligible = my_rank;
@@ -737,7 +768,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // start = MPI_Wtime();
         model->eval();
         std::vector<torch::Tensor> encode_vector;
-        for (auto &batch : *loader)
+        for (auto &batch : *encode_loader)
         {
             auto data = batch.data.to(options.device);
             auto _encode = model->encode(data);
@@ -867,6 +898,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         int resNodes = nrmse_index[0].sizes()[0];
         at::Tensor perm_diff;
         at::Tensor recon_data;
+        at::Tensor rogue_images;
+        at::Tensor decoded_images;
         int nodeCount = optim.getNodeCount() * optim.getPlaneCount();
         int data_ceil = int(nodeCount*0.94);
         Dims bC = blockCount;
@@ -874,6 +907,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         {
             perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
             bC[2] = nodeCount;
+            rogue_images = ds.forg.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
+            decoded_images = decode.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
         }
         else if (resNodes == 0) {
             recon_data = decode.reshape({1, -1, ds.nx, ds.ny});
@@ -912,7 +947,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             // }
             perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
             bC[2] = nrmse_index[0].sizes()[0];
+            rogue_images = (ds.forg).index({nrmse_index[0], Slice(None), Slice(None)});
+            rogue_images = rogue_images.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
+            decoded_images = decode.index({nrmse_index[0], Slice(None), Slice(None)});
+            decoded_images = decoded_images.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
         }
+        // std::cout << "Rank " << my_rank << " resNodes " << resNodes << std::endl;
         // use MGARD to compress the residuals
         std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
 
@@ -932,7 +972,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         if (resNodes > 0) {
         GPTLstart("find eb");
         if (leb > 0 && ueb > 0) {
-            m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, perm_diff, {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut+offset)).c_str();
+          // std::cout << "Rogue images " << rogue_images.sizes() << " Decoded images " << decoded_images.sizes() << " Diff dims " << perm_diff.sizes() << std::endl;
+            m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, rogue_images, decoded_images, perm_diff, {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut+offset, vx, vy, pd_omax_b, pd_omin_b)).c_str();
             // std::cout << "came here 1" << std::endl;
         }
         GPTLstop("find eb");
@@ -1054,6 +1095,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         bufferOutOffset += offset;
     }
+#if 0
     else if (compression_method == 4)
     {
         MPI_Barrier(MPI_COMM_WORLD);
@@ -1315,6 +1357,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstop("Lagrange");
         bufferOutOffset += offset;
     }
+#endif
     GPTLstop("total");
 
     // printf ("My compress rank %d, MGARD size %zu\n", my_rank, mgardBufferSize);
@@ -1345,7 +1388,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 #endif
     if (bufferVersion != 1)
     {
-        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["precision"].c_str());
+        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["prec"].c_str());
         bufferOutOffset += ppsize;
     }
 
