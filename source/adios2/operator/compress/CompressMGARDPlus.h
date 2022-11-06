@@ -66,8 +66,8 @@ private:
         const size_t sizeIn, char *dataOut);
 
     Dims GetBlockDims(const char *bufferIn, size_t bufferInOffset);
-    double getPDError(double eb, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut);
-    double binarySearchEB(double lowereb, double uppereb, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut);
+    double getPDError(double eb, at::Tensor &orig, at::Tensor &decode, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut, double vx, double vy, double pd_omax_b, double pd_omin_b);
+    double binarySearchEB(double lowereb, double uppereb, at::Tensor &orig, at::Tensor &decode, at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut, double vx, double vy, double pd_omax_b, double pd_omin_b);
     std::string m_VersionInfo;
 };
 
