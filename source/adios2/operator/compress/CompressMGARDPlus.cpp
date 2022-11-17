@@ -39,6 +39,42 @@
 
 #include "KmeansMPI.h"
 
+#include <type_traits>
+#include <typeinfo>
+#ifndef _MSC_VER
+#   include <cxxabi.h>
+#endif
+#include <memory>
+#include <string>
+#include <cstdlib>
+
+template <class T>
+std::string
+type_name()
+{
+    typedef typename std::remove_reference<T>::type TR;
+    std::unique_ptr<char, void(*)(void*)> own
+           (
+#ifndef _MSC_VER
+                abi::__cxa_demangle(typeid(TR).name(), nullptr,
+                                           nullptr, nullptr),
+#else
+                nullptr,
+#endif
+                std::free
+           );
+    std::string r = own != nullptr ? own.get() : typeid(TR).name();
+    if (std::is_const<TR>::value)
+        r += " const";
+    if (std::is_volatile<TR>::value)
+        r += " volatile";
+    if (std::is_lvalue_reference<T>::value)
+        r += "&";
+    else if (std::is_rvalue_reference<T>::value)
+        r += "&&";
+    return r;
+}
+
 namespace adios2
 {
 namespace core
@@ -56,7 +92,7 @@ struct Options
     torch::DeviceType device = torch::kCUDA;
     size_t batch_max = 0;
     bool use_ddp = 0;
-    bool is_column_decomposition = 0;
+    int training_paradigm = 0;
 };
 
 constexpr int defaultTimeout = 60;
@@ -72,7 +108,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
     torch::Tensor mu;
     torch::Tensor sig;
 
-    CustomDataset(double *data, std::vector<long int> dims, int isCol = 0)
+    CustomDataset(double *data, std::vector<long int> dims, int paradigm = 0)
     {
         assert(dims.size() == 4);
         // std::cout << "CustomDataset: dims = " << dims << std::endl;
@@ -85,15 +121,70 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
         // nnodes: number of xgc mesh nodes
         // nx: f0_nmu + 1
         // ny: 2 * f0_nvp + 1
-        if (!isCol) {
+        if (paradigm == 0 || paradigm == 5) {
             fdata = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
+            std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
         }
-        else {
+        else if (paradigm == 1) {
             fdata = torch::from_blob((void *)data, {1, dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
+            std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+        }
+        else if (paradigm == 2 || paradigm == 3 || paradigm == 4) {
+            auto t = torch::from_blob((void *)data, {1, dims[1], dims[2], dims[3]}, torch::kFloat64)
+                    .permute({0, 2, 1, 3})
+                    .reshape({-1, dims[1], dims[3]});
+            auto idx = at::randperm(at::size(t, 0));
+            int end = (int) at::size(t,0) * 0.25 * (paradigm-1);
+            auto idx_25 = idx.slice(0, 0, end);
+            std::cout << "idx " << idx.sizes() << " " << idx_25.sizes() << std::endl;
+            using namespace torch::indexing;
+            fdata = t.index({idx_25, Slice(None), Slice(None)});
+        }
+        else if (paradigm == 6) {
+            auto t = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
+                    .permute({0, 2, 1, 3})
+                    .reshape({-1, dims[1], dims[3]});
+            auto idx = at::randperm(at::size(t, 0));
+            int end = dims[2];
+            auto idx_25 = idx.slice(0, 0, end);
+            std::cout << "idx " << idx.sizes() << " " << idx_25.sizes() << std::endl;
+            using namespace torch::indexing;
+            fdata = t.index({idx_25, Slice(None), Slice(None)});
+            std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+        }
+        else if (paradigm == 7 || paradigm == 8 || paradigm == 9 || paradigm == 10) {
+            auto t = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
+                    .permute({0, 2, 1, 3})
+                    .reshape({-1, dims[1], dims[3]});
+            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            auto idx = at::randint(8, {dims[2]}, opt);
+            const at::Scalar start = 0;
+            const at::Scalar last = dims[2]-1;
+
+            auto dim2 = at::range(start, last, opt);
+            // std::vector <at::Tensor> tensors;
+            // tensors.push_back(idx);
+            // tensors.push_back(dim2);
+            // auto combine_idx = at::stack(tensors, 1);
+            auto combine_idx = idx * dims[2] + dim2;
+            using namespace torch::indexing;
+            if (paradigm == 7) {
+                fdata = t.index({combine_idx, Slice(None), Slice(None)});
+                std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+            }
+            else {
+                auto randidx = at::randperm(at::size(combine_idx, 0));
+                int end = (int) at::size(combine_idx,0) * 0.25 * (paradigm-7);
+                auto idx_25 = randidx.slice(0, 0, end);
+                auto cidx_25 = combine_idx.index({idx_25});
+                std::cout << "cidx_25 " << cidx_25 << std::endl;
+                fdata = t.index({cidx_25, Slice(None), Slice(None)});
+                std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+            }
         }
         assert(fdata.dim() == 3);
         assert(dims[0] == 1);
@@ -508,14 +599,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     options.use_ddp = atoi(get_param(m_Parameters, "use_ddp", "0").c_str());
     options.batch_size = atoi(get_param(m_Parameters, "batch_size", "128").c_str());
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
-    options.is_column_decomposition = atoi(get_param(m_Parameters, "decomp", "0").c_str());
+    options.training_paradigm = atoi(get_param(m_Parameters, "decomp", "0").c_str());
     int train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
     float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
     int pqbits = atoi(get_param(m_Parameters, "pqbits", "8").c_str());
     double leb = std::stod(get_param(m_Parameters, "leb", "-1"));
     double ueb = std::stod(get_param(m_Parameters, "ueb", "-1"));
-    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << " decomp " << options.is_column_decomposition << std::endl;
+    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << " decomp " << options.training_paradigm << std::endl;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
@@ -651,13 +742,20 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         GPTLstart("prep");
         // double start = MPI_Wtime();
-        // std::cout << "Is Column decomposition " << options.is_column_decomposition << std::endl;
-        auto train_ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, options.is_column_decomposition);
+        // std::cout << "Is Column decomposition " << options.training_paradigm  << std::endl;
+        auto train_ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, options.training_paradigm );
+        std::vector <torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >> train_datasets;
         auto train_dataset = train_ds.map(torch::data::transforms::Stack<>());
+        train_datasets.push_back(train_dataset);
+        // std::cout << "decltype(train_dataset) is " << type_name<decltype(train_dataset)>() << std::endl;
         const size_t train_dataset_size = train_dataset.size().value();
         // std::cout << "Train dataset size " << train_dataset_size << std::endl;
+        std::vector <std::unique_ptr<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler>, std::default_delete<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler> > >*> train_loaders;
         auto train_loader =
-            torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(train_dataset), options.batch_size);
+            torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(train_dataset), options.batch_size);
+        train_loaders.push_back(&train_loader);
+        // std::cout << "decltype(train_loader) is " << type_name<decltype(train_loader)>() << std::endl;
+
 
         auto ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]});
         auto dataset = ds.map(torch::data::transforms::Stack<>());
