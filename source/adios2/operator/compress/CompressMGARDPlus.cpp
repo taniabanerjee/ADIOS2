@@ -93,6 +93,7 @@ struct Options
     size_t batch_max = 0;
     bool use_ddp = 0;
     int training_paradigm = 0;
+    double learning_rate = 1e-3;
 };
 
 constexpr int defaultTimeout = 60;
@@ -140,7 +141,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             auto idx = at::randperm(at::size(t, 0));
             int end = (int) at::size(t,0) * 0.25 * (paradigm-1);
             auto idx_25 = idx.slice(0, 0, end);
-            std::cout << "idx " << idx.sizes() << " " << idx_25.sizes() << std::endl;
+            // std::cout << "idx " << idx.sizes() << " " << idx_25.sizes() << std::endl;
             using namespace torch::indexing;
             fdata = t.index({idx_25, Slice(None), Slice(None)});
         }
@@ -151,7 +152,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             auto idx = at::randperm(at::size(t, 0));
             int end = dims[2];
             auto idx_25 = idx.slice(0, 0, end);
-            std::cout << "idx " << idx.sizes() << " " << idx_25.sizes() << std::endl;
+            // std::cout << "idx " << idx.sizes() << " " << idx_25.sizes() << std::endl;
             using namespace torch::indexing;
             fdata = t.index({idx_25, Slice(None), Slice(None)});
             std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
@@ -181,7 +182,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
                 int end = (int) at::size(combine_idx,0) * 0.25 * (paradigm-7);
                 auto idx_25 = randidx.slice(0, 0, end);
                 auto cidx_25 = combine_idx.index({idx_25});
-                std::cout << "cidx_25 " << cidx_25 << std::endl;
+                // std::cout << "cidx_25 " << cidx_25 << std::endl;
                 fdata = t.index({cidx_25, Slice(None), Slice(None)});
                 std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
             }
@@ -600,6 +601,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     options.batch_size = atoi(get_param(m_Parameters, "batch_size", "128").c_str());
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
     options.training_paradigm = atoi(get_param(m_Parameters, "decomp", "0").c_str());
+    options.learning_rate = atof(get_param(m_Parameters, "lr", "1e-3").c_str());
     int train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
     float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
@@ -762,7 +764,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         const size_t dataset_size = dataset.size().value();
         auto encode_loader =
             torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset), options.batch_size);
-        torch::optim::Adam optimizer(model->parameters(), torch::optim::AdamOptions(1e-3 /*learning rate*/));
+        torch::optim::Adam optimizer(model->parameters(), torch::optim::AdamOptions(options.learning_rate /*learning rate*/));
         // if (my_rank == 0)
         // {
         //     double end = MPI_Wtime();
