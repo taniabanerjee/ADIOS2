@@ -821,7 +821,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                                                                  /* numWorkers */ 0,
                                                                  /* isServer */ my_rank == 0 ? true : false,
                                                                  std::chrono::seconds(defaultTimeout),
-                                                                 /* wait */ false);
+                                                                 /* wait */ true);
                 auto opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
                 std::printf("%d: TCPStore: %s %s\n", my_rank, MASTER_ADDR, MASTER_PORT);
                 pg = std::make_shared<c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
