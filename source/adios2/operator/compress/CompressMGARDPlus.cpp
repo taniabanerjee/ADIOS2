@@ -768,6 +768,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstart("prep");
         // double start = MPI_Wtime();
         // std::cout << "Is Column decomposition " << options.training_paradigm  << std::endl;
+        std::printf("%d: CustomDataset: %d %d %d %d %d\n", my_rank, blockCount[0], blockCount[1], blockCount[2], blockCount[3]);
+        std::printf("%d: training_paradigm: %d\n", my_rank, options.training_paradigm);
         auto train_ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, options.training_paradigm );
         std::vector <torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >> train_datasets;
         auto train_dataset = train_ds.map(torch::data::transforms::Stack<>());
@@ -821,7 +823,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                                                                  std::chrono::seconds(defaultTimeout),
                                                                  /* wait */ false);
                 auto opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
-                std::cout << "TCPStore: " << MASTER_ADDR << " " << MASTER_PORT << std::endl;
+                std::printf("%d: TCPStore: %s %s\n", my_rank, MASTER_ADDR, MASTER_PORT);
                 pg = std::make_shared<c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
 
                 // check if pg is working
