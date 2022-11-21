@@ -768,7 +768,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstart("prep");
         // double start = MPI_Wtime();
         // std::cout << "Is Column decomposition " << options.training_paradigm  << std::endl;
-        std::printf("%d: CustomDataset: %d %d %d %d %d\n", my_rank, blockCount[0], blockCount[1], blockCount[2], blockCount[3]);
+        std::printf("%d: CustomDataset: %d %d %d %d\n", my_rank, blockCount[0], blockCount[1], blockCount[2], blockCount[3]);
         std::printf("%d: training_paradigm: %d\n", my_rank, options.training_paradigm);
         auto train_ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, options.training_paradigm );
         std::vector <torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >> train_datasets;
