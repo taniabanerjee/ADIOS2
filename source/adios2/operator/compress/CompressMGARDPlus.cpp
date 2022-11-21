@@ -836,6 +836,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                 work->wait();
                 auto expected = (comm_size * (comm_size - 1)) / 2;
                 assert(mytensor.item<int>() == expected);
+                std::printf("%d: DDP check done.\n", my_rank);
             }
 
             // The number of iteration should be same for all processes due to sync
