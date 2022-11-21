@@ -162,7 +162,9 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             auto t = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
-            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            // (2022/11) jyc: Conflict with TCPStore?
+            // at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64);
             auto idx = at::randint(8, {dims[2]}, opt);
             const at::Scalar start = 0;
             const at::Scalar last = dims[2]-1;
