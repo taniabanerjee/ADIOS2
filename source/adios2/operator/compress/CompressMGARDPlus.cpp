@@ -845,7 +845,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             MPI_Allreduce(MPI_IN_PLACE, &nbatch, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
             // std::cout << "Loader size: " << dataset_size / options.batch_size + 1 << " " << nbatch << std::endl;
             options.batch_max = nbatch;
-            std::cout << my_rank << ": batch_max: " << batch_max << std::endl;
+            std::cout << my_rank << ": batch_max: " << nbatch << std::endl;
 
             if (use_pretrain)
             {
