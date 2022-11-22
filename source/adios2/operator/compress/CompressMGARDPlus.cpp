@@ -625,6 +625,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
     options.training_paradigm = atoi(get_param(m_Parameters, "decomp", "0").c_str());
     options.learning_rate = atof(get_param(m_Parameters, "lr", "1e-3").c_str());
+    options.batch_log_interval = atoi(get_param(m_Parameters, "batch_log_interval", "1000000000").c_str());
     options.epoch_log_interval = atoi(get_param(m_Parameters, "epoch_log_interval", "20").c_str());
     options.checkpoint_interval = atoi(get_param(m_Parameters, "checkpoint_interval", "200").c_str());
     int train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
