@@ -778,7 +778,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         train_datasets.push_back(train_dataset);
         // std::cout << "decltype(train_dataset) is " << type_name<decltype(train_dataset)>() << std::endl;
         const size_t train_dataset_size = train_dataset.size().value();
-        // std::cout << "Train dataset size " << train_dataset_size << std::endl;
+        std::cout << my_rank << ": Train dataset size " << train_dataset_size << std::endl;
+        std::cout << my_rank << ": Train dataset shape " << train_dataset[0].sizes() << std::endl;
         std::vector <std::unique_ptr<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler>, std::default_delete<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler> > >*> train_loaders;
         auto train_loader =
             torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(train_dataset), options.batch_size);
@@ -860,6 +861,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
             {
                 train(pg, model, *train_loader, optimizer, epoch, dataset_size, options);
+                std::cout << my_rank << ": epoch done: " << epoch << std::endl;
                 if (epoch % options.checkpoint_interval == 0)
                 {
                     save_model(model, options, my_rank);
