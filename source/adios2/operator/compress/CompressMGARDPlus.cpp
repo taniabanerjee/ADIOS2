@@ -779,7 +779,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // std::cout << "decltype(train_dataset) is " << type_name<decltype(train_dataset)>() << std::endl;
         const size_t train_dataset_size = train_dataset.size().value();
         std::cout << my_rank << ": Train dataset size " << train_dataset_size << std::endl;
-        std::cout << my_rank << ": Train dataset shape " << train_dataset[0].sizes() << std::endl;
         std::vector <std::unique_ptr<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler>, std::default_delete<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler> > >*> train_loaders;
         auto train_loader =
             torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(train_dataset), options.batch_size);
