@@ -94,6 +94,7 @@ struct Options
     bool use_ddp = 0;
     int training_paradigm = 0;
     double learning_rate = 1e-3;
+    size_t checkpoint_interval = 200;
 };
 
 constexpr int defaultTimeout = 60;
@@ -161,7 +162,9 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             auto t = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
-            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            // (2022/11) jyc: Conflict with TCPStore?
+            // at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64);
             auto idx = at::randint(8, {dims[2]}, opt);
             const at::Scalar start = 0;
             const at::Scalar last = dims[2]-1;
@@ -188,7 +191,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             }
         }
         assert(fdata.dim() == 3);
-        assert(dims[0] == 1);
+        //assert(dims[0] == 1);
         forg = fdata.detach().clone();
 
         // Z-score normalization
@@ -330,8 +333,8 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
 
         if (batch_idx % options.batch_log_interval == 0)
         {
-            std::printf("Train Batch: %ld [%5ld/%5ld] Loss: %.4g\n", epoch, batch_idx * batch.data.size(0),
-                        dataset_size, loss.template item<double>());
+            std::printf("%d: Train Batch: %ld [%5ld/%5ld] Loss: %.4g\n", my_rank, epoch, batch_idx,
+                        options.batch_max, loss.template item<double>());
         }
 
         if (batch_idx >= options.batch_max)
@@ -348,7 +351,8 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
         MPI_Allreduce(&myLoss, &minLoss, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
         MPI_Allreduce(&myLoss, &maxLoss, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         MPI_Allreduce(&myLoss, &sumLoss, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        std::printf("Train Epoch: %ld Loss: %.4g, Min: %.8g, Max: %.8g, Sum: %.8g, Avg: %.8g\n", epoch, batch_loss / batch_idx, minLoss, maxLoss, sumLoss, float(sumLoss/comm_size));
+        std::printf("%d: Train Epoch: %ld Loss: %.4g, Min: %.8g, Max: %.8g, Sum: %.8g, Avg: %.8g\n", my_rank, epoch,
+                    batch_loss / batch_idx, minLoss, maxLoss, sumLoss, float(sumLoss / comm_size));
         // std::printf("Train Epoch: %ld Loss: %.4g\n", epoch, batch_loss / batch_idx);
     }
 }
@@ -479,6 +483,22 @@ void dump(torch::Tensor ten, char *vname, int rank)
     torch::save(ten, fname);
 }
 
+void save_model(Autoencoder &model, Options &options, int my_rank)
+{
+    int eligible = my_rank;
+
+    if (options.use_ddp)
+        eligible = 0;
+
+    if (my_rank == eligible)
+    {
+        // std::string fname = "xgcf_ae_model_0.pt";
+        std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
+        torch::save(model, fname.c_str());
+        if (my_rank == 0) std::cout << "Save model: " << fname << std::endl;
+    }
+}
+
 double CompressMGARDPlus::binarySearchEB(double lowereb, double uppereb, at::Tensor &orig, at::Tensor &decode,
 at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut, double vx, double vy, double pd_omax_b, double pd_omin_b)
 {
@@ -577,10 +597,13 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     // Disabling this print temporarily to check swamping of output
     std::cout << "rank,size:" << my_rank << " " << comm_size << std::endl;
 
-    std::cout << "Parameters:" << std::endl;
-    for (auto const &x : m_Parameters)
+    if (my_rank == 0)
     {
-        std::cout << "  " << x.first << ": " << x.second << std::endl;
+        std::cout << "Parameters:" << std::endl;
+        for (auto const &x : m_Parameters)
+        {
+            std::cout << "  " << x.first << ": " << x.second << std::endl;
+        }
     }
 #endif
 
@@ -602,6 +625,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
     options.training_paradigm = atoi(get_param(m_Parameters, "decomp", "0").c_str());
     options.learning_rate = atof(get_param(m_Parameters, "lr", "1e-3").c_str());
+    options.batch_log_interval = atoi(get_param(m_Parameters, "batch_log_interval", "1000000000").c_str());
+    options.epoch_log_interval = atoi(get_param(m_Parameters, "epoch_log_interval", "20").c_str());
+    options.checkpoint_interval = atoi(get_param(m_Parameters, "checkpoint_interval", "200").c_str());
     int train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
     float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
@@ -745,13 +771,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstart("prep");
         // double start = MPI_Wtime();
         // std::cout << "Is Column decomposition " << options.training_paradigm  << std::endl;
+        std::printf("%d: CustomDataset: %d %d %d %d\n", my_rank, blockCount[0], blockCount[1], blockCount[2], blockCount[3]);
+        std::printf("%d: training_paradigm: %d\n", my_rank, options.training_paradigm);
         auto train_ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, options.training_paradigm );
         std::vector <torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >> train_datasets;
         auto train_dataset = train_ds.map(torch::data::transforms::Stack<>());
         train_datasets.push_back(train_dataset);
         // std::cout << "decltype(train_dataset) is " << type_name<decltype(train_dataset)>() << std::endl;
         const size_t train_dataset_size = train_dataset.size().value();
-        // std::cout << "Train dataset size " << train_dataset_size << std::endl;
+        std::cout << my_rank << ": Train dataset size " << train_dataset_size << std::endl;
         std::vector <std::unique_ptr<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler>, std::default_delete<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler> > >*> train_loaders;
         auto train_loader =
             torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(train_dataset), options.batch_size);
@@ -796,9 +824,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                                                                  /* numWorkers */ 0,
                                                                  /* isServer */ my_rank == 0 ? true : false,
                                                                  std::chrono::seconds(defaultTimeout),
-                                                                 /* wait */ false);
+                                                                 /* wait */ true);
                 auto opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
-                std::cout << "TCPStore: " << MASTER_ADDR << " " << MASTER_PORT << std::endl;
+                std::printf("%d: TCPStore: %s %s\n", my_rank, MASTER_ADDR, MASTER_PORT);
                 pg = std::make_shared<c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
 
                 // check if pg is working
@@ -812,17 +840,19 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             }
 
             // The number of iteration should be same for all processes due to sync
-            int nbatch = dataset_size / options.batch_size + 1;
+            int nbatch = train_dataset_size / options.batch_size;
             MPI_Allreduce(MPI_IN_PLACE, &nbatch, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
             // std::cout << "Loader size: " << dataset_size / options.batch_size + 1 << " " << nbatch << std::endl;
             options.batch_max = nbatch;
+            // std::cout << my_rank << ": batch_max: " << nbatch << std::endl;
 
             if (use_pretrain)
             {
                 // load a pre-trained model
+                std::string fname = get_param(m_Parameters, "modelfile", "");
                 // const char* mname = get_param(m_Parameters, "ae", "").c_str();
                 // std::string fname = "xgcf_ae_model_0.pt"; // global model
-                std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
+                // std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
                 if (my_rank == 0)
                     std::cout << "Load pre-trained: " << fname.c_str() << std::endl;
                 torch::load(model, fname.c_str());
@@ -831,22 +861,12 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
             {
                 train(pg, model, *train_loader, optimizer, epoch, dataset_size, options);
+                if (epoch % options.checkpoint_interval == 0)
+                {
+                    save_model(model, options, my_rank);
+                }
             }
-
-            int eligible = my_rank;
-            if (options.use_ddp)
-                eligible = 0;
-            if (my_rank == eligible)
-            {
-                // std::string fname = "xgcf_ae_model_0.pt";
-                std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
-                torch::save(model, fname.c_str());
-            }
-
-            // This is just for testing purpose.
-            // We load a pre-trained model anyway to ensure the rest of the computation is stable.
-            // const char *mname = get_param(m_Parameters, "ae", "").c_str();
-            // model = torch::jit::load(mname);
+            save_model(model, options, my_rank);
         }
         else
         {
