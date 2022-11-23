@@ -333,8 +333,8 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
 
         if (batch_idx % options.batch_log_interval == 0)
         {
-            std::printf("%d: Train Batch: %ld [%5ld/%5ld] Loss: %.4g\n", my_rank, epoch, batch_idx * batch.data.size(0),
-                        dataset_size, loss.template item<double>());
+            std::printf("%d: Train Batch: %ld [%5ld/%5ld] Loss: %.4g\n", my_rank, epoch, batch_idx,
+                        options.batch_max, loss.template item<double>());
         }
 
         if (batch_idx >= options.batch_max)
