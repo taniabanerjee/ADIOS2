@@ -837,15 +837,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                 work->wait();
                 auto expected = (comm_size * (comm_size - 1)) / 2;
                 assert(mytensor.item<int>() == expected);
-                std::printf("%d: DDP check done.\n", my_rank);
             }
 
             // The number of iteration should be same for all processes due to sync
-            int nbatch = train_dataset_size / options.batch_size + 1;
+            int nbatch = train_dataset_size / options.batch_size;
             MPI_Allreduce(MPI_IN_PLACE, &nbatch, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
             // std::cout << "Loader size: " << dataset_size / options.batch_size + 1 << " " << nbatch << std::endl;
             options.batch_max = nbatch;
-            std::cout << my_rank << ": batch_max: " << nbatch << std::endl;
+            // std::cout << my_rank << ": batch_max: " << nbatch << std::endl;
 
             if (use_pretrain)
             {
@@ -862,7 +861,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
             {
                 train(pg, model, *train_loader, optimizer, epoch, dataset_size, options);
-                std::cout << my_rank << ": epoch done: " << epoch << std::endl;
                 if (epoch % options.checkpoint_interval == 0)
                 {
                     save_model(model, options, my_rank);
