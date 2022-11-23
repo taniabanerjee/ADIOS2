@@ -841,7 +841,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             }
 
             // The number of iteration should be same for all processes due to sync
-            int nbatch = dataset_size / options.batch_size + 1;
+            int nbatch = train_dataset_size / options.batch_size + 1;
             MPI_Allreduce(MPI_IN_PLACE, &nbatch, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
             // std::cout << "Loader size: " << dataset_size / options.batch_size + 1 << " " << nbatch << std::endl;
             options.batch_max = nbatch;
