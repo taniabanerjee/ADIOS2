@@ -850,10 +850,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             if (use_pretrain)
             {
                 // load a pre-trained model
-                std::string fname = get_param(m_Parameters, "modelfile", "");
-                // const char* mname = get_param(m_Parameters, "ae", "").c_str();
-                // std::string fname = "xgcf_ae_model_0.pt"; // global model
-                // std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
+                std::string fname = "xgcf_ae_model_0.pt"; // global model
+                if (!options.use_ddp)
+                {
+                    fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
+                }
                 if (my_rank == 0)
                     std::cout << "Load pre-trained: " << fname.c_str() << std::endl;
                 torch::load(model, fname.c_str());
