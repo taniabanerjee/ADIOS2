@@ -499,6 +499,19 @@ void save_model(Autoencoder &model, Options &options, int my_rank)
     }
 }
 
+void load_model(Autoencoder &model, Options &options, int my_rank)
+{
+    int eligible = my_rank;
+
+    if (options.use_ddp)
+        eligible = 0;
+
+    std::string fname = "xgcf_ae_model_" + std::to_string(eligible) + ".pt";
+    torch::load(model, fname.c_str());
+    if (my_rank == 0) std::cout << "Load model: " << fname << std::endl;
+}
+
+
 double CompressMGARDPlus::binarySearchEB(double lowereb, double uppereb, at::Tensor &orig, at::Tensor &decode,
 at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut, double vx, double vy, double pd_omax_b, double pd_omin_b, double targetE)
 {
@@ -849,15 +862,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
             if (use_pretrain)
             {
-                // load a pre-trained model
-                std::string fname = "xgcf_ae_model_0.pt"; // global model
-                if (!options.use_ddp)
-                {
-                    fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
-                }
-                if (my_rank == 0)
-                    std::cout << "Load pre-trained: " << fname.c_str() << std::endl;
-                torch::load(model, fname.c_str());
+                load_model(model, options, my_rank);
             }
 
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
@@ -872,11 +877,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         }
         else
         {
-            // (2022/08) jyc: We can restart from the model saved in python.
-            std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
-            // std::string fname = "xgcf_ae_model_0.pt";
-            const char *mname = fname.c_str();
-            torch::load(model, mname);
+            load_model(model, options, my_rank);
         }
         // if (my_rank == 0)
         // {
