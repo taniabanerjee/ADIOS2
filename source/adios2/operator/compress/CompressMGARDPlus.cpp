@@ -500,9 +500,9 @@ void save_model(Autoencoder &model, Options &options, int my_rank)
 }
 
 double CompressMGARDPlus::binarySearchEB(double lowereb, double uppereb, at::Tensor &orig, at::Tensor &decode,
-at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut, double vx, double vy, double pd_omax_b, double pd_omin_b)
+at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, char *bufferOut, double vx, double vy, double pd_omax_b, double pd_omin_b, double targetE)
 {
-    double targetE = 0.09;
+    // double targetE = 0.09;
     double accuracy = 0.001;
     double e = getPDError(uppereb, orig, decode, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
     if (e < targetE) {
@@ -631,10 +631,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     int train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
     float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
+    float target_e = atof(get_param(m_Parameters, "res_thresh", "0.09").c_str());
     int pqbits = atoi(get_param(m_Parameters, "pqbits", "8").c_str());
     double leb = std::stod(get_param(m_Parameters, "leb", "-1"));
     double ueb = std::stod(get_param(m_Parameters, "ueb", "-1"));
-    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << " decomp " << options.training_paradigm << std::endl;
+    std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << " decomp " << options.training_paradigm << std::endl;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
@@ -1086,7 +1087,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstart("find eb");
         if (leb > 0 && ueb > 0) {
           // std::cout << "Rogue images " << rogue_images.sizes() << " Decoded images " << decoded_images.sizes() << " Diff dims " << perm_diff.sizes() << std::endl;
-            m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, rogue_images, decoded_images, perm_diff, {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut+offset, vx, vy, pd_omax_b, pd_omin_b)).c_str();
+            m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, rogue_images, decoded_images, perm_diff, {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut+offset, vx, vy, pd_omax_b, pd_omin_b, target_e)).c_str();
             // std::cout << "came here 1" << std::endl;
         }
         GPTLstop("find eb");
