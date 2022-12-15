@@ -597,6 +597,8 @@ double CompressMGARDPlus::getPDError(double eb, at::Tensor &orig, at::Tensor &de
     return pderror;
 }
 
+static int _isfirst = 1;
+
 size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, const Dims &blockCount,
                                   const DataType type, char *bufferOut)
 {
@@ -605,7 +607,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
 
-    GPTLinitialize();
+    if (_isfirst == 1)
+    {
+        GPTLinitialize();
+        _isfirst = 0;
+    }
 #if 0
     // Disabling this print temporarily to check swamping of output
     std::cout << "rank,size:" << my_rank << " " << comm_size << std::endl;
