@@ -149,7 +149,7 @@ int LagrangeTorch::lambdaIterationsRound(int maxIter, double stepsize, at::Tenso
         }
         catch (const c10::Error& e) {
             std::cout << "Need to compute pseudoinverse for hessians_torch" << std::endl;
-            std::cout << hessians_torch << std::endl;
+            // std::cout << hessians_torch << std::endl;
             lambdas_torch = lambdas_torch - at::squeeze(at::bmm(torch::linalg::pinv(hessians_torch), gradients_torch.reshape({nodes, 4, 1})));
         }
         auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({nodes, 1, 1}) * v_torch;
