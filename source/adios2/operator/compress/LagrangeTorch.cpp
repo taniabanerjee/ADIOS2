@@ -145,7 +145,7 @@ int LagrangeTorch::lambdaIterationsRound(int maxIter, double stepsize, at::Tenso
         hessians_torch.index_put_({Slice(None), 3, 2}, hessians_torch.index({Slice(None), 2, 3}));
         hessians_torch.index_put_({Slice(None), 3, 3}, (recon_torch*at::pow(v4_torch, 2)*at::exp(-K)).sum({1,2}));
         try {
-            lambdas_torch = lambdas_torch - at::squeeze(at::bmm(at::inverse(hessians_torch), gradients_torch.reshape({nodes, 4, 1})));
+            lambdas_torch = lambdas_torch - at::squeeze(stepsize*at::bmm(at::inverse(hessians_torch), gradients_torch.reshape({nodes, 4, 1})));
         }
         catch (const c10::Error& e) {
             std::cout << "Need to compute pseudoinverse for hessians_torch" << std::endl;
@@ -223,6 +223,7 @@ int LagrangeTorch::computeLagrangeParameters(
     double start, end;
     // MPI_Barrier(MPI_COMM_WORLD);
     // start = MPI_Wtime();
+    // std::cout << "came here 4.0" << std::endl;
     GPTLstart("compute lambdas");
     int ii, i, j, k, l, m;
     auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
@@ -283,9 +284,9 @@ int LagrangeTorch::computeLagrangeParameters(
     int converged = lambdaIterationsRound(50, 1.0, lambdas_torch, unconvergedNodeIndex, nodes, recon_data, orig_data, myVolumeTorch, V2_torch, V3_torch, V4_torch, D_torch_sum, U_torch_sum, Tperp_torch, Rpara_torch, DeB, UeB, TperpEB, TparaEB, PDeB);
     // std::cout << "came here 4.2" << std::endl;
     int round = 1;
-    int maxRound = 2;
-    int maxIterArray[maxRound] {150, 200};
-    double stepSizeArray[maxRound] {0.2, 0.1};
+    int maxRound = 3;
+    int maxIterArray[maxRound] {800, 1600};
+    double stepSizeArray[maxRound] {0.1, 0.01};
     while (converged == 0 && round <= maxRound)
     {
         std::cout << "All nodes did not converge on rank " << my_rank << " on round " << round << std::endl;
@@ -388,6 +389,22 @@ int LagrangeTorch::computeLagrangeParameters(
             unconvergedMap[unique_e[ii]] = 1;
         }
     }
+    pda_isnan = at::isneginf(outputs);
+    isPDnan = pda_isnan.any().item<bool>();
+    if (isPDnan) {
+        auto loc = torch::argwhere(pda_isnan == true);
+        auto elems = loc.slice(1, 0, 1).contiguous().to(torch::kCPU);
+        auto unique_elems = at::_unique(elems);
+        auto elem = std::get<0>(unique_elems);
+        std::cout << "n loc " << elem << std::endl;
+        long* unique_e = elem.data_ptr<long>();
+        int numelements = elem.numel();
+        unconverged_images += numelements;
+        for (int ii=0; ii<numelements; ++ii) {
+            outputs.index_put_({unique_e[ii], Slice(None), Slice(None)}, origdatain.index({iphi, unique_e[ii], Slice(None), Slice(None)}));
+            unconvergedMap[unique_e[ii]] = 1;
+        }
+    }
     // Check for any very high values
     auto pos_outputs = at::abs(outputs);
     auto high = torch::argwhere(pos_outputs > 1e25);
@@ -406,11 +423,11 @@ int LagrangeTorch::computeLagrangeParameters(
         }
     }
     size_t vecIndex = 0;
-    unconverged_images += unconvergedNodeIndex.size();
     for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
         auto search = unconvergedMap.find(unconvergedNodeIndex[vecIndex]);
         if (search == unconvergedMap.end()) {
             outputs.index_put_({unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}, origdatain.index({iphi, unconvergedNodeIndex[vecIndex], Slice(None), Slice(None)}));
+            unconverged_images += 1;
         }
     }
     tensors.push_back(outputs);
@@ -423,6 +440,8 @@ int LagrangeTorch::computeLagrangeParameters(
     GPTLstop("compute lambdas");
     at::Tensor combined = at::concat(tensors).reshape({1, nodes, myVxCount, myVyCount});
     compareQoIs(recondatain, combined);
+    // std::vector <double> combinedVec(combined.data_ptr<double>(), combined.data_ptr<double>() + combined.numel());
+    // writeOutput("i_f", combinedVec);
     // std::cout << "came here 4.9" << std::endl;
     if (unconverged_images > 256) {
         std::cout << "Error: number of unconverged images > 256. Please lower allowed error bound." << std::endl;
