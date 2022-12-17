@@ -94,7 +94,6 @@ struct Options
     bool use_ddp = 0;
     int training_paradigm = 0;
     double learning_rate = 1e-3;
-    size_t checkpoint_interval = 200;
 };
 
 constexpr int defaultTimeout = 60;
@@ -127,13 +126,13 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             fdata = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
-            std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+            // std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
         }
         else if (paradigm == 1) {
             fdata = torch::from_blob((void *)data, {1, dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
-            std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+            // std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
         }
         else if (paradigm == 2 || paradigm == 3 || paradigm == 4) {
             auto t = torch::from_blob((void *)data, {1, dims[1], dims[2], dims[3]}, torch::kFloat64)
@@ -156,15 +155,13 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             // std::cout << "idx " << idx.sizes() << " " << idx_25.sizes() << std::endl;
             using namespace torch::indexing;
             fdata = t.index({idx_25, Slice(None), Slice(None)});
-            std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+            // std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
         }
         else if (paradigm == 7 || paradigm == 8 || paradigm == 9 || paradigm == 10) {
             auto t = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
-            // (2022/11) jyc: Conflict with TCPStore?
-            // at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
-            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64);
+            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
             auto idx = at::randint(8, {dims[2]}, opt);
             const at::Scalar start = 0;
             const at::Scalar last = dims[2]-1;
@@ -178,7 +175,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             using namespace torch::indexing;
             if (paradigm == 7) {
                 fdata = t.index({combine_idx, Slice(None), Slice(None)});
-                std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+                // std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
             }
             else {
                 auto randidx = at::randperm(at::size(combine_idx, 0));
@@ -187,11 +184,11 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
                 auto cidx_25 = combine_idx.index({idx_25});
                 // std::cout << "cidx_25 " << cidx_25 << std::endl;
                 fdata = t.index({cidx_25, Slice(None), Slice(None)});
-                std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+                // std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
             }
         }
         assert(fdata.dim() == 3);
-        //assert(dims[0] == 1);
+        assert(dims[0] == 1);
         forg = fdata.detach().clone();
 
         // Z-score normalization
@@ -333,8 +330,8 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
 
         if (batch_idx % options.batch_log_interval == 0)
         {
-            std::printf("%d: Train Batch: %ld [%5ld/%5ld] Loss: %.4g\n", my_rank, epoch, batch_idx,
-                        options.batch_max, loss.template item<double>());
+            std::printf("Train Batch: %ld [%5ld/%5ld] Loss: %.4g\n", epoch, batch_idx * batch.data.size(0),
+                        dataset_size, loss.template item<double>());
         }
 
         if (batch_idx >= options.batch_max)
@@ -351,8 +348,7 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
         MPI_Allreduce(&myLoss, &minLoss, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
         MPI_Allreduce(&myLoss, &maxLoss, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         MPI_Allreduce(&myLoss, &sumLoss, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        std::printf("%d: Train Epoch: %ld Loss: %.4g, Min: %.8g, Max: %.8g, Sum: %.8g, Avg: %.8g\n", my_rank, epoch,
-                    batch_loss / batch_idx, minLoss, maxLoss, sumLoss, float(sumLoss / comm_size));
+        std::printf("Train Epoch: %ld Loss: %.4g, Min: %.8g, Max: %.8g, Sum: %.8g, Avg: %.8g\n", epoch, batch_loss / batch_idx, minLoss, maxLoss, sumLoss, float(sumLoss/comm_size));
         // std::printf("Train Epoch: %ld Loss: %.4g\n", epoch, batch_loss / batch_idx);
     }
 }
@@ -616,13 +612,10 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     // Disabling this print temporarily to check swamping of output
     std::cout << "rank,size:" << my_rank << " " << comm_size << std::endl;
 
-    if (my_rank == 0)
+    std::cout << "Parameters:" << std::endl;
+    for (auto const &x : m_Parameters)
     {
-        std::cout << "Parameters:" << std::endl;
-        for (auto const &x : m_Parameters)
-        {
-            std::cout << "  " << x.first << ": " << x.second << std::endl;
-        }
+        std::cout << "  " << x.first << ": " << x.second << std::endl;
     }
 #endif
 
@@ -644,9 +637,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
     options.training_paradigm = atoi(get_param(m_Parameters, "decomp", "0").c_str());
     options.learning_rate = atof(get_param(m_Parameters, "lr", "1e-3").c_str());
-    options.batch_log_interval = atoi(get_param(m_Parameters, "batch_log_interval", "1000000000").c_str());
-    options.epoch_log_interval = atoi(get_param(m_Parameters, "epoch_log_interval", "20").c_str());
-    options.checkpoint_interval = atoi(get_param(m_Parameters, "checkpoint_interval", "200").c_str());
     int train_yes = atoi(get_param(m_Parameters, "train", "1").c_str());
     int use_pretrain = atoi(get_param(m_Parameters, "use_pretrain", "0").c_str());
     float ae_thresh = atof(get_param(m_Parameters, "ae_thresh", "0.001").c_str());
@@ -654,7 +644,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     int pqbits = atoi(get_param(m_Parameters, "pqbits", "8").c_str());
     double leb = std::stod(get_param(m_Parameters, "leb", "-1"));
     double ueb = std::stod(get_param(m_Parameters, "ueb", "-1"));
-    std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << " decomp " << options.training_paradigm << std::endl;
+    // std::cout << "Train " << train_yes << " Pre-train " << use_pretrain << " AE threshold " << ae_thresh << " leb " << leb << " ueb " << ueb << " decomp " << options.training_paradigm << std::endl;
 
     MakeCommonHeader(bufferOut, bufferOutOffset, bufferVersion);
     PutParameter(bufferOut, bufferOutOffset, optim.getSpecies());
@@ -791,15 +781,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstart("prep");
         // double start = MPI_Wtime();
         // std::cout << "Is Column decomposition " << options.training_paradigm  << std::endl;
-        std::printf("%d: CustomDataset: %d %d %d %d\n", my_rank, blockCount[0], blockCount[1], blockCount[2], blockCount[3]);
-        std::printf("%d: training_paradigm: %d\n", my_rank, options.training_paradigm);
+        // std::printf("%d: CustomDataset: %d %d %d %d\n", my_rank, blockCount[0], blockCount[1], blockCount[2], blockCount[3]);
+        // std::printf("%d: training_paradigm: %d\n", my_rank, options.training_paradigm);
         auto train_ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, options.training_paradigm );
         std::vector <torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >> train_datasets;
         auto train_dataset = train_ds.map(torch::data::transforms::Stack<>());
         train_datasets.push_back(train_dataset);
         // std::cout << "decltype(train_dataset) is " << type_name<decltype(train_dataset)>() << std::endl;
         const size_t train_dataset_size = train_dataset.size().value();
-        std::cout << my_rank << ": Train dataset size " << train_dataset_size << std::endl;
+        // std::cout << "Train dataset size " << train_dataset_size << std::endl;
         std::vector <std::unique_ptr<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler>, std::default_delete<torch::data::StatelessDataLoader<torch::data::datasets::MapDataset<adios2::core::compress::CustomDataset, torch::data::transforms::Stack<torch::data::Example<at::Tensor, at::Tensor> > >, torch::data::samplers::RandomSampler> > >*> train_loaders;
         auto train_loader =
             torch::data::make_data_loader<torch::data::samplers::RandomSampler>(std::move(train_dataset), options.batch_size);
@@ -844,9 +834,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                                                                  /* numWorkers */ 0,
                                                                  /* isServer */ my_rank == 0 ? true : false,
                                                                  std::chrono::seconds(defaultTimeout),
-                                                                 /* wait */ true);
+                                                                 /* wait */ false);
                 auto opts = c10::make_intrusive<c10d::ProcessGroupNCCL::Options>();
-                std::printf("%d: TCPStore: %s %s\n", my_rank, MASTER_ADDR, MASTER_PORT);
+                std::cout << "TCPStore: " << MASTER_ADDR << " " << MASTER_PORT << std::endl;
                 pg = std::make_shared<c10d::ProcessGroupNCCL>(store, my_rank, comm_size, std::move(opts));
 
                 // check if pg is working
@@ -860,11 +850,10 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             }
 
             // The number of iteration should be same for all processes due to sync
-            int nbatch = train_dataset_size / options.batch_size;
+            int nbatch = dataset_size / options.batch_size + 1;
             MPI_Allreduce(MPI_IN_PLACE, &nbatch, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
             // std::cout << "Loader size: " << dataset_size / options.batch_size + 1 << " " << nbatch << std::endl;
             options.batch_max = nbatch;
-            // std::cout << my_rank << ": batch_max: " << nbatch << std::endl;
 
             if (use_pretrain)
             {
@@ -874,12 +863,22 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             for (size_t epoch = 1; epoch <= options.iterations; ++epoch)
             {
                 train(pg, model, *train_loader, optimizer, epoch, dataset_size, options);
-                if (epoch % options.checkpoint_interval == 0)
-                {
-                    save_model(model, options, my_rank);
-                }
             }
-            save_model(model, options, my_rank);
+
+            int eligible = my_rank;
+            if (options.use_ddp)
+                eligible = 0;
+            if (my_rank == eligible)
+            {
+                // std::string fname = "xgcf_ae_model_0.pt";
+                std::string fname = "xgcf_ae_model_" + std::to_string(my_rank) + ".pt";
+                torch::save(model, fname.c_str());
+            }
+
+            // This is just for testing purpose.
+            // We load a pre-trained model anyway to ensure the rest of the computation is stable.
+            // const char *mname = get_param(m_Parameters, "ae", "").c_str();
+            // model = torch::jit::load(mname);
         }
         else
         {
@@ -1069,7 +1068,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
             }
             using namespace torch::indexing;
             auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
-            // std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
+            std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
             // std::endl; if (my_rank == 0) { std::cout << "nrmse indexes " << nrmse_index << std::endl; std::cout <<
             // "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl; std::cout << "diff_reduced sizes " <<
             // diff_reduced.sizes() << std::endl;
@@ -1101,7 +1100,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         if (resNodes > 0) {
         GPTLstart("find eb");
         if (leb > 0 && ueb > 0) {
-          // std::cout << "Rogue images " << rogue_images.sizes() << " Decoded images " << decoded_images.sizes() << " Diff dims " << perm_diff.sizes() << std::endl;
+            // std::cout << "Rogue images " << rogue_images.sizes() << " Decoded images " << decoded_images.sizes() << " Diff dims " << perm_diff.sizes() << std::endl;
             m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, rogue_images, decoded_images, perm_diff, {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut+offset, vx, vy, pd_omax_b, pd_omin_b, target_e)).c_str();
             // std::cout << "came here 1" << std::endl;
         }
@@ -1112,7 +1111,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         size_t mgardBufferSize =
             // mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, bC, type, bufferOut + offset);
             mgard.Operate(reinterpret_cast<char *>(diff_data.data()), {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut + offset);
-        // std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
+        std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
         // std::cout << "came here 2" << std::endl;
         std::ofstream myfile;
         std::string fname = "mgard-size-iter_" + std::to_string(my_rank) + ".txt";
@@ -1346,7 +1345,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         pd_min_a = pd_min_b = ds.forg.min().item().to<double>();
         MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
         MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-        auto nrmse = at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(33*37))), at::Scalar(pd_omax_b - pd_omin_b));
+        auto nrmse = at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(optim.getVxCount() * optim.getVyCount()))), at::Scalar(pd_omax_b - pd_omin_b));
         auto nrmse_index = at::where((nrmse > ae_thresh));
         int resNodes = nrmse_index[0].sizes()[0];
         at::Tensor perm_diff;

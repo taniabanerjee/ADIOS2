@@ -1477,6 +1477,19 @@ void LagrangeOptimizer::readF0Params(const std::string meshFile)
     engine->Close();
 }
 
+void LagrangeOptimizer::writeOutput(const char* varname, std::vector <double> &tensor)
+{
+    // Write ADIOS2 files from here
+    adios2::core::ADIOS adios("C++");
+    auto &io = adios.DeclareIO("SubIO");
+    auto *engine = &io.Open("out.bp", adios2::Mode::Write);
+
+    // Get grid_vol
+    auto var = io.InquireVariable<double>(varname);
+    engine->Put(*var, tensor.data());
+    engine->Close();
+}
+
 void LagrangeOptimizer::setVolume(std::vector <double> &volume)
 {
     int vvsize = myF0Nvp[0]*2 + 1;

@@ -17,6 +17,7 @@ class LagrangeOptimizer
         void computeParamsAndQoIs(const std::string meshFile,
                 adios2::Dims blockStart, adios2::Dims blockCount,
                 const double* dataIn);
+        void writeOutput(const char* varname, std::vector <double> &tensor);
         // Compute Lagrange Parameters
         void computeLagrangeParameters(const double* reconstructedData,
                 adios2::Dims blockCount);
