@@ -1089,13 +1089,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         offset += sizeof(size_t);
         // std::cout << "residual data is ready" << std::endl;
         GPTLstop("residual");
-        // std::cout << "residual data is ready" << std::endl;
-        MPI_Barrier(MPI_COMM_WORLD);
-        if (my_rank == 0)
-        {
-            double end = MPI_Wtime();
-            printf("Time taken for residual: %f\n", (end - start));
-        }
 
         if (resNodes > 0) {
         GPTLstart("find eb");
@@ -1119,12 +1112,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         myfile << my_rank << " - mgard size:" << mgardBufferSize << " :num images " << bC[2] << std::endl;
         myfile.close();
         GPTLstop("mgard");
-        MPI_Barrier(MPI_COMM_WORLD);
-        if (my_rank == 0)
-        {
-            double end = MPI_Wtime();
-            printf("Time taken for mgard: %f\n", (end - start));
-        }
 
         GPTLstart("mgard-decomp");
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
@@ -1404,11 +1391,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstop("residual");
 
         if (resNodes > 0) {
-        GPTLstart("find eb");
-        if (leb > 0 && ueb > 0) {
-            m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, perm_diff, blockStart, bC, type, bufferOut+offset)).c_str();
-        }
-        GPTLstop("find eb");
+        // std::cout << "block Count orig " << blockCount << std::endl;
+        // std::cout << "block Count reduced " << bC << std::endl;
+        // apply MGARD operate.
         GPTLstart("mgard");
         // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
         CompressMGARD mgard(m_Parameters);
