@@ -43,31 +43,32 @@ VariableBase::VariableBase(const std::string &name, const DataType type,
     InitShapeType();
 }
 
-bool VariableBase::IsCUDAPointer(const void *ptr)
-{
-    if (m_MemorySpace == MemorySpace::CUDA)
-        return true;
-    if (m_MemorySpace == MemorySpace::Host)
-        return false;
-
-#ifdef ADIOS2_HAVE_CUDA
-    cudaPointerAttributes attr;
-    cudaPointerGetAttributes(&attr, ptr);
-    return attr.type == cudaMemoryTypeDevice;
-#else
-    return false;
-#endif
-}
-
 size_t VariableBase::TotalSize() const noexcept
 {
     return helper::GetTotalSize(m_Count);
 }
 
-void VariableBase::SetMemorySpace(const MemorySpace mem)
+MemorySpace VariableBase::GetMemorySpace(const void *ptr)
 {
-    m_MemorySpace = mem;
+#ifdef ADIOS2_HAVE_GPU_SUPPORT
+    if (m_MemSpace != MemorySpace::Detect)
+    {
+        return m_MemSpace;
+    }
+#endif
+
+#ifdef ADIOS2_HAVE_CUDA
+    cudaPointerAttributes attr;
+    cudaPointerGetAttributes(&attr, ptr);
+    if (attr.type == cudaMemoryTypeDevice)
+    {
+        return MemorySpace::CUDA;
+    }
+#endif
+    return MemorySpace::Host;
 }
+
+void VariableBase::SetMemorySpace(const MemorySpace mem) { m_MemSpace = mem; }
 
 void VariableBase::SetShape(const adios2::Dims &shape)
 {
@@ -387,7 +388,7 @@ VariableBase::GetAttributesInfo(core::IO &io, const std::string separator,
         const std::string key =
             fullNameKeys ? attributeName : attributeName.substr(prefix.size());
 
-        if (itAttribute->second->m_Type == DataType::Compound)
+        if (itAttribute->second->m_Type == DataType::Struct)
         {
         }
         else
@@ -607,21 +608,49 @@ void VariableBase::CheckDimensionsCommon(const std::string hint) const
     }
 }
 
-Dims VariableBase::GetShape(const size_t step)
+void VariableBase::CheckRandomAccess(const size_t step,
+                                     const std::string hint) const
 {
-    if (m_Type == DataType::Compound)
+    if (!m_FirstStreamingStep && step != DefaultSizeT)
     {
-        // not supported
+        helper::Throw<std::invalid_argument>(
+            "Core", "Variable", "CheckRandomAccess",
+            "can't pass a step input in "
+            "streaming (BeginStep/EndStep)"
+            "mode for variable " +
+                m_Name + ", in call to Variable<T>::" + hint);
     }
-#define declare_template_instantiation(T)                                      \
-    else if (m_Type == helper::GetDataType<T>())                               \
-    {                                                                          \
-        Variable<T> *variable = dynamic_cast<Variable<T> *>(this);             \
-        m_Shape = variable->Shape(step);                                       \
-    }
-    ADIOS2_FOREACH_STDTYPE_1ARG(declare_template_instantiation)
-#undef declare_template_instantiation
+}
 
+Dims VariableBase::Shape(const size_t step) const
+{
+    CheckRandomAccess(step, "Shape");
+
+    if (m_Engine)
+    {
+        // see if the engine implements Variable Shape inquiry
+        auto ShapePtr = m_Engine->VarShape(*this, step);
+        if (ShapePtr)
+        {
+            return *ShapePtr;
+        }
+    }
+    if (m_FirstStreamingStep && step == adios2::EngineCurrentStep)
+    {
+        return m_Shape;
+    }
+
+    if (m_Engine != nullptr && m_ShapeID == ShapeID::GlobalArray)
+    {
+        const size_t stepInput =
+            !m_FirstStreamingStep ? m_Engine->CurrentStep() : step;
+
+        const auto it = m_AvailableShapes.find(stepInput + 1);
+        if (it != m_AvailableShapes.end())
+        {
+            return it->second;
+        }
+    }
     return m_Shape;
 }
 

@@ -114,12 +114,12 @@ struct CMtrans_services_s CMstatic_trans_svcs = {INT_CMmalloc, INT_CMrealloc, IN
 static void INT_CMControlList_close(CMControlList cl, CManager cm);
 static int CMcontrol_list_poll(CMControlList cl);
 int CMdo_non_CM_handler(CMConnection conn, int header,
-			      char *buffer, int length);
+			      char *buffer, size_t length);
 void CMdo_performance_response(CMConnection conn, long length,
 					    int func, int byte_swap,
 					    char *buffer);
 
-void CMhttp_handler(CMConnection conn, char* buffer, int length);
+void CMhttp_handler(CMConnection conn, char* buffer, size_t length);
 static void CM_init_select(CMControlList cl, CManager cm);
 
 static void cond_wait_CM_lock(CManager cm, void *vcond, char *file, int line)
@@ -1746,7 +1746,7 @@ timeout_conn(CManager cm, void *client_data)
  }
 
  extern CMbuffer
- cm_create_transport_buffer(CManager cm, void *buffer, int length)
+ cm_create_transport_buffer(CManager cm, void *buffer, ssize_t length)
  {
      CMbuffer tmp;
      (void)cm;
@@ -1763,7 +1763,7 @@ timeout_conn(CManager cm, void *client_data)
  }
 
  extern CMbuffer
- cm_create_transport_and_link_buffer(CManager cm, void *buffer, int length)
+ cm_create_transport_and_link_buffer(CManager cm, void *buffer, ssize_t length)
  {
      CMbuffer tmp;
      tmp = INT_CMmalloc(sizeof(*tmp));
@@ -1779,12 +1779,12 @@ timeout_conn(CManager cm, void *client_data)
 
  /* alloc temporary buffer for CM use */
  extern CMbuffer
- cm_get_data_buf(CManager cm, int length)  
+ cm_get_data_buf(CManager cm, ssize_t length)  
  {
      int buffer_count = 0;
      CMbuffer tmp = cm->cm_buffer_list;
 
-     CMtrace_out(cm, CMBufferVerbose, "cm_get_data_buf called with len %d\n",
+     CMtrace_out(cm, CMBufferVerbose, "cm_get_data_buf called with len %zu\n",
 		 length);
      while (tmp != NULL) {
 	 CMtrace_out(cm, CMBufferVerbose, "  buffer %d %p, size is %ld, data %p, ref_count %d\n",
@@ -1808,7 +1808,7 @@ timeout_conn(CManager cm, void *client_data)
      while (tmp != NULL) {
 	 if (tmp->ref_count <= 0) {
 	     if ((tmp->size >= length) && ((tmp->size/10) < length)) {
-		 CMtrace_out(cm, CMBufferVerbose, "cm_get_data_buf called len %d, return existing %p, next %p, count %d\n",
+		 CMtrace_out(cm, CMBufferVerbose, "cm_get_data_buf called len %zu, return existing %p, next %p, count %d\n",
 			     length, tmp, tmp->next, buffer_count);
 		 tmp->ref_count = 1;
 		 return tmp;
@@ -1856,14 +1856,14 @@ timeout_conn(CManager cm, void *client_data)
      tmp->ref_count = 1;
      tmp->next = cm->cm_buffer_list;
      cm->cm_buffer_list = tmp;
-     CMtrace_out(cm, CMBufferVerbose, "cm_get_data_buf create new len %d, return %p, count %d\n",
+     CMtrace_out(cm, CMBufferVerbose, "cm_get_data_buf create new len %zu, return %p, count %d\n",
 		 length, tmp, buffer_count);
      return tmp;
  }
 
  /* realloc temporary buffer for CM use */
  extern CMbuffer
- cm_extend_data_buf(CManager cm, CMbuffer tmp, int length)  
+ cm_extend_data_buf(CManager cm, CMbuffer tmp, size_t length)  
  {
      (void)cm;
      if (tmp->size < length) {
@@ -2004,9 +2004,9 @@ timeout_conn(CManager cm, void *client_data)
      static int use_blocking_reads = 1;
      int first_four = 0;
      char *tmp_message_buffer = NULL;
-     int data_length;
+     ssize_t data_length;
      CMbuffer message_buffer;
-     long buffer_full_point, buffer_data_end;
+     size_t buffer_full_point, buffer_data_end;
 
      /* called from the transport, grab the locks */
      if (first) {
@@ -2086,7 +2086,7 @@ timeout_conn(CManager cm, void *client_data)
 	  *   buffer_data_end is how much data is already in the buffer
 	  *   buffer_full_point is how much data we think we need for the message to be complete
 	  */
-	     int read_len = buffer_full_point - buffer_data_end;
+	     size_t read_len = buffer_full_point - buffer_data_end;
 	     char *read_target_buf = tmp_message_buffer + buffer_data_end;
 	     /* 
 	      * non blocking is True only if :
@@ -2094,7 +2094,7 @@ timeout_conn(CManager cm, void *client_data)
 	      *    - or use_blocking_reads is false and use_read_thread is false
 	      */
 	     int non_blocking = first_four || !use_blocking_reads;
-	     int actual;
+	     ssize_t actual;
 	     if (conn->use_read_thread) {
 		 non_blocking = 0;
 		 CManager_unlock(cm);
@@ -2111,7 +2111,7 @@ timeout_conn(CManager cm, void *client_data)
 	     }
 	     if (actual == -1) {
 		 CMtrace_out(cm, CMLowLevelVerbose, 
-			     "CMdata read failed, actual %d, failing connection %p\n", actual, conn);
+			     "CMdata read failed, actual %zu, failing connection %p\n", actual, conn);
 		 CMtrace_out(conn->cm, CMFreeVerbose, "Calling connection failed read_len with dereference %p\n", conn);
 		 INT_CMConnection_failed(conn);
 		 return;
@@ -2120,7 +2120,7 @@ timeout_conn(CManager cm, void *client_data)
 	     if (actual < read_len) {
 		 /* partial read, we know we don't have enough data now, roll on */
 		 CMtrace_out(cm, CMLowLevelVerbose, 
-			     "CMdata read partial, got %d\n", actual);
+			     "CMdata read partial, got %zu\n", actual);
 		 /* save state and return */
 		 conn->message_buffer = message_buffer;
 		 conn->buffer_full_point = buffer_full_point;
@@ -2129,7 +2129,7 @@ timeout_conn(CManager cm, void *client_data)
 	     }
 	     data_length = buffer_data_end;
 	 } else {
-	     int offset;
+	     ssize_t offset;
 	     message_buffer = trans->read_block_func(&CMstatic_trans_svcs, 
 						     conn->transport_data,
 						     &data_length, &offset);
@@ -2140,13 +2140,13 @@ timeout_conn(CManager cm, void *client_data)
 	     }
 	     message_buffer->ref_count++;
 	     CMtrace_out(cm, CMBufferVerbose, "Received buffer %p from transport read_block_func, increment ref count, now is %d\n", message_buffer, message_buffer->ref_count);
-	     tmp_message_buffer = message_buffer->buffer + offset;
+	     tmp_message_buffer = (char *)message_buffer->buffer + offset;
 	     buffer_data_end = data_length;
 	     cm->abort_read_ahead = 1;
 
 	     if (data_length == -1) {
 		 CMtrace_out(cm, CMLowLevelVerbose, 
-			     "CMdata read failed, actual %d, failing connection %p\n", data_length, conn);
+			     "CMdata read failed, actual %zu, failing connection %p\n", data_length, conn);
 		 CMtrace_out(conn->cm, CMFreeVerbose, "Calling connection failed with dereference, data length %p\n", conn);
 		 INT_CMConnection_failed(conn);
 		 return;
@@ -2160,7 +2160,7 @@ timeout_conn(CManager cm, void *client_data)
 		 INT_CMConnection_failed(conn);
 		 return;
 	     }
-	     CMtrace_out(cm, CMLowLevelVerbose, "CMdata read_block returned %d bytes of data\n", data_length);
+	     CMtrace_out(cm, CMLowLevelVerbose, "CMdata read_block returned %zu bytes of data\n", data_length);
 	 }
 	 if (cm_postread_hook) {
 	     cm_postread_hook(data_length, tmp_message_buffer);
@@ -2284,6 +2284,11 @@ timeout_conn(CManager cm, void *client_data)
 	 byte_swap = 1;
      case 0x004d4400:  /* CMD\0 */
 	 break;
+     case 0x00444d01: /* \1DMC reversed byte order long msg*/
+	 byte_swap = 1;
+     case 0x004d4401:  /* CMD\1 long msg*/
+	 short_length = 0;
+	 break;
      case 0x00414d00: /* \0AMC reversed byte order */
 	 byte_swap = 1;
      case 0x004d4100:  /* CMA\0 */
@@ -2356,6 +2361,9 @@ timeout_conn(CManager cm, void *client_data)
 	     skip = 4;
 	 } else {
 	     header_len = 16;
+	 }
+	 if (!short_length) {
+	     header_len += 4; /* extra data length bytes */
 	 }
      } else {
 	 if (short_length) {
@@ -2446,13 +2454,25 @@ timeout_conn(CManager cm, void *client_data)
 	 data_length -= 8;  /* subtract off header size */
      }
      if (event_msg) {
-	 if (byte_swap) {
-	     ((char*)&stone_id)[0] = base[11];
-	     ((char*)&stone_id)[1] = base[10];
-	     ((char*)&stone_id)[2] = base[9];
-	     ((char*)&stone_id)[3] = base[8];
-	 } else {
-	     stone_id = ((int *) base)[2];
+	 char *stone_base = base;
+	 if (header_len == 16) {
+	     if (byte_swap) {
+		 ((char*)&stone_id)[0] = stone_base[11];
+		 ((char*)&stone_id)[1] = stone_base[10];
+		 ((char*)&stone_id)[2] = stone_base[9];
+		 ((char*)&stone_id)[3] = stone_base[8];
+	     } else {
+		 stone_id = ((int *) stone_base)[2];
+	     }
+	 } else if (header_len == 20) {
+	     if (byte_swap) {
+		 ((char*)&stone_id)[0] = stone_base[15];
+		 ((char*)&stone_id)[1] = stone_base[14];
+		 ((char*)&stone_id)[2] = stone_base[13];
+		 ((char*)&stone_id)[3] = stone_base[12];
+	     } else {
+		 stone_id = ((int *) stone_base)[3];
+	     }
 	 }
      }
 
@@ -2521,7 +2541,7 @@ timeout_conn(CManager cm, void *client_data)
 
 	 if (cm_buffer == NULL) {
 	     local = fill_cmbuffer(cm, buffer, length);
-	     data_buffer = (data_buffer - buffer) + local->buffer;
+	     data_buffer = (data_buffer - buffer) + (char*)local->buffer;
 	     buffer = local->buffer;
 	     cm_buffer = local;
 	 }
@@ -2698,28 +2718,33 @@ timeout_conn(CManager cm, void *client_data)
      cm_return_data_buf(cm, buf);
  }
 
- void
- INT_CMregister_handler(CMFormat format, CMHandlerFunc handler,
-			void *client_data)
- {
-     CManager cm = format->cm;
-     int i;
-     format->handler = handler;
-     format->client_data = client_data;
+void
+INT_CMregister_handler(CMFormat format, CMHandlerFunc handler,
+		       void *client_data)
+{
+    CManager cm = format->cm;
+    int i;
+    format->handler = handler;
+    format->client_data = client_data;
 
-     for (i=0; i< cm->in_format_count; i++) {
-	 if (cm->in_formats[i].format == format->ffsformat) {
-	     if (!cm->in_formats[i].handler) {
-		 cm->in_formats[i].handler = handler;
-		 cm->in_formats[i].client_data = client_data;
-	     } else if ((cm->in_formats[i].handler != handler) ||
-			(cm->in_formats[i].client_data != client_data)) {
-		 fprintf(stderr, "Warning, CMregister_handler() called multiple times for the same format with different handler or client_data\n");
-		 fprintf(stderr, "Repeated calls will be ignored\n");
-	     }
-	 }
-     }
- }
+    for (i=0; i< cm->in_format_count; i++) {
+	if (strcmp(name_of_FMformat(FMFormat_of_original(cm->in_formats[i].format)), format->format_name) == 0) {
+	    if (format->registration_pending) {
+	        CMcomplete_format_registration(format, 1);
+	    }
+	    if (cm->in_formats[i].format == format->ffsformat) {
+	        if (!cm->in_formats[i].handler) {
+		    cm->in_formats[i].handler = handler;
+		    cm->in_formats[i].client_data = client_data;
+		} else if ((cm->in_formats[i].handler != handler) ||
+			   (cm->in_formats[i].client_data != client_data)) {
+		    fprintf(stderr, "Warning, CMregister_handler() called multiple times for the same format with different handler or client_data\n");
+		    fprintf(stderr, "Repeated calls will be ignored\n");
+		}
+	    }
+	}
+    }
+}
 
 extern void
 INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
@@ -2741,7 +2766,7 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
 		 conn->queued_data.rem_attr_len);
      if (conn->queued_data.rem_header_len != 0) {
 	 struct FFSEncodeVec tmp_vec[1];
-	 int actual;
+	 ssize_t actual;
 	 tmp_vec[0].iov_base = conn->queued_data.rem_header;
 	 tmp_vec[0].iov_len = conn->queued_data.rem_header_len;
 	 actual = trans->NBwritev_func(&CMstatic_trans_svcs,
@@ -2763,7 +2788,7 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
      }
      if (conn->queued_data.rem_attr_len != 0) {
 	 struct FFSEncodeVec tmp_vec[1];
-	 int actual;
+	 ssize_t actual;
 	 tmp_vec[0].iov_base = conn->queued_data.rem_attr_base;
 	 tmp_vec[0].iov_len = conn->queued_data.rem_attr_len;
 	 actual = trans->NBwritev_func(&CMstatic_trans_svcs,
@@ -2782,10 +2807,10 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
 	 }
      }
      if (conn->queued_data.vector_data) {
-	 int vec_count = 0;
-	 int length = 0;
+	 size_t vec_count = 0;
+	 size_t length = 0;
 	 FFSEncodeVector vec = conn->queued_data.vector_data;
-	 int actual = 0;
+	 ssize_t actual = 0;
 
 	 while(vec[vec_count].iov_base != NULL) {
 	     length += vec[vec_count].iov_len;
@@ -2800,7 +2825,7 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
 	 }
 	 if (actual < length) {
 	     int i = 0;
-	     CMtrace_out(conn->cm, CMLowLevelVerbose, "Continued partial pending write, %d bytes sent\n", actual);
+	     CMtrace_out(conn->cm, CMLowLevelVerbose, "Continued partial pending write, %zu bytes sent\n", actual);
 	     while (actual > vec[i].iov_len) {
 		 actual -= vec[i].iov_len;
 		 i++;
@@ -2809,7 +2834,7 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
 	     vec[i].iov_len -= actual;
 	     vec[i].iov_base = (char*)vec[i].iov_base + actual;
 	     conn->queued_data.vector_data = &vec[i];
-	     CMtrace_out(conn->cm, CMLowLevelVerbose, "CMWriteQueuedData, conn %lx, %d remaining data vectors\n", 
+	     CMtrace_out(conn->cm, CMLowLevelVerbose, "CMWriteQueuedData, conn %lx, %zu remaining data vectors\n", 
 			 (long)conn, vec_count);
 	     return;
 	 }
@@ -2881,12 +2906,12 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
  static void
  queue_remaining_write(CMConnection conn, FFSEncodeVector tmp_vec, 
 		       FFSEncodeVector pbio_vec, int vec_count,
-		       attr_list attrs, int actual_bytes_written,
+		       attr_list attrs, size_t actual_bytes_written,
 		       int attrs_present)
  {
      int i = 0, j = 0;
-     int total_bytes = 0;
-     int remaining_bytes = 0;
+     size_t total_bytes = 0;
+     size_t remaining_bytes = 0;
 
      for (i=0; i < vec_count; i++) {
 	 total_bytes += tmp_vec[i].iov_len;
@@ -2960,13 +2985,13 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
      if (pbio_vec == NULL) {
 	 /* DATA NOT FFS, don't do optimized copying */
 	 /* Errr, something smarter here */
-	 int data_length = remaining_bytes - conn->queued_data.rem_attr_len - conn->queued_data.rem_header_len;
-	 int length = data_length + (sizeof(tmp_vec[0])*2);
+	 size_t data_length = remaining_bytes - conn->queued_data.rem_attr_len - conn->queued_data.rem_header_len;
+	 size_t length = data_length + (sizeof(tmp_vec[0])*2);
 	 char *ptr;
 	 CMbuffer buf = cm_get_data_buf(conn->cm, length);
 	 FFSEncodeVector vec = buf->buffer;
 	 vec[0].iov_len = data_length;
-	 vec[0].iov_base = buf->buffer + (sizeof(tmp_vec[0])*2);
+	 vec[0].iov_base = ((char*)buf->buffer) + (sizeof(tmp_vec[0])*2);
 	 vec[1].iov_len = 0;
 	 vec[1].iov_base = NULL;
 	 conn->queued_data.buffer_to_free = buf;
@@ -3100,11 +3125,11 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
 			long vec_count, long byte_count, attr_list attrs, int data_vec_stack,
 			CMcompletion_notify_func notify_func, void *notify_client_data)
  {
-     int actual = 0;
+     size_t actual = 0;
      unsigned char checksum = 0;
      int i, j, start;
      long count = 0;
-     long length = 0;
+     size_t length = 0;
      if (conn->closed || conn->failed) return 0;
 
      if (conn->write_pending) {
@@ -3127,7 +3152,7 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
      ((int*)full_vec[0].iov_base)[0] = 
 	 (((int*)full_vec[0].iov_base)[0] & 0xffffff00) | (unsigned char) checksum;
      if ((conn->do_non_blocking_write == 1) && (conn->trans->NBwritev_func)) {
-	 int actual_bytes;
+	 ssize_t actual_bytes;
 	 actual_bytes = 
 	     conn->trans->NBwritev_func(&CMstatic_trans_svcs, 
 					     conn->transport_data, 
@@ -3202,14 +3227,18 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
  INT_CMwrite_attr(CMConnection conn, CMFormat format, void *data, 
 		  attr_list attrs)
  {
-     /* GSE MUST FIX for LONG */
+     void *header_ptr = NULL;
+     int header_len = 0;
      int no_attr_header[2] = {0x434d4400, 0};  /* CMD\0 in first entry */
-     int attr_header[4] = {0x434d4100, 0x434d4100, 0, 0};  /* CMA\0 in first entry */
+     int no_attr_long_header[4] = {0x434d4401, 0x434d4401, 0, 0};  /* CMD\1 in first entry, pad to 16 */
+     int attr_header[4] = {0x434d4100, 0x434d4100, 0, 0};  /* CMA\0 in first entry, pad to 16 */
+     int attr_long_header[4] = {0x434d4101, 0, 0, 0};  /* CMA\1 in first entry */
      FFSEncodeVector vec;
-     int length = 0, vec_count = 0, actual;
+     size_t length = 0, vec_count = 0, actual;
      int do_write = 1;
      void *encoded_attrs = NULL;
      int attrs_present = 0;
+     int long_message = 0;
      CManager cm = conn->cm;
 
      /* ensure conn is open */
@@ -3279,44 +3308,67 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
 	 length += vec[vec_count].iov_len;
 	 vec_count++;
      }
-     no_attr_header[1] = length;
-     attr_header[2] = length;
+     if ((length & 0x7fffffff) == 0) {
+	 long_message = 1;
+     }
      if (attrs != NULL) {
 	 attrs_present++;
+     }
+     if (!long_message) {
+	 if (attrs_present) {
+	     attr_header[2] = length;
+	     header_ptr = &attr_header;
+	     header_len = sizeof(attr_header);
+	 } else {
+	     no_attr_header[1] = length;
+	     header_ptr = &no_attr_header;
+	     header_len = sizeof(no_attr_header);
+	 }
+     } else {
+	 if (attrs_present) {
+	     memcpy((void*) &attr_long_header[1], &length, sizeof(length));
+	     header_ptr = &attr_long_header;
+	     header_len = sizeof(attr_long_header);
+	 } else {
+	     memcpy((void*) &attr_long_header[2], &length, sizeof(length));
+	     header_ptr = no_attr_header;
+	     header_len = sizeof(no_attr_header);
+	 }
+     }	 
+     if (attrs_present) {
 	 encoded_attrs = encode_attr_for_xmit(attrs, conn->attr_encode_buffer,
 					      &attr_header[3]);
 	 attr_header[3] = (attr_header[3] +7) & -8;  /* round up to even 8 */
+	 attr_long_header[3] = (attr_header[3] +7) & -8;  /* round up to even 8 */
      }
-     CMtrace_out(conn->cm, CMDataVerbose, "CM - Total write size is %d bytes data + %d bytes attrs\n", length, attr_header[3]);
+     CMtrace_out(conn->cm, CMDataVerbose, "CM - Total write size is %zu bytes data + %d bytes attrs\n", length, attr_header[3]);
      if (cm_write_hook != NULL) {
 	 do_write = cm_write_hook(length);
      }
      if (do_write) {
 	 struct FFSEncodeVec static_vec[100];
 	 FFSEncodeVector tmp_vec = &static_vec[0];
-	 int byte_count = length;/* sum lengths */
+	 size_t byte_count = length;/* sum lengths */
 	 if (vec_count >= sizeof(static_vec)/ sizeof(static_vec[0])) {
 	     tmp_vec = INT_CMmalloc((vec_count+1) * sizeof(*tmp_vec));
 	 }
+	 tmp_vec[0].iov_base = header_ptr;
+	 tmp_vec[0].iov_len = header_len;
 	 if (attrs == NULL) {
-	     tmp_vec[0].iov_base = &no_attr_header;
-	     tmp_vec[0].iov_len = sizeof(no_attr_header);
 	     memcpy(&tmp_vec[1], vec, sizeof(*tmp_vec) * vec_count);
 	     vec_count++;
 	     byte_count += sizeof(no_attr_header);
 	     CMtrace_out(conn->cm, CMLowLevelVerbose, 
-			 "Writing %d vectors, total %d bytes in writev\n", 
+			 "Writing %zu vectors, total %zu bytes in writev\n", 
 			 vec_count, byte_count);
 	 } else {
-	     tmp_vec[0].iov_base = &attr_header;
-	     tmp_vec[0].iov_len = sizeof(attr_header);
 	     tmp_vec[1].iov_base = encoded_attrs;
 	     tmp_vec[1].iov_len = attr_header[3];
 	     memcpy(&tmp_vec[2], vec, sizeof(*tmp_vec) * vec_count);
 	     byte_count += sizeof(attr_header) + attr_header[3];
 	     vec_count += 2;
 	     CMtrace_out(conn->cm, CMLowLevelVerbose, 
-			 "Writing %d vectors, total %d bytes (including attrs) in writev\n", 
+			 "Writing %zu vectors, total %zu bytes (including attrs) in writev\n", 
 			 vec_count, byte_count);
 	 }
 
@@ -3343,7 +3395,8 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
      FFSEncodeVector vec;
      struct FFSEncodeVec preencoded_vec[2];
      long data_length = 0, actual;
-     int vec_count = 0, attr_len = 0;
+     size_t vec_count = 0;
+     int attr_len = 0;
      int do_write = 1;
      void *encoded_attrs = NULL;
      int attrs_present = 0;
@@ -3439,7 +3492,7 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
      if (do_write) {
 	 struct FFSEncodeVec static_vec[100];
 	 FFSEncodeVector tmp_vec = &static_vec[0];
-	 int byte_count = data_length;/* sum lengths */
+	 size_t byte_count = data_length;/* sum lengths */
 	 int header[4] = {0x434d4C00, 0, 0, 0};  /* CML\0 in first entry */
 	 if (vec_count >= sizeof(static_vec)/ sizeof(static_vec[0])) {
 	     tmp_vec = INT_CMmalloc((vec_count+3) * sizeof(*tmp_vec));
@@ -3467,7 +3520,7 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
 	     vec_count++;
 	     byte_count += sizeof(header);
 	     CMtrace_out(conn->cm, CMLowLevelVerbose, 
-			 "Writing %d vectors, total %d bytes in writev\n", 
+			 "Writing %zu vectors, total %zu bytes in writev\n", 
 			 vec_count, byte_count);
 	 } else {
 	     tmp_vec[0].iov_base = &header;
@@ -3479,9 +3532,10 @@ INT_CMregister_invalid_message_handler(CManager cm, CMUnregCMHandler handler)
 	     byte_count += sizeof(header) + header[2];
 	     vec_count += 2;
 	     CMtrace_out(conn->cm, CMLowLevelVerbose, 
-			 "Writing %d vectors, total %d bytes (including attrs) in writev\n", 
+			 "Writing %zu vectors, total %zu bytes (including attrs) in writev\n", 
 			 vec_count, byte_count);
 	 }
+	 char *header_ptr = (char*)&header[0];
 	 actual = INT_CMwrite_raw(conn, tmp_vec, vec, vec_count, byte_count, attrs,
 				     vec == &preencoded_vec[0]);
 	 if (tmp_vec != &static_vec[0]) {
@@ -3861,7 +3915,7 @@ static int foreign_handler_count = 0;
  }
 
  int
- CMdo_non_CM_handler(CMConnection conn, int header, char *buffer, int length)
+ CMdo_non_CM_handler(CMConnection conn, int header, char *buffer, size_t length)
  {
      int i = 0;
      while (i < foreign_handler_count) {

@@ -63,8 +63,12 @@ find_package(PythonInterp REQUIRED)
 set (STAGING_COMMON_TEST_SUPP_VERBOSE OFF)
 
 set (1x1_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1")
+set (1x1Struct_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1 -r $<TARGET_FILE:TestStructRead> -w $<TARGET_FILE:TestStructWrite> ")
 set (1x1GetSync_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1 --rarg=--read_mode --rarg=sync")
+set (1x1DontCloseWriter_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1 --warg=--dont_close")
+set (1x1DontCloseReader_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1 --rarg=--dont_close")
 set (1x1DefSync_CMD "TestDefSyncWrite --data_size 200 --engine_params ChunkSize=500,MinDeferredSize=150")
+set (1x1VarDestruction_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1 --rarg=--var_destruction")
 set (1x1DataWrite_CMD "TestDefSyncWrite --perform_data_write --data_size 200 --engine_params ChunkSize=500,MinDeferredSize=150")
 set (1x1.NoPreload_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1 --rarg=PreloadMode=SstPreloadNone,RENGINE_PARAMS")
 set (1x1.SstRUDP_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1 --rarg=DataTransport=WAN,WANDataTransport=enet,RENGINE_PARAMS --warg=DataTransport=WAN,WANDataTransport=enet,WENGINE_PARAMS")
@@ -87,7 +91,10 @@ set (1x1EarlyExit_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1 --warg=--num_steps --wa
 set (3x5EarlyExit_CMD "run_test.py.$<CONFIG> -nw 3 -nr 5 --warg=--num_steps --warg=50 --rarg=--num_steps --rarg=5 --rarg=--early_exit")
 set (3x5LockGeometry_TIMEOUT 60)
 set (5x3_CMD "run_test.py.$<CONFIG> -nw 5 -nr 3")
+set (5x3DontClose_CMD "run_test.py.$<CONFIG> -nw 5 -nr 3 --rarg=--dont_close --warg=--dont_close")
 set (1x1.Local_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1  -w $<TARGET_FILE:TestCommonWriteLocal> -r $<TARGET_FILE:TestCommonReadLocal>")
+set (1x1.Local2_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1  -w $<TARGET_FILE:TestLocalWrite> -r $<TARGET_FILE:TestLocalRead>")
+set (1x1.SpanMinMax_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1  -w $<TARGET_FILE:TestCommonSpanWrite> -r $<TARGET_FILE:TestCommonSpanRead>")
 set (2x1.Local_CMD "run_test.py.$<CONFIG> -nw 2 -nr 1  -w $<TARGET_FILE:TestCommonWriteLocal> -r $<TARGET_FILE:TestCommonReadLocal>")
 set (1x2.Local_CMD "run_test.py.$<CONFIG> -nw 1 -nr 2  -w $<TARGET_FILE:TestCommonWriteLocal> -r $<TARGET_FILE:TestCommonReadLocal>")
 set (3x5.Local_CMD "run_test.py.$<CONFIG> -nw 3 -nr 5  -w $<TARGET_FILE:TestCommonWriteLocal> -r $<TARGET_FILE:TestCommonReadLocal>")
@@ -126,6 +133,7 @@ set (1x1.Modes_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1  -w $<TARGET_FILE:TestComm
 
 # 1x1.Attrs tests writing and reading of attributes defined before Open
 set (1x1.Attrs_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1  -w $<TARGET_FILE:TestCommonWriteAttrs> -r $<TARGET_FILE:TestCommonReadAttrs>")
+set (1x1.ModAttrs_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1  -w $<TARGET_FILE:TestCommonWriteAttrs> -r $<TARGET_FILE:TestCommonReadAttrs> --rarg=--modifiable_attributes --warg=--modifiable_attributes")
 
 # Basic Fortran tests, Fortran to C, C to Fortran and Fortran to Fortran
 set (FtoC.1x1_CMD "run_test.py.$<CONFIG> -nw 1 -nr 1  -w $<TARGET_FILE:TestCommonWrite_f>")
@@ -156,6 +164,12 @@ set (PreciousTimestep.3x2_TIMEOUT "300")
 
 set (PreciousTimestepDiscard.3x2_CMD "run_test.py.$<CONFIG> --test_protocol kill_readers  -nw 3 -nr 2 --max_readers 2 --warg=FirstTimestepPrecious=On,RendezvousReaderCount=0,QueueLimit=3,QueueFullPolicy=discard,WENGINE_PARAMS --rarg=--ignore_time_gap --rarg=--precious_first --rarg=--discard --warg=--ms_delay --warg=500")
 set (PreciousTimestepDiscard.3x2_TIMEOUT "300")
+
+# Writer StepDistributionModes.  Here we run the writer and three clients
+set (AllToAllDistribution.1x1x3_CMD "run_test.py.$<CONFIG> --test_protocol multi_client -nw 1 -nr 1 -w $<TARGET_FILE:TestDistributionWrite> -r $<TARGET_FILE:TestDistributionRead> --warg=RendezvousReaderCount=3,WENGINE_PARAMS")
+set (RoundRobinDistribution.1x1x3_CMD "run_test.py.$<CONFIG> --test_protocol multi_client -nw 1 -nr 1 -w $<TARGET_FILE:TestDistributionWrite> -r $<TARGET_FILE:TestDistributionRead> --warg=RendezvousReaderCount=3,WENGINE_PARAMS --warg=--round_robin --rarg=--round_robin")
+set (OnDemandSingle.1x1_CMD "run_test.py.$<CONFIG> -w $<TARGET_FILE:TestOnDemandWrite> -r $<TARGET_FILE:TestOnDemandRead>")
+set (OnDemandDistribution.1x1x3_CMD "run_test.py.$<CONFIG> --test_protocol multi_client -nw 1 -nr 1 -w $<TARGET_FILE:TestDistributionWrite> -r $<TARGET_FILE:TestDistributionRead> --warg=RendezvousReaderCount=3,WENGINE_PARAMS --warg=--on_demand --rarg=--on_demand --warg=--num_steps --warg=20")
 
 # Readers using BeginStep with timeout.  Here we run the writer with a longer delay to make the reader timeout
 set (TimeoutReader.1x1_CMD "run_test.py.$<CONFIG> --test_protocol one_client -nw 1 -nr 1 --rarg=--non_blocking --warg=--ms_delay --warg=2000")
@@ -261,12 +275,15 @@ function(add_common_test basename engine)
     endif()
     set (timeout "${${basename}_TIMEOUT}")
     if ("${timeout}" STREQUAL "")
-       set (timeout "60")
+      if (DEFINED MPIEXEC_EXECUTABLE AND "${MPIEXEC_EXECUTABLE}" MATCHES "srun")
+        set (timeout "1000")
+      else()
+        set (timeout "60")
+      endif()
     endif()
 
     set_tests_properties(${testname} PROPERTIES
         TIMEOUT ${timeout} ${${basename}_PROPERTIES}
-        RUN_SERIAL TRUE
     )
 endfunction()
 

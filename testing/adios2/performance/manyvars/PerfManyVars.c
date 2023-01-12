@@ -91,12 +91,12 @@ void alloc_vars()
     }
 
     char fmt[16];
-    sprintf(fmt, "v%%%d.%dd", digit, digit);
+    snprintf(fmt, sizeof(fmt), "v%%%d.%dd", digit, digit);
     printf("fmt=[%s]\n", fmt);
     for (i = 0; i < NVARS; i++)
     {
         // sprintf(varnames[i], "v%-*d", digit, i);
-        sprintf(varnames[i], fmt, i);
+        snprintf(varnames[i], 16, fmt, i);
     }
     printf("varname[0]=%s\n", varnames[0]);
     printf("varname[%d]=%s\n", NVARS - 1, varnames[NVARS - 1]);
@@ -156,7 +156,10 @@ int main(int argc, char **argv)
 {
     int err, i;
 
-    MPI_Init(&argc, &argv);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
 
@@ -210,7 +213,7 @@ int main(int argc, char **argv)
     }
 
     alloc_vars();
-    adios2_adios *adiosH = adios2_init(MPI_COMM_WORLD, adios2_debug_mode_on);
+    adios2_adios *adiosH = adios2_init_mpi(MPI_COMM_WORLD);
     ioW = adios2_declare_io(adiosH, "multiblockwrite"); // group for writing
     ioR = adios2_declare_io(adiosH, "multiblockread");  // group for reading
     set_gdim();

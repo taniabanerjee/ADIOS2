@@ -86,7 +86,7 @@ VAR                            VALUE                     Description
 ``ADIOS2_USE_HDF5``            **ON**/OFF      `HDF5 <https://www.hdfgroup.org>`_ engine. If HDF5 is not on the syspath, it can be set using ``-DHDF5_ROOT=/path/to/hdf5``
 ``ADIOS2_USE_Python``          **ON**/OFF      Python bindings. Python 3 will be used if found. If you want to specify a particular python version use  ``-DPYTHON_EXECUTABLE=/path/to/interpreter/python``
 ``ADIOS2_USE_Fortran``         **ON**/OFF      Bindings for Fortran 90 or above.
-``ADIOS2_USE_SST``             **ON**/OFF      Simplified Staging Engine (SST) and its dependencies, requires MPI. Can optionally use LibFabric for RDMA transport. Specify the LibFabric install manually with the -DLIBFABRIC_ROOT=... option.
+``ADIOS2_USE_SST``             **ON**/OFF      Simplified Staging Engine (SST) and its dependencies, requires MPI. Can optionally use LibFabric/UCX for RDMA transport. You can specify the LibFabric/UCX path manually with the -DLIBFABRIC_ROOT=... or -DUCX_ROOT=... option.
 ``ADIOS2_USE_BZip2``           **ON**/OFF      `BZIP2 <http://www.bzip.org>`_ compression.
 ``ADIOS2_USE_ZFP``             **ON**/OFF      `ZFP <https://github.com/LLNL/zfp>`_ compression (experimental).
 ``ADIOS2_USE_SZ``              **ON**/OFF      `SZ <https://github.com/disheng222/SZ>`_ compression (experimental).
@@ -132,12 +132,12 @@ Notes:
     $ export CMAKE_PREFIX_PATH=/opt/foo/bar
     $ cmake -DHDF5_ROOT=/opt/hdf5/1.13.0 ../ADIOS2
 
-Example: the following configuration will build, test and install under /opt/adios2/2.7.1 an optimized (Release) version of ADIOS2.
+Example: the following configuration will build, test and install under /opt/adios2/2.8.3 an optimized (Release) version of ADIOS2.
 
 .. code-block:: bash
 
     $ cd build
-    $ cmake -DADIOS2_USE_Fortran=ON -DCMAKE_INSTALL_PREFIX=/opt/adios2/2.7.1 -DCMAKE_BUILD_Type=Release ../ADIOS2
+    $ cmake -DADIOS2_USE_Fortran=ON -DCMAKE_INSTALL_PREFIX=/opt/adios2/2.8.3 -DCMAKE_BUILD_Type=Release ../ADIOS2
     $ make -j16
     $ ctest
     $ make install

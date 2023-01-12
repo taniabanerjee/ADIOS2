@@ -42,7 +42,7 @@ program TestSstWrite
   integer(kind = 8)::localtime
 
 #if ADIOS2_USE_MPI
-  integer::testComm, color, key
+  integer::testComm, color, key, provided, threadSupportLevel
 #endif
 
   allocate(variables(20))
@@ -61,8 +61,15 @@ program TestSstWrite
   endif
 
 #if ADIOS2_USE_MPI
+  threadSupportLevel = MPI_THREAD_SINGLE;
+  if (engine == "SST") then
+      threadSupportLevel = MPI_THREAD_MULTIPLE;
+  endif
+
   !Launch MPI
-  call MPI_Init(ierr)
+
+  ! MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+  call MPI_Init_thread(threadSupportLevel, provided, ierr)
 
   call MPI_Comm_rank(MPI_COMM_WORLD, key, ierr);
 
@@ -99,9 +106,9 @@ program TestSstWrite
 
 #if ADIOS2_USE_MPI
   !Create adios handler passing the communicator, debug mode and error flag
-  call adios2_init(adios, testComm, adios2_debug_mode_on, ierr)
+  call adios2_init(adios, testComm, ierr)
 #else
-  call adios2_init(adios, adios2_debug_mode_on, ierr)
+  call adios2_init(adios, ierr)
 #endif
 
 !!!!!!!!!!!!!!!!!!!!!!!!!WRITER!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -205,7 +212,11 @@ program TestSstWrite
   call adios2_finalize(adios, ierr)
 
 #if ADIOS2_USE_MPI
+#ifdef CRAY_MPICH_VERSION
+  call MPI_Barrier(MPI_COMM_WORLD)
+#else
   call MPI_Finalize(ierr)
+#endif
 #endif
 
  end program TestSstWrite

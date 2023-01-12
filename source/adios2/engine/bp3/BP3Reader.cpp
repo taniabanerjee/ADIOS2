@@ -24,10 +24,20 @@ namespace engine
 BP3Reader::BP3Reader(IO &io, const std::string &name, const Mode mode,
                      helper::Comm comm)
 : Engine("BP3", io, name, mode, std::move(comm)), m_BP3Deserializer(m_Comm),
-  m_FileManager(m_Comm), m_SubFileManager(m_Comm)
+  m_FileManager(io, m_Comm), m_SubFileManager(io, m_Comm)
 {
     PERFSTUBS_SCOPED_TIMER("BP3Reader::Open");
     Init();
+    m_IsOpen = true;
+}
+
+BP3Reader::~BP3Reader()
+{
+    if (m_IsOpen)
+    {
+        DestructorClose(m_FailVerbose);
+    }
+    m_IsOpen = false;
 }
 
 StepStatus BP3Reader::BeginStep(StepMode mode, const float timeoutSeconds)
@@ -111,7 +121,7 @@ void BP3Reader::PerformGets()
     {
         const DataType type = m_IO.InquireVariableType(name);
 
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
         }
 #define declare_type(T)                                                        \
@@ -146,6 +156,7 @@ void BP3Reader::Init()
     // if IO was involved in reading before this flag may be true now
     m_IO.m_ReadStreaming = false;
 
+    helper::RaiseLimitNoFile();
     InitTransports();
     InitBuffer();
 }
@@ -251,6 +262,7 @@ void BP3Reader::DoClose(const int transportIndex)
 {
     PERFSTUBS_SCOPED_TIMER("BP3Reader::Close");
     PerformGets();
+    RemoveCreatedVars();
     m_SubFileManager.CloseFiles();
     m_FileManager.CloseFiles();
 }

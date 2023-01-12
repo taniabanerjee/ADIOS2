@@ -839,10 +839,9 @@ TEST_F(BPWriteReadBlockInfo, BPWriteReadBlockInfo1D8_C)
 
     {
 #if ADIOS2_USE_MPI
-        adios2_adios *adiosH =
-            adios2_init(MPI_COMM_WORLD, adios2_debug_mode_on);
+        adios2_adios *adiosH = adios2_init_mpi(MPI_COMM_WORLD);
 #else
-        adios2_adios *adiosH = adios2_init(adios2_debug_mode_on);
+        adios2_adios *adiosH = adios2_init_serial();
 #endif
         adios2_io *ioR = adios2_declare_io(adiosH, "ReadIO");
         if (!engineName.empty())
@@ -924,7 +923,10 @@ TEST_F(BPWriteReadBlockInfo, BPWriteReadBlockInfo1D8_C)
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

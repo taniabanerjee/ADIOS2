@@ -23,67 +23,41 @@ namespace engine
 namespace ssc
 {
 
-template <>
-void SscReaderNaive::GetDeferredCommon(Variable<std::string> &variable,
-                                       std::string *data)
-{
-    variable.SetData(data);
-
-    for (const auto &b : m_BlockMap[variable.m_Name])
-    {
-        if (b.name == variable.m_Name)
-        {
-            *data =
-                std::string(m_Buffer.data() + b.bufferStart,
-                            m_Buffer.data() + b.bufferStart + b.bufferCount);
-            variable.m_Value = *data;
-            variable.m_Min = *data;
-            variable.m_Max = *data;
-        }
-    }
-}
-
-template <class T>
-void SscReaderNaive::GetDeferredCommon(Variable<T> &variable, T *data)
-{
-    variable.SetData(data);
-
-    Dims vStart = variable.m_Start;
-    Dims vCount = variable.m_Count;
-    Dims vShape = variable.m_Shape;
-
-    if (m_IO.m_ArrayOrder != ArrayOrdering::RowMajor)
-    {
-        std::reverse(vStart.begin(), vStart.end());
-        std::reverse(vCount.begin(), vCount.end());
-        std::reverse(vShape.begin(), vShape.end());
-    }
-
-    for (const auto &b : m_BlockMap[variable.m_Name])
-    {
-        if (b.shapeId == ShapeID::GlobalArray ||
-            b.shapeId == ShapeID::LocalArray)
-        {
-            helper::NdCopy(m_Buffer.data<char>() + b.bufferStart, b.start,
-                           b.count, true, true, reinterpret_cast<char *>(data),
-                           vStart, vCount, true, true, sizeof(T));
-        }
-        else if (b.shapeId == ShapeID::GlobalValue ||
-                 b.shapeId == ShapeID::LocalValue)
-        {
-            std::memcpy(data, m_Buffer.data() + b.bufferStart, b.bufferCount);
-        }
-    }
-}
-
 template <typename T>
 std::vector<typename Variable<T>::BPInfo>
 SscReaderNaive::BlocksInfoCommon(const Variable<T> &variable,
                                  const size_t step) const
 {
-
     std::vector<typename Variable<T>::BPInfo> ret;
-
+    size_t blockID = 0;
+    auto it = m_BlockMap.find(variable.m_Name);
+    if (it != m_BlockMap.end())
+    {
+        for (const auto &v : it->second)
+        {
+            ret.emplace_back();
+            auto &b = ret.back();
+            b.Start = v.start;
+            b.Count = v.count;
+            b.Shape = v.shape;
+            b.Step = m_CurrentStep;
+            b.StepsStart = m_CurrentStep;
+            b.StepsCount = 1;
+            b.BlockID = blockID;
+            if (m_IO.m_ArrayOrder != ArrayOrdering::RowMajor)
+            {
+                b.IsReverseDims = true;
+            }
+            if (v.shapeId == ShapeID::GlobalValue ||
+                v.shapeId == ShapeID::LocalValue)
+            {
+                b.IsValue = true;
+                std::memcpy(reinterpret_cast<char *>(&b.Value), v.value.data(),
+                            v.value.size());
+            }
+            ++blockID;
+        }
+    }
     return ret;
 }
 

@@ -462,8 +462,10 @@ TYPED_TEST(ADIOS2_CXX11_API_MultiBlock, Put2File)
         writer.Put(var, &myData[b][0], TypeParam::PutMode);
     }
 
-    reader.Close();
+    // Close the writer before the reader because the var goes away when the
+    // reader does
     writer.Close();
+    reader.Close();
     this->CheckOutput(filename);
 }
 
@@ -501,7 +503,10 @@ TYPED_TEST(ADIOS2_CXX11_API_MultiBlock, Put2Writers)
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

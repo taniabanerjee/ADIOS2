@@ -35,13 +35,14 @@ HDF5ReaderP::HDF5ReaderP(IO &io, const std::string &name, const Mode openMode,
                          helper::Comm comm)
 : Engine("HDF5Reader", io, name, openMode, std::move(comm))
 {
-    if (!helper::IsHDF5File(name, m_Comm, {}))
+    if (!helper::IsHDF5File(name, io, m_Comm, {}))
     {
         helper::Throw<std::invalid_argument>(
             "Engine", "HDF5ReaderP", "HDF5ReaderP", "Invalid HDF5 file found");
     }
 
     Init();
+    m_IsOpen = true;
 }
 
 HDF5ReaderP::~HDF5ReaderP()

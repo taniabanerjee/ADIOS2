@@ -77,6 +77,16 @@ if(BLOSC_FOUND)
   set(ADIOS2_HAVE_Blosc TRUE)
 endif()
 
+# Blosc2
+if(ADIOS2_USE_Blosc2 STREQUAL AUTO)
+  find_package(Blosc2 2.4)
+elseif(ADIOS2_USE_Blosc2)
+  find_package(Blosc2 2.4 REQUIRED)
+endif()
+if(BLOSC2_FOUND)
+  set(ADIOS2_HAVE_Blosc2 TRUE)
+endif()
+
 # BZip2
 if(ADIOS2_USE_BZip2 STREQUAL AUTO)
   find_package(BZip2)
@@ -88,10 +98,15 @@ if(BZIP2_FOUND)
 endif()
 
 # ZFP
-if(ADIOS2_USE_ZFP STREQUAL AUTO)
-  find_package(ZFP 0.5.1 CONFIG)
-elseif(ADIOS2_USE_ZFP)
-  find_package(ZFP 0.5.1 REQUIRED CONFIG)
+if(ADIOS2_USE_ZFP)
+  find_package(ZFP 1.0.0 CONFIG QUIET)
+  if(NOT ZFP_FOUND)
+    if(ADIOS2_USE_ZFP STREQUAL AUTO)
+      find_package(ZFP 0.5.3 CONFIG)
+    else()
+      find_package(ZFP 0.5.3 REQUIRED CONFIG)
+    endif()
+  endif()
 endif()
 if(ZFP_FOUND)
   set(ADIOS2_HAVE_ZFP TRUE)
@@ -166,13 +181,19 @@ endif()
 set(mpi_find_components C)
 
 # Cuda
-if(ADIOS2_USE_CUDA STREQUAL AUTO)
-  find_package(CUDAToolkit QUIET)
-elseif(ADIOS2_USE_CUDA)
-  find_package(CUDAToolkit REQUIRED)
+if(ADIOS2_USE_CUDA)
+  include(CheckLanguage)
+  check_language(CUDA)
+  if(ADIOS2_USE_CUDA STREQUAL AUTO)
+    find_package(CUDAToolkit QUIET)
+  else()
+    find_package(CUDAToolkit REQUIRED)
+  endif()
 endif()
-if(CUDAToolkit_FOUND)
+if(CMAKE_CUDA_COMPILER AND CUDAToolkit_FOUND)
+  enable_language(CUDA)
   set(ADIOS2_HAVE_CUDA TRUE)
+  set(ADIOS2_HAVE_GPU_Support TRUE)
 endif()
 
 # Fortran
@@ -250,13 +271,15 @@ elseif(ADIOS2_USE_MHS)
 endif()
 
 # DataSpaces
-if(ADIOS2_USE_DataSpaces STREQUAL AUTO)
-  find_package(DataSpaces 2.1.1)
-elseif(ADIOS2_USE_DataSpaces)
-  find_package(DataSpaces 2.1.1 REQUIRED)
-endif()
-if(DATASPACES_FOUND)
-  set(ADIOS2_HAVE_DataSpaces TRUE)
+if(MPI_FOUND)
+    if(ADIOS2_USE_DataSpaces STREQUAL AUTO)
+        find_package(DataSpaces 2.1.1)
+    elseif(ADIOS2_USE_DataSpaces)
+        find_package(DataSpaces 2.1.1 REQUIRED)
+    endif()
+    if(DATASPACES_FOUND)
+        set(ADIOS2_HAVE_DataSpaces TRUE)
+    endif()
 endif()
 
 # HDF5
@@ -362,6 +385,30 @@ if(ADIOS2_USE_SST AND NOT WIN32)
       set(ADIOS2_SST_HAVE_CRAY_DRC TRUE)
     endif()
   endif()
+  if(ADIOS2_HAVE_MPI)
+    set(CMAKE_REQUIRED_LIBRARIES MPI::MPI_C)
+    include(CheckCSourceRuns)
+    check_c_source_runs([=[
+        #include <mpi.h>
+        #include <stdlib.h>
+
+        #if !defined(MPICH)
+        #error "MPICH is the only supported library"
+        #endif
+
+        int main()
+        {
+          MPI_Init_thread(NULL, NULL, MPI_THREAD_MULTIPLE, NULL);
+          MPI_Open_port(MPI_INFO_NULL, malloc(sizeof(char) * MPI_MAX_PORT_NAME));
+          MPI_Finalize();
+        }]=]
+    ADIOS2_HAVE_MPI_CLIENT_SERVER)
+    unset(CMAKE_REQUIRED_LIBRARIES)
+  endif()
+  find_package(UCX)
+  if(UCX_FOUND)
+    set(ADIOS2_SST_HAVE_UCX TRUE)
+  endif()
 endif()
 
 # DAOS
@@ -411,6 +458,26 @@ elseif(ADIOS2_USE_Sodium)
 endif()
 if(Sodium_FOUND)
   set(ADIOS2_HAVE_Sodium TRUE)
+endif()
+
+# Catalyst stub library for ParaViewFidesEngine plugin for in situ vis
+if(ADIOS2_USE_Catalyst STREQUAL AUTO)
+  find_package(catalyst 2.0 QUIET)
+elseif(ADIOS2_USE_Catalyst)
+  find_package(catalyst 2.0 REQUIRED)
+endif()
+if(catalyst_FOUND)
+  set(ADIOS2_HAVE_Catalyst TRUE)
+endif()
+
+# AWS S3
+if(ADIOS2_USE_AWSSDK STREQUAL AUTO)
+    find_package(AWSSDK QUIET COMPONENTS s3)
+elseif(ADIOS2_USE_AWSSDK)
+    find_package(AWSSDK REQUIRED COMPONENTS s3)
+endif()
+if(AWSSDK_FOUND)
+    set(ADIOS2_HAVE_AWSSDK TRUE)
 endif()
 
 # Multithreading

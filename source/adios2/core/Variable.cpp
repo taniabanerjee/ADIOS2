@@ -49,7 +49,7 @@ namespace core
         info.StepsCount = stepsCount;                                          \
         info.Data = const_cast<T *>(data);                                     \
         info.Operations = m_Operations;                                        \
-        info.IsGPU = IsCUDAPointer((void *)data);                              \
+        info.MemSpace = GetMemorySpace((void *)data);                          \
         m_BlocksInfo.push_back(info);                                          \
         return m_BlocksInfo.back();                                            \
     }                                                                          \
@@ -64,12 +64,6 @@ namespace core
     T *Variable<T>::GetData() const noexcept                                   \
     {                                                                          \
         return m_Data;                                                         \
-    }                                                                          \
-                                                                               \
-    template <>                                                                \
-    Dims Variable<T>::Shape(const size_t step) const                           \
-    {                                                                          \
-        return DoShape(step);                                                  \
     }                                                                          \
                                                                                \
     template <>                                                                \
@@ -110,10 +104,6 @@ namespace core
     }
 
 ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
-#undef declare_type
-
-#define declare_template_instantiation(T) template class Span<T>;
-ADIOS2_FOREACH_PRIMITIVE_STDTYPE_1ARG(declare_template_instantiation)
 #undef declare_type
 
 } // end namespace core

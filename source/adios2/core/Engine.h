@@ -22,6 +22,7 @@
 #include <memory> //std::shared_ptr
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 /// \endcond
 
@@ -30,7 +31,7 @@
 #include "adios2/common/ADIOSTypes.h"
 #include "adios2/core/IO.h"
 #include "adios2/core/Variable.h"
-#include "adios2/core/VariableCompound.h"
+#include "adios2/core/VariableStruct.h"
 #include "adios2/helper/adiosComm.h"
 
 namespace adios2
@@ -105,6 +106,12 @@ public:
     virtual size_t CurrentStep() const;
 
     /**
+     * Returns current status information for each engine.
+     * @return if between BeginStep/EndStep() pair
+     */
+    bool BetweenStepPairs() const;
+
+    /**
      * Put signature that pre-allocates a Variable in Buffer returning a Span of
      * the payload memory from variable.m_Count
      * @param variable input variable to be allocated
@@ -137,6 +144,9 @@ public:
      */
     template <class T>
     void Put(Variable<T> &variable, const T *data,
+             const Mode launch = Mode::Deferred);
+
+    void Put(VariableStruct &variable, const void *data,
              const Mode launch = Mode::Deferred);
 
     /**
@@ -219,6 +229,9 @@ public:
      */
     template <class T>
     void Get(Variable<T> &variable, T *data,
+             const Mode launch = Mode::Deferred);
+
+    void Get(VariableStruct &variable, void *data,
              const Mode launch = Mode::Deferred);
 
     /**
@@ -399,6 +412,9 @@ public:
     std::map<size_t, std::vector<typename Variable<T>::BPInfo>>
     AllStepsBlocksInfo(const Variable<T> &variable) const;
 
+    std::map<size_t, std::vector<VariableStruct::BPInfo>>
+    AllStepsBlocksInfoStruct(const VariableStruct &variable) const;
+
     /**
      * This function is internal, for public interface use
      * Variable<T>::AllStepsBlocksInfo
@@ -408,6 +424,9 @@ public:
     template <class T>
     std::vector<std::vector<typename Variable<T>::BPInfo>>
     AllRelativeStepsBlocksInfo(const Variable<T> &variable) const;
+
+    std::vector<std::vector<VariableStruct::BPInfo>>
+    AllRelativeStepsBlocksInfoStruct(const VariableStruct &variable) const;
 
     /**
      * Extracts all available blocks information for a particular
@@ -421,6 +440,9 @@ public:
     template <class T>
     std::vector<typename Variable<T>::BPInfo>
     BlocksInfo(const Variable<T> &variable, const size_t step) const;
+
+    std::vector<VariableStruct::BPInfo>
+    BlocksInfoStruct(const VariableStruct &variable, const size_t step) const;
 
     /**
      * Get the absolute steps of a variable in a file. This is for
@@ -479,6 +501,8 @@ public:
      */
     virtual void NotifyEngineAttribute(std::string name,
                                        DataType type) noexcept;
+    virtual void NotifyEngineAttribute(std::string name, AttributeBase *attr,
+                                       void *Data) noexcept;
 
     /** Notify the engine when InquireVariable is called when the IO is empty.
      * Called from IO.tcc
@@ -489,6 +513,9 @@ public:
     virtual void EnterComputationBlock() noexcept;
     /** Inform about computation block through User->ADIOS->IO */
     virtual void ExitComputationBlock() noexcept;
+
+    void RegisterCreatedVariable(const VariableBase *var);
+    void RemoveCreatedVars();
 
 protected:
     /** from ADIOS class passed to Engine created with Open
@@ -527,6 +554,9 @@ protected:
     ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
 
+    virtual void DoPutStructSync(VariableStruct &, const void *);
+    virtual void DoPutStructDeferred(VariableStruct &, const void *);
+
 // Get
 #define declare_type(T)                                                        \
     virtual void DoGetSync(Variable<T> &, T *);                                \
@@ -536,7 +566,24 @@ protected:
     ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
 
+    virtual void DoGetStructSync(VariableStruct &, void *);
+    virtual void DoGetStructDeferred(VariableStruct &, void *);
+
+    /**
+     * Closes a particular transport, or all if transportIndex = -1 (default).
+     * @param transportIndex index returned from IO AddTransport, default (-1) =
+     * all
+     */
     virtual void DoClose(const int transportIndex) = 0;
+
+    /** if the current engine has had a successful open, but is not yet Close()d
+     */
+    bool m_IsOpen = false;
+
+    /** true if not MPI or rank0 with mpi, so warn */
+    bool m_FailVerbose = true;
+
+    virtual void DestructorClose(bool Verbose) noexcept;
 
     /**
      * Called by string Put/Get versions and deferred modes
@@ -560,6 +607,15 @@ protected:
 
     ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
+
+    virtual std::map<size_t, std::vector<VariableStruct::BPInfo>>
+    DoAllStepsBlocksInfoStruct(const VariableStruct &variable) const;
+
+    virtual std::vector<std::vector<VariableStruct::BPInfo>>
+    DoAllRelativeStepsBlocksInfoStruct(const VariableStruct &variable) const;
+
+    virtual std::vector<VariableStruct::BPInfo>
+    DoBlocksInfoStruct(const VariableStruct &variable, const size_t step) const;
 
 #define declare_type(T, L)                                                     \
     virtual T *DoBufferData_##L(const int bufferIdx,                           \
@@ -587,6 +643,8 @@ protected:
     bool m_BetweenStepPairs = false;
 
 private:
+    std::unordered_set<const VariableBase *> m_CreatedVars;
+
     /** Throw exception by Engine virtual functions not implemented/supported by
      *  a derived  class */
     void ThrowUp(const std::string function) const;
@@ -598,8 +656,7 @@ private:
      * @param modes acceptable modes
      * @param hint extra exception info
      */
-    template <class T>
-    void CommonChecks(Variable<T> &variable, const T *data,
+    void CommonChecks(VariableBase &variable, const void *data,
                       const std::set<Mode> &modes,
                       const std::string hint) const;
 

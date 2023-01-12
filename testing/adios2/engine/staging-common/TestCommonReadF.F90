@@ -45,7 +45,7 @@ program TestSstRead
   integer(kind = 8), dimension(:), allocatable::shape_in
 
 #if ADIOS2_USE_MPI
-  integer::key, color, testComm
+  integer::key, color, testComm, provided, threadSupportLevel
 #endif
 
   allocate(variables(20))
@@ -67,25 +67,32 @@ program TestSstRead
   insteps = 0;
 
 #if ADIOS2_USE_MPI
+  threadSupportLevel = MPI_THREAD_SINGLE;
+  if (engine == "SST") then
+      threadSupportLevel = MPI_THREAD_MULTIPLE;
+  endif
+
   !Launch MPI
-  call MPI_Init(ierr) 
+
+  ! MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+  call MPI_Init_thread(threadSupportLevel, provided, ierr)
 
   call MPI_Comm_rank(MPI_COMM_WORLD, key, ierr);
 
   color = 2
   call MPI_Comm_split(MPI_COMM_WORLD, color, key, testComm, ierr);
 
-  call MPI_Comm_rank(testComm, irank, ierr) 
+  call MPI_Comm_rank(testComm, irank, ierr)
   call MPI_Comm_size(testComm, isize, ierr)
 
   !Create adios handler passing the communicator, debug mode and error flag
-  call adios2_init(adios, testComm, adios2_debug_mode_on, ierr)
+  call adios2_init(adios, testComm, ierr)
 #else
   irank = 0;
   isize = 1;
 
   !Create adios handler passing the debug mode and error flag
-  call adios2_init(adios, adios2_debug_mode_on, ierr)
+  call adios2_init(adios, ierr)
 #endif
   !!!!!!!!!!!!!!!!!!!!!!!!! READER !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   ! Declare io reader
@@ -271,7 +278,11 @@ program TestSstRead
 
 
 #if ADIOS2_USE_MPI
+#ifdef CRAY_MPICH_VERSION
+  call MPI_Barrier(MPI_COMM_WORLD)
+#else
   call MPI_Finalize(ierr)
+#endif
 #endif
 
 

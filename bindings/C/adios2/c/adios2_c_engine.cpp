@@ -22,10 +22,22 @@ adios2::Mode adios2_ToMode(const adios2_mode mode, const std::string &hint)
     adios2::Mode modeCpp = adios2::Mode::Undefined;
     switch (mode)
     {
-    case (adios2_mode_deferred):
+    case adios2_mode_write:
+        modeCpp = adios2::Mode::Write;
+        break;
+    case adios2_mode_read:
+        modeCpp = adios2::Mode::Read;
+        break;
+    case adios2_mode_append:
+        modeCpp = adios2::Mode::Append;
+        break;
+    case adios2_mode_readRandomAccess:
+        modeCpp = adios2::Mode::ReadRandomAccess;
+        break;
+    case adios2_mode_deferred:
         modeCpp = adios2::Mode::Deferred;
         break;
-    case (adios2_mode_sync):
+    case adios2_mode_sync:
         modeCpp = adios2::Mode::Sync;
         break;
     default:
@@ -40,19 +52,22 @@ adios2_mode adios2_fromMode(const adios2::Mode mode, const std::string &hint)
     adios2_mode modeC = adios2_mode_undefined;
     switch (mode)
     {
-    case (adios2::Mode::Read):
-        modeC = adios2_mode_read;
-        break;
-    case (adios2::Mode::Write):
+    case adios2::Mode::Write:
         modeC = adios2_mode_write;
         break;
-    case (adios2::Mode::Append):
+    case adios2::Mode::Read:
+        modeC = adios2_mode_read;
+        break;
+    case adios2::Mode::Append:
         modeC = adios2_mode_append;
         break;
-    case (adios2::Mode::Deferred):
+    case adios2::Mode::ReadRandomAccess:
+        modeC = adios2_mode_readRandomAccess;
+        break;
+    case adios2::Mode::Deferred:
         modeC = adios2_mode_deferred;
         break;
-    case (adios2::Mode::Sync):
+    case adios2::Mode::Sync:
         modeC = adios2_mode_sync;
         break;
     default:
@@ -197,12 +212,6 @@ adios2_error adios2_begin_step(adios2_engine *engine,
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
 
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            *status = adios2_step_status_end_of_stream;
-            return adios2_error_none;
-        }
-
         const adios2::StepStatus statusCpp = engineCpp->BeginStep(
             ToStepMode(mode, "in call to adios2_begin_step"), timeout_seconds);
 
@@ -217,6 +226,27 @@ adios2_error adios2_begin_step(adios2_engine *engine,
     }
 }
 
+adios2_error adios2_between_step_pairs(size_t *between_step_pairs,
+                                       const adios2_engine *engine)
+{
+    try
+    {
+        adios2::helper::CheckForNullptr(
+            engine, "for adios2_engine, in call to adios2_between_step_pairs");
+
+        const adios2::core::Engine *engineCpp =
+            reinterpret_cast<const adios2::core::Engine *>(engine);
+
+        *between_step_pairs = engineCpp->BetweenStepPairs();
+        return adios2_error_none;
+    }
+    catch (...)
+    {
+        return static_cast<adios2_error>(
+            adios2::helper::ExceptionToError("adios2_between_step_pairs"));
+    }
+}
+
 adios2_error adios2_current_step(size_t *current_step,
                                  const adios2_engine *engine)
 {
@@ -227,12 +257,6 @@ adios2_error adios2_current_step(size_t *current_step,
 
         const adios2::core::Engine *engineCpp =
             reinterpret_cast<const adios2::core::Engine *>(engine);
-
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            *current_step = adios2::MaxSizeT;
-            return adios2_error_none;
-        }
 
         *current_step = engineCpp->CurrentStep();
         return adios2_error_none;
@@ -253,12 +277,6 @@ adios2_error adios2_steps(size_t *steps, const adios2_engine *engine)
 
         const adios2::core::Engine *engineCpp =
             reinterpret_cast<const adios2::core::Engine *>(engine);
-
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            *steps = 0;
-            return adios2_error_none;
-        }
 
         *steps = engineCpp->Steps();
         return adios2_error_none;
@@ -281,11 +299,6 @@ adios2_error adios2_put(adios2_engine *engine, adios2_variable *variable,
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
 
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
-
         adios2::helper::CheckForNullptr(
             variable, "for adios2_variable, in call to adios2_put");
 
@@ -297,7 +310,7 @@ adios2_error adios2_put(adios2_engine *engine, adios2_variable *variable,
             mode, "only adios2_mode_deferred or adios2_mode_sync are valid, "
                   "in call to adios2_put");
 
-        if (type == adios2::DataType::Compound)
+        if (type == adios2::DataType::Struct)
         {
             // not supported
         }
@@ -339,11 +352,6 @@ adios2_error adios2_put_by_name(adios2_engine *engine,
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
 
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
-
         adios2::helper::CheckForNullptr(
             variable_name,
             "for const char* variable_name, in call to adios2_put_by_name");
@@ -355,7 +363,7 @@ adios2_error adios2_put_by_name(adios2_engine *engine,
         const adios2::DataType type(
             engineCpp->m_IO.InquireVariableType(variable_name));
 
-        if (type == adios2::DataType::Compound)
+        if (type == adios2::DataType::Struct)
         {
             // not supported
         }
@@ -391,11 +399,6 @@ adios2_error adios2_perform_puts(adios2_engine *engine)
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
 
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
-
         engineCpp->PerformPuts();
         return adios2_error_none;
     }
@@ -415,11 +418,6 @@ adios2_error adios2_perform_data_write(adios2_engine *engine)
 
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
-
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
 
         engineCpp->PerformDataWrite();
         return adios2_error_none;
@@ -442,11 +440,6 @@ adios2_error adios2_get(adios2_engine *engine, adios2_variable *variable,
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
 
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
-
         adios2::helper::CheckForNullptr(variable,
                                         "for adios2_variable, in call "
                                         "to adios2_get");
@@ -456,7 +449,7 @@ adios2_error adios2_get(adios2_engine *engine, adios2_variable *variable,
 
         const adios2::DataType type(variableBase->m_Type);
 
-        if (type == adios2::DataType::Compound)
+        if (type == adios2::DataType::Struct)
         {
             // not supported
         }
@@ -501,11 +494,6 @@ adios2_error adios2_get_by_name(adios2_engine *engine,
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
 
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
-
         adios2::helper::CheckForNullptr(
             variable_name, "for const char* variable_name, in call to "
                            "adios2_get_by_name");
@@ -516,7 +504,7 @@ adios2_error adios2_get_by_name(adios2_engine *engine,
         const adios2::DataType type(
             engineCpp->m_IO.InquireVariableType(variable_name));
 
-        if (type == adios2::DataType::Compound)
+        if (type == adios2::DataType::Struct)
         {
             // not supported
         }
@@ -552,11 +540,6 @@ adios2_error adios2_perform_gets(adios2_engine *engine)
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
 
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
-
         engineCpp->PerformGets();
         return adios2_error_none;
     }
@@ -576,11 +559,6 @@ adios2_error adios2_end_step(adios2_engine *engine)
 
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
-
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
 
         engineCpp->EndStep();
         return adios2_error_none;
@@ -607,11 +585,6 @@ adios2_error adios2_flush_by_index(adios2_engine *engine,
                                                 "adios2_flush_by_index");
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
-
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
 
         engineCpp->Flush(transport_index);
 
@@ -690,10 +663,6 @@ adios2_varinfo *adios2_inquire_blockinfo(adios2_engine *engine,
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
 
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return NULL;
-        }
         adios2::helper::CheckForNullptr(variable,
                                         "for adios2_variable, in call "
                                         "to adios2_get");
@@ -716,7 +685,7 @@ adios2_varinfo *adios2_inquire_blockinfo(adios2_engine *engine,
             auto *b = varinfo->BlocksInfo;
 
             varinfo->Dims = minBlocksInfo->Dims;
-            if (minBlocksInfo->WasLocalVar)
+            if (minBlocksInfo->WasLocalValue)
             {
                 varinfo->Shape = (size_t *)malloc(sizeof(size_t));
                 varinfo->Shape[0] = (intptr_t)minBlocksInfo->Shape;
@@ -737,7 +706,7 @@ adios2_varinfo *adios2_inquire_blockinfo(adios2_engine *engine,
             {
                 b[i].WriterID = minBlocksInfo->BlocksInfo[i].WriterID;
                 b[i].BlockID = minBlocksInfo->BlocksInfo[i].BlockID;
-                if (minBlocksInfo->WasLocalVar)
+                if (minBlocksInfo->WasLocalValue)
                 {
                     b[i].Start = (size_t *)malloc(sizeof(size_t));
                     b[i].Start[0] =
@@ -748,14 +717,21 @@ adios2_varinfo *adios2_inquire_blockinfo(adios2_engine *engine,
                 }
                 else
                 {
-                    b[i].Start =
-                        (size_t *)malloc(sizeof(size_t) * minBlocksInfo->Dims);
-                    memcpy(b[i].Start, minBlocksInfo->BlocksInfo[i].Start,
-                           sizeof(size_t) * minBlocksInfo->Dims);
-                    b[i].Count =
-                        (size_t *)malloc(sizeof(size_t) * minBlocksInfo->Dims);
-                    memcpy(b[i].Count, minBlocksInfo->BlocksInfo[i].Count,
-                           sizeof(size_t) * minBlocksInfo->Dims);
+                    b[i].Start = b[i].Count = NULL;
+                    if (minBlocksInfo->BlocksInfo[i].Start)
+                    {
+                        b[i].Start = (size_t *)malloc(sizeof(size_t) *
+                                                      minBlocksInfo->Dims);
+                        memcpy(b[i].Start, minBlocksInfo->BlocksInfo[i].Start,
+                               sizeof(size_t) * minBlocksInfo->Dims);
+                    }
+                    if (minBlocksInfo->BlocksInfo[i].Count)
+                    {
+                        b[i].Count = (size_t *)malloc(sizeof(size_t) *
+                                                      minBlocksInfo->Dims);
+                        memcpy(b[i].Count, minBlocksInfo->BlocksInfo[i].Count,
+                               sizeof(size_t) * minBlocksInfo->Dims);
+                    }
                 }
                 if (minBlocksInfo->IsValue)
                 {
@@ -777,7 +753,7 @@ adios2_varinfo *adios2_inquire_blockinfo(adios2_engine *engine,
         }
 
         /* Call the big gun Engine::BlocksInfo<T> */
-        if (type == adios2::DataType::Compound)
+        if (type == adios2::DataType::Struct)
         {
             return varinfo;
         }
@@ -872,11 +848,6 @@ adios2_error adios2_close_by_index(adios2_engine *engine,
                                                 "adios2_close_by_index");
         adios2::core::Engine *engineCpp =
             reinterpret_cast<adios2::core::Engine *>(engine);
-
-        if (engineCpp->m_EngineType == "NULL")
-        {
-            return adios2_error_none;
-        }
 
         engineCpp->Close(transport_index);
 

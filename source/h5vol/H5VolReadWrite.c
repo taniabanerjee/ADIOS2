@@ -143,7 +143,9 @@ void gInitADIOS2(hid_t acc_tpl)
     MPI_Initialized(&flag);
     if (!flag)
     {
-        SHOW_ERROR_MSG("H5VL_ADIOS2: Error: MPI is not initialized");
+        RANK_ZERO_MSG("H5VL_ADIOS2 WARNING: MPI is not initialized, will use "
+                      "Serial ADIOS\n");
+        m_ADIOS2 = adios2_init_serial();
     }
     else
     {
@@ -842,6 +844,18 @@ H5VL_FileDef_t *gADIOS2OpenFile(const char *name)
 
     gChooseEngine(handle->m_IO);
     handle->m_Engine = adios2_open(handle->m_IO, name, adios2_mode_read);
+
+    char engineType[10];
+    size_t engineTypeSize;
+    adios2_engine_get_type(engineType, &engineTypeSize, handle->m_Engine);
+    printf("==> engine type:%s", engineType);
+    if ((engineType[0] == 'B') && (engineType[2] == '5'))
+    { // BP5's IO is empty until beginStep is called.
+      // since there is no concept for steps in HDF5, sufficient to call
+      // begin/end steps here once.
+        H5VL_adios2_begin_read_step(name);
+        H5VL_adios2_endstep(name);
+    }
     return handle;
 }
 
@@ -879,6 +893,12 @@ herr_t gADIOS2ReadVar(H5VL_VarDef_t *varDef)
 
         adios2_set_selection(varDef->m_Variable, varDef->m_DimCount, start,
                              count);
+
+        if (varDef->m_MemSpaceID > 0)
+        {
+            RANK_ZERO_MSG(
+                "\n## No memory space is supported for reading in ADIOS...\n");
+        }
     }
     adios2_get(varDef->m_Engine, varDef->m_Variable, varDef->m_Data,
                adios2_mode_sync);
@@ -973,6 +993,13 @@ adios2_variable *gADIOS2CreateVar(adios2_io *io, H5VL_VarDef_t *varDef)
                                                           start, count, varDim))
                 return NULL;
             adios2_set_selection(variable, varDim, start, count);
+
+            if ((varDef->m_MemSpaceID > 0) &&
+                (varDef->m_MemSpaceID != varDef->m_ShapeID))
+            {
+                RANK_ZERO_MSG(
+                    "\n## No support of memory space for writing in ADIOS.\n");
+            }
         }
         adios2_put(varDef->m_Engine, variable, varDef->m_Data,
                    adios2_mode_sync);

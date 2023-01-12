@@ -21,6 +21,7 @@
 #include <thread>
 /// \endcond
 
+#include "adios2/helper/adiosCUDA.h"
 #include "adios2/helper/adiosMath.h"
 #include "adios2/helper/adiosSystem.h"
 #include "adios2/helper/adiosType.h"
@@ -74,31 +75,72 @@ void InsertToBuffer(std::vector<char> &buffer, const T *source,
     buffer.insert(buffer.end(), src, src + elements * sizeof(T));
 }
 
-#ifdef ADIOS2_HAVE_CUDA
 template <class T>
 void CopyFromGPUToBuffer(std::vector<char> &dest, size_t &position,
-                         const T *GPUbuffer, const size_t elements) noexcept
+                         const T *GPUbuffer, MemorySpace memSpace,
+                         const size_t elements) noexcept
 {
-    CudaMemCopyToBuffer(dest.data(), position, GPUbuffer, elements * sizeof(T));
+    CopyFromGPUToBuffer(dest.data(), position, GPUbuffer, memSpace,
+                        elements * sizeof(T));
     position += elements * sizeof(T);
 }
 
 template <class T>
-void CudaMemCopyToBuffer(char *dest, size_t position, const T *GPUbuffer,
-                         const size_t size) noexcept
+void CopyFromGPUToBuffer(char *dest, size_t position, const T *GPUbuffer,
+                         MemorySpace memSpace, const size_t size) noexcept
 {
-    const char *buffer = reinterpret_cast<const char *>(GPUbuffer);
-    MemcpyGPUToBuffer(dest + position, buffer, size);
+#ifdef ADIOS2_HAVE_CUDA
+    if (memSpace == MemorySpace::CUDA)
+    {
+        const char *buffer = reinterpret_cast<const char *>(GPUbuffer);
+        helper::CUDAMemcpyGPUToBuffer(dest + position, buffer, size);
+    }
+#endif
 }
 
 template <class T>
-void CudaMemCopyFromBuffer(T *GPUbuffer, size_t position, const char *source,
-                           const size_t size) noexcept
+void CopyFromBufferToGPU(T *GPUbuffer, size_t position, const char *source,
+                         MemorySpace memSpace, const size_t size) noexcept
 {
-    char *dest = reinterpret_cast<char *>(GPUbuffer);
-    MemcpyBufferToGPU(dest, source + position, size);
-}
+#ifdef ADIOS2_HAVE_CUDA
+    if (memSpace == MemorySpace::CUDA)
+    {
+        char *dest = reinterpret_cast<char *>(GPUbuffer);
+        helper::CUDAMemcpyBufferToGPU(dest, source + position, size);
+    }
 #endif
+}
+
+static inline void NdCopyGPU(const char *&inOvlpBase, char *&outOvlpBase,
+                             CoreDims &inOvlpGapSize, CoreDims &outOvlpGapSize,
+                             CoreDims &ovlpCount, size_t minContDim,
+                             size_t blockSize, MemorySpace memSpace)
+{
+    DimsArray pos(ovlpCount.size(), (size_t)0);
+    size_t curDim = 0;
+    while (true)
+    {
+        while (curDim != minContDim)
+        {
+            pos[curDim]++;
+            curDim++;
+        }
+        CopyFromBufferToGPU(outOvlpBase, 0, inOvlpBase, memSpace, blockSize);
+        inOvlpBase += blockSize;
+        outOvlpBase += blockSize;
+        do
+        {
+            if (curDim == 0)
+            {
+                return;
+            }
+            inOvlpBase += inOvlpGapSize[curDim];
+            outOvlpBase += outOvlpGapSize[curDim];
+            pos[curDim] = 0;
+            curDim--;
+        } while (pos[curDim] == ovlpCount[curDim]);
+    }
+}
 
 template <class T>
 void CopyToBuffer(std::vector<char> &buffer, size_t &position, const T *source,
@@ -371,14 +413,14 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
                           const Box<Dims> &blockBox,
                           const Box<Dims> &intersectionBox,
                           const bool isRowMajor, const bool reverseDimensions,
-                          const bool endianReverse, const bool isGPU)
+                          const bool endianReverse, const MemorySpace memSpace)
 {
     auto lf_ClipRowMajor =
         [](T *dest, const Dims &destStart, const Dims &destCount,
            const char *contiguousMemory, const Box<Dims> &blockBox,
            const Box<Dims> &intersectionBox, const bool isRowMajor,
            const bool reverseDimensions, const bool endianReverse,
-           const bool isGPU)
+           const MemorySpace memSpace)
 
     {
         const Dims &istart = intersectionBox.first;
@@ -435,7 +477,7 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
                 helper::LinearIndex(selectionBox, currentPoint, true);
 
             CopyContiguousMemory(contiguousMemory + contiguousStart, stride,
-                                 dest + variableStart, endianReverse, isGPU);
+                                 dest + variableStart, endianReverse, memSpace);
 
             // Here update each non-contiguous dim recursively
             if (nContDim >= dimensions)
@@ -475,7 +517,7 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
            const char *contiguousMemory, const Box<Dims> &blockBox,
            const Box<Dims> &intersectionBox, const bool isRowMajor,
            const bool reverseDimensions, const bool endianReverse,
-           const bool isGPU)
+           const MemorySpace memSpace)
 
     {
         const Dims &istart = intersectionBox.first;
@@ -527,7 +569,7 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
                 helper::LinearIndex(selectionBox, currentPoint, false);
 
             CopyContiguousMemory(contiguousMemory + contiguousStart, stride,
-                                 dest + variableStart, endianReverse, isGPU);
+                                 dest + variableStart, endianReverse, memSpace);
 
             // Here update each non-contiguous dim recursively.
             if (nContDim >= dimensions)
@@ -572,7 +614,7 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
         const size_t stride = (end.back() - start.back() + 1) * sizeof(T);
 
         CopyContiguousMemory(contiguousMemory, stride, dest + normalizedStart,
-                             endianReverse, isGPU);
+                             endianReverse, memSpace);
         return;
     }
 
@@ -580,13 +622,13 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
     {
         lf_ClipRowMajor(dest, destStart, destCount, contiguousMemory, blockBox,
                         intersectionBox, isRowMajor, reverseDimensions,
-                        endianReverse, isGPU);
+                        endianReverse, memSpace);
     }
     else // stored with Fortran, R
     {
         lf_ClipColumnMajor(dest, destStart, destCount, contiguousMemory,
                            blockBox, intersectionBox, isRowMajor,
-                           reverseDimensions, endianReverse, isGPU);
+                           reverseDimensions, endianReverse, memSpace);
     }
 }
 
@@ -596,28 +638,28 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
                           const Box<Dims> &blockBox,
                           const Box<Dims> &intersectionBox,
                           const bool isRowMajor, const bool reverseDimensions,
-                          const bool endianReverse, const bool isGPU)
+                          const bool endianReverse, const MemorySpace memSpace)
 {
 
     ClipContiguousMemory(dest, destStart, destCount, contiguousMemory.data(),
                          blockBox, intersectionBox, isRowMajor,
-                         reverseDimensions, endianReverse, isGPU);
+                         reverseDimensions, endianReverse, memSpace);
 }
 
 template <class T>
 void CopyContiguousMemory(const char *src, const size_t payloadStride, T *dest,
-                          const bool endianReverse, const bool isGPU)
+                          const bool endianReverse, const MemorySpace memSpace)
 {
-    if (isGPU)
+    if (memSpace != MemorySpace::Host)
     {
         if (endianReverse)
             helper::Throw<std::invalid_argument>(
                 "Helper", "Memory", "CopyContiguousMemory",
                 "Direct byte order reversal not supported for GPU buffers");
 #ifdef ADIOS2_HAVE_CUDA
-        CudaMemCopyFromBuffer(dest, 0, src, payloadStride);
-        return;
+        CopyFromBufferToGPU(dest, 0, src, memSpace, payloadStride);
 #endif
+        return;
     }
 #ifdef ADIOS2_HAVE_ENDIAN_REVERSE
     if (endianReverse)
@@ -665,8 +707,8 @@ void Resize(std::vector<T> &vec, const size_t dataSize, const std::string hint,
 // independent of the number of dimensions.
 static inline void
 NdCopyRecurDFSeqPadding(size_t curDim, const char *&inOvlpBase,
-                        char *&outOvlpBase, Dims &inOvlpGapSize,
-                        Dims &outOvlpGapSize, Dims &ovlpCount,
+                        char *&outOvlpBase, CoreDims &inOvlpGapSize,
+                        CoreDims &outOvlpGapSize, CoreDims &ovlpCount,
                         size_t &minContDim, size_t &blockSize)
 {
     // note: all elements in and below this node are contiguous on input and
@@ -709,8 +751,8 @@ NdCopyRecurDFSeqPadding(size_t curDim, const char *&inOvlpBase,
 
 static inline void
 NdCopyRecurDFSeqPaddingRevEndian(size_t curDim, const char *&inOvlpBase,
-                                 char *&outOvlpBase, Dims &inOvlpGapSize,
-                                 Dims &outOvlpGapSize, Dims &ovlpCount,
+                                 char *&outOvlpBase, CoreDims &inOvlpGapSize,
+                                 CoreDims &outOvlpGapSize, CoreDims &ovlpCount,
                                  size_t minCountDim, size_t blockSize,
                                  size_t elmSize, size_t numElmsPerBlock)
 {
@@ -748,12 +790,11 @@ NdCopyRecurDFSeqPaddingRevEndian(size_t curDim, const char *&inOvlpBase,
 // used for buffer of Column major
 // the memory address calculation complexity for copying each element is
 // minimized to average O(1), which is independent of the number of dimensions.
-static inline void NdCopyRecurDFNonSeqDynamic(size_t curDim, const char *inBase,
-                                              char *outBase,
-                                              Dims &inRltvOvlpSPos,
-                                              Dims &outRltvOvlpSPos,
-                                              Dims &inStride, Dims &outStride,
-                                              Dims &ovlpCount, size_t elmSize)
+static inline void
+NdCopyRecurDFNonSeqDynamic(size_t curDim, const char *inBase, char *outBase,
+                           CoreDims &inRltvOvlpSPos, CoreDims &outRltvOvlpSPos,
+                           CoreDims &inStride, CoreDims &outStride,
+                           CoreDims &ovlpCount, size_t elmSize)
 {
     if (curDim == inStride.size())
     {
@@ -780,9 +821,9 @@ static inline void NdCopyRecurDFNonSeqDynamic(size_t curDim, const char *inBase,
 // minimized to average O(1), which is independent of the number of dimensions.
 
 static inline void NdCopyRecurDFNonSeqDynamicRevEndian(
-    size_t curDim, const char *inBase, char *outBase, Dims &inRltvOvlpSPos,
-    Dims &outRltvOvlpSPos, Dims &inStride, Dims &outStride, Dims &ovlpCount,
-    size_t elmSize)
+    size_t curDim, const char *inBase, char *outBase, CoreDims &inRltvOvlpSPos,
+    CoreDims &outRltvOvlpSPos, CoreDims &inStride, CoreDims &outStride,
+    CoreDims &ovlpCount, size_t elmSize)
 {
     if (curDim == inStride.size())
     {
@@ -805,13 +846,12 @@ static inline void NdCopyRecurDFNonSeqDynamicRevEndian(
     }
 }
 
-static inline void NdCopyIterDFSeqPadding(const char *&inOvlpBase,
-                                          char *&outOvlpBase,
-                                          Dims &inOvlpGapSize,
-                                          Dims &outOvlpGapSize, Dims &ovlpCount,
-                                          size_t minContDim, size_t blockSize)
+static inline void
+NdCopyIterDFSeqPadding(const char *&inOvlpBase, char *&outOvlpBase,
+                       CoreDims &inOvlpGapSize, CoreDims &outOvlpGapSize,
+                       CoreDims &ovlpCount, size_t minContDim, size_t blockSize)
 {
-    Dims pos(ovlpCount.size(), 0);
+    DimsArray pos(ovlpCount.size(), (size_t)0);
     size_t curDim = 0;
     while (true)
     {
@@ -838,11 +878,11 @@ static inline void NdCopyIterDFSeqPadding(const char *&inOvlpBase,
 }
 
 static inline void NdCopyIterDFSeqPaddingRevEndian(
-    const char *&inOvlpBase, char *&outOvlpBase, Dims &inOvlpGapSize,
-    Dims &outOvlpGapSize, Dims &ovlpCount, size_t minContDim, size_t blockSize,
-    size_t elmSize, size_t numElmsPerBlock)
+    const char *&inOvlpBase, char *&outOvlpBase, CoreDims &inOvlpGapSize,
+    CoreDims &outOvlpGapSize, CoreDims &ovlpCount, size_t minContDim,
+    size_t blockSize, size_t elmSize, size_t numElmsPerBlock)
 {
-    Dims pos(ovlpCount.size(), 0);
+    DimsArray pos(ovlpCount.size(), (size_t)0);
     size_t curDim = 0;
     while (true)
     {
@@ -874,13 +914,13 @@ static inline void NdCopyIterDFSeqPaddingRevEndian(
     }
 }
 static inline void NdCopyIterDFDynamic(const char *inBase, char *outBase,
-                                       Dims &inRltvOvlpSPos,
-                                       Dims &outRltvOvlpSPos, Dims &inStride,
-                                       Dims &outStride, Dims &ovlpCount,
-                                       size_t elmSize)
+                                       CoreDims &inRltvOvlpSPos,
+                                       CoreDims &outRltvOvlpSPos,
+                                       CoreDims &inStride, CoreDims &outStride,
+                                       CoreDims &ovlpCount, size_t elmSize)
 {
     size_t curDim = 0;
-    Dims pos(ovlpCount.size() + 1, 0);
+    DimsArray pos(ovlpCount.size() + 1, (size_t)0);
     std::vector<const char *> inAddr(ovlpCount.size() + 1);
     inAddr[0] = inBase;
     std::vector<char *> outAddr(ovlpCount.size() + 1);
@@ -911,15 +951,13 @@ static inline void NdCopyIterDFDynamic(const char *inBase, char *outBase,
     }
 }
 
-static inline void NdCopyIterDFDynamicRevEndian(const char *inBase,
-                                                char *outBase,
-                                                Dims &inRltvOvlpSPos,
-                                                Dims &outRltvOvlpSPos,
-                                                Dims &inStride, Dims &outStride,
-                                                Dims &ovlpCount, size_t elmSize)
+static inline void NdCopyIterDFDynamicRevEndian(
+    const char *inBase, char *outBase, CoreDims &inRltvOvlpSPos,
+    CoreDims &outRltvOvlpSPos, CoreDims &inStride, CoreDims &outStride,
+    CoreDims &ovlpCount, size_t elmSize)
 {
     size_t curDim = 0;
-    Dims pos(ovlpCount.size() + 1, 0);
+    DimsArray pos(ovlpCount.size() + 1, (size_t)0);
     std::vector<const char *> inAddr(ovlpCount.size() + 1);
     inAddr[0] = inBase;
     std::vector<char *> outAddr(ovlpCount.size() + 1);

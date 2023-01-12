@@ -35,6 +35,16 @@ InlineReader::InlineReader(IO &io, const std::string &name, const Mode mode,
         std::cout << "Inline Reader " << m_ReaderRank << " Open(" << m_Name
                   << ") in constructor" << std::endl;
     }
+    m_IsOpen = true;
+}
+
+InlineReader::~InlineReader()
+{
+    if (m_IsOpen)
+    {
+        DestructorClose(m_FailVerbose);
+    }
+    m_IsOpen = false;
 }
 
 const InlineWriter *InlineReader::GetWriter() const
@@ -244,7 +254,7 @@ void InlineReader::SetDeferredVariablePointers()
     for (const auto &varName : m_DeferredVariables)
     {
         const DataType type = m_IO.InquireVariableType(varName);
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
         }
 #define declare_type(T)                                                        \

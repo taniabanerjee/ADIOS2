@@ -125,11 +125,11 @@ void ZFPRateCUDA(const std::string rate)
                            std::bind(std::minus<float>(), std::placeholders::_1,
                                      INCREMENT));
 
-            for (int i = 0; i < NxTotal; i++)
+            for (size_t i = 0; i < NxTotal; i++)
             {
                 char msg[1 << 8] = {0};
-                sprintf(msg, "t=%d i=%d rank=%d r32o=%f r32s=%f", t, i, mpiRank,
-                        r32o[i], r32s[i]);
+                snprintf(msg, sizeof(msg), "t=%d i=%zu rank=%d r32o=%f r32s=%f",
+                         t, i, mpiRank, r32o[i], r32s[i]);
                 ASSERT_LT(std::abs(r32o[i] - r32s[i]), EPSILON) << msg;
             }
         }
@@ -156,7 +156,10 @@ INSTANTIATE_TEST_SUITE_P(ZFPRate, BPWRZFPCUDA,
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

@@ -167,7 +167,6 @@ TEST_F(BPWriteNullTest, BPWrite1D1x8)
             bpWriter.Put(var_r64, currentTestData.R64.data());
             bpWriter.Put(var_cr32, currentTestData.CR32.data());
             bpWriter.Put(var_cr64, currentTestData.CR64.data());
-            bpWriter.PerformPuts();
 
             bpWriter.EndStep();
         }
@@ -320,7 +319,6 @@ TEST_F(BPWriteNullTest, BPWrite2D2x4)
             bpWriter.Put(var_r64, currentTestData.R64.data());
             bpWriter.Put(var_cr32, currentTestData.CR32.data());
             bpWriter.Put(var_cr64, currentTestData.CR64.data());
-            bpWriter.PerformPuts();
 
             bpWriter.EndStep();
         }
@@ -620,7 +618,10 @@ TEST_F(BPWriteNullTest, BPWrite2D4x2_MultiSteps)
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

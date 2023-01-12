@@ -63,10 +63,11 @@ void Comm::GathervArrays(const T *source, size_t sourceCount,
             displs[countsSize - 1] + counts[countsSize - 1];
         if (totalElements > 2147483648)
         {
-            std::runtime_error(
+            helper::ThrowNested<std::runtime_error>(
+                "Helper", "adiosComm", "GathervVectors",
                 "ERROR: GathervArrays does not support gathering more than "
                 "2^31 elements. Here it was tasked with " +
-                std::to_string(totalElements) + " elements\n");
+                    std::to_string(totalElements) + " elements\n");
         }
     }
     this->Gatherv(source, sourceCount, destination, counts, displs.data(),
@@ -242,6 +243,12 @@ template <typename T>
 void Comm::Send(const T *buf, size_t count, int dest, int tag,
                 const std::string &hint) const
 {
+    if (dest < 0 || dest > m_Impl->Size() - 1)
+    {
+        throw std::runtime_error(
+            "Invalid MPI dest rank in Send: " + std::to_string(dest) +
+            " for a communicator of size " + std::to_string(m_Impl->Size()));
+    }
     return m_Impl->Send(buf, count, CommImpl::GetDatatype<T>(), dest, tag,
                         hint);
 }
@@ -250,6 +257,12 @@ template <typename T>
 Comm::Status Comm::Recv(T *buf, size_t count, int source, int tag,
                         const std::string &hint) const
 {
+    if (source < 0 || source > m_Impl->Size() - 1)
+    {
+        throw std::runtime_error(
+            "Invalid MPI source rank in Recv: " + std::to_string(source) +
+            " for a communicator of size " + std::to_string(m_Impl->Size()));
+    }
     return m_Impl->Recv(buf, count, CommImpl::GetDatatype<T>(), source, tag,
                         hint);
 }
@@ -267,6 +280,12 @@ template <typename T>
 Comm::Req Comm::Isend(const T *buffer, const size_t count, int dest, int tag,
                       const std::string &hint) const
 {
+    if (dest < 0 || dest > m_Impl->Size() - 1)
+    {
+        throw std::runtime_error(
+            "Invalid MPI dest rank in Isend: " + std::to_string(dest) +
+            " for a communicator of size " + std::to_string(m_Impl->Size()));
+    }
     return m_Impl->Isend(buffer, count, CommImpl::GetDatatype<T>(), dest, tag,
                          hint);
 }
@@ -275,6 +294,12 @@ template <typename T>
 Comm::Req Comm::Irecv(T *buffer, const size_t count, int source, int tag,
                       const std::string &hint) const
 {
+    if (source < 0 || source > m_Impl->Size() - 1)
+    {
+        throw std::runtime_error(
+            "Invalid MPI source rank in Irecv: " + std::to_string(source) +
+            " for a communicator of size " + std::to_string(m_Impl->Size()));
+    }
     return m_Impl->Irecv(buffer, count, CommImpl::GetDatatype<T>(), source, tag,
                          hint);
 }

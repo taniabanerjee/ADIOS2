@@ -17,6 +17,7 @@
 #ifndef LINUX_KERNEL_MODULE
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #ifdef HAVE_MALLOC_H
 #include <malloc.h>
 #endif
@@ -79,14 +80,14 @@ struct basic_type_info
     { 2, 2, IREG},  /* US */
     { 4, 4, IREG},  /* I */
     { 4, 4, IREG},  /* U */
-    { sizeof(long), sizeof(long), IREG},  /* UL */
-    { sizeof(long), sizeof(long), IREG},  /* L */
+    { sizeof(uintptr_t), sizeof(uintptr_t), IREG},  /* UL */
+    { sizeof(intptr_t), sizeof(intptr_t), IREG},  /* L */
     { sizeof(char*), sizeof(char*), IREG},  /* P */
     { sizeof(float), sizeof(float), FREG},  /* F */
     { sizeof(double), sizeof(double), FREG},  /* D */
     { 0, 8, IREG}, /* V */
     { -1, 8, IREG}, /* B */
-    { sizeof(long), sizeof(long), IREG}, /* EC */
+    { sizeof(void*), sizeof(void*), IREG}, /* EC */
 };
 
 int x86_64_type_align[] = {
@@ -96,8 +97,8 @@ int x86_64_type_align[] = {
         2, /* US */
         4, /* I */
         4, /* U */
-        sizeof(unsigned long), /* UL */
-        sizeof(long), /* L */
+        sizeof(uintptr_t), /* UL */
+        sizeof(intptr_t), /* L */
         sizeof(char*), /* P */
         4, /* F */
         4, /* D */
@@ -113,8 +114,8 @@ int x86_64_type_size[] = {
         2, /* US */
         4, /* I */
         4, /* U */
-        sizeof(unsigned long), /* UL */
-        sizeof(long), /* L */
+        sizeof(uintptr_t), /* UL */
+        sizeof(intptr_t), /* L */
         sizeof(char*), /* P */
         4, /* F */
         8, /* D */
@@ -239,7 +240,7 @@ BYTE_OUT1IR(dill_stream s, int rex, int insn1, int imm32)
 }
 
 static void
-BYTE_OUT1LR(dill_stream s, int rex, int insn1, long imm64)
+BYTE_OUT1LR(dill_stream s, int rex, int insn1, intptr_t imm64)
 {
     unsigned char *tmp_ip;
     if (s->p->cur_ip >= s->p->code_limit) {
@@ -247,12 +248,12 @@ BYTE_OUT1LR(dill_stream s, int rex, int insn1, long imm64)
     }
     tmp_ip = (unsigned char *) s->p->cur_ip;
     if (rex != 0) {
-	long tmp = imm64;
+	intptr_t tmp = imm64;
 	*tmp_ip = (unsigned char)rex|0x40;
 	*(tmp_ip + 1) = (unsigned char)insn1;
 	memcpy(tmp_ip + 2, &tmp, 8);
     } else {
-	long tmp = imm64;
+	intptr_t tmp = imm64;
 	*(tmp_ip) = (unsigned char)insn1;
 	memcpy(tmp_ip + 1, &tmp, 8);
     }
@@ -567,7 +568,7 @@ int src;
     {
 	int rex1 = 0;
 	if (dest > XMM7) rex1 = REX_R|REX_B;
-	BYTE_OUT3R(s, rex, 0x0f, 0x57, ModRM(0x3, dest, dest));
+	BYTE_OUT3R(s, rex1, 0x0f, 0x57, ModRM(0x3, dest, dest));   // GSE really rex1?  Late fix.
     }
     if (typ == DILL_D) op = 0xf2;
     BYTE_OUT1R3(s, op, rex, 0x0f, 0x5c, ModRM(0x3, dest, src));
@@ -605,7 +606,7 @@ x86_64_seti(dill_stream s, int r, int val)
 }
 
 static void 
-x86_64_setl(dill_stream s, int r, long val)
+x86_64_setl(dill_stream s, int r, IMM_TYPE val)
 {
     int rex = REX_W;
     if (r > RDI) rex |= REX_B;
@@ -617,7 +618,7 @@ x86_64_setp(dill_stream s, int type, int junk, int r, void *val)
 {
     int rex = REX_W;
     union {
-	long l;
+	intptr_t l;
 	void *a;
     } a;
     a.a = val;
@@ -709,6 +710,8 @@ x86_64_save_restore_op(dill_stream s, int save_restore, int type, int reg)
 }
 
 /*
+ *     This is linux convention.  Windows is different.
+ *
  * register   use  			       preserved across function calls
  *  %rax temporary register; with variable arguments
  *        passes information about the
@@ -757,7 +760,11 @@ Register Offset
 %xmm15 288
 
 */
+#ifndef USE_WINDOWS_CALLS
 static int arg_regs[] = {RDI, RSI, RDX, RCX, R8, R9};
+#else
+static int arg_regs[] = {RCX, RDX, R8, R9};
+#endif
 
 static void
 save_required_regs(dill_stream s, int force)
@@ -976,7 +983,7 @@ int dest;
 }
 
 extern void
-x86_64_ploadi(dill_stream s, int type, int junk, int dest, int src, long offset)
+x86_64_ploadi(dill_stream s, int type, int junk, int dest, int src, IMM_TYPE offset)
 {
     unsigned char opcode = ld_opcodes[type];
     int tmp_dest = dest;
@@ -1040,7 +1047,7 @@ x86_64_ploadi(dill_stream s, int type, int junk, int dest, int src, long offset)
 	    } else {
 		BYTE_OUT3R(s, rex, opcode, ModRM(0x0, tmp_dest, 0x4),SIB(0,4,src));
 	    }
-	} else if (((long)offset <= 127) && ((long)offset > -128)) {
+	} else if (((intptr_t)offset <= 127) && ((intptr_t)offset > -128)) {
 	    if (float_op != 0) {
 		BYTE_OUT1R5(s, float_op, rex, 0x0f, 0x10, ModRM(0x1, tmp_dest, src), SIB(0,ESP,0x4),offset & 0xff);
 	    } else {
@@ -1060,7 +1067,7 @@ x86_64_ploadi(dill_stream s, int type, int junk, int dest, int src, long offset)
 	    } else {
 		BYTE_OUT2R(s, rex, opcode, ModRM(0x0, tmp_dest, src));
 	    }
-	} else if (((long)offset <= 127) && ((long)offset > -128)) {
+	} else if (((intptr_t)offset <= 127) && ((intptr_t)offset > -128)) {
 	    if (float_op != 0) {
 		BYTE_OUT1R4(s, float_op, rex, 0x0f, 0x10, ModRM(0x1, tmp_dest, src), offset & 0xff);
 	    } else {
@@ -1203,7 +1210,7 @@ x86_64_pload(dill_stream s, int type, int junk, int dest, int src1, int src2)
 }
 
 extern void
-x86_64_pbsloadi(dill_stream s, int type, int junk, int dest, int src, long offset)
+x86_64_pbsloadi(dill_stream s, int type, int junk, int dest, int src, IMM_TYPE offset)
 {
     int rex = 0;
     int fdest = dest;
@@ -1317,7 +1324,7 @@ static unsigned char st_opcodes[] = {
     0x89, /* DILL_EC */
 };
 extern void
-x86_64_pstorei(dill_stream s, int type, int junk, int dest, int src, long offset)
+x86_64_pstorei(dill_stream s, int type, int junk, int dest, int src, IMM_TYPE offset)
 {
     x86_64_mach_info smi = (x86_64_mach_info) s->p->mach_info;
     int rex = 0, float_op = 0;
@@ -1355,7 +1362,7 @@ x86_64_pstorei(dill_stream s, int type, int junk, int dest, int src, long offset
     if (((src&0x7) == ESP) &&
 	(((offset & 0xffffffff80000000) == 0) ||
 	 ((offset & 0xffffffff80000000) == 0xffffffff80000000))) {
-	if (((long)offset <= 127) && ((long)offset > -128)) {
+	if (((intptr_t)offset <= 127) && ((intptr_t)offset > -128)) {
 	    if (float_op != 0) {
 		BYTE_OUT1R5(s, float_op, rex, 0x0f, 0x11, ModRM(0x1, dest, src), SIB(0x0,ESP,0x4), offset & 0xff);
 	    } else {
@@ -1375,7 +1382,7 @@ x86_64_pstorei(dill_stream s, int type, int junk, int dest, int src, long offset
 	    } else {
 		BYTE_OUT2R(s, rex, st_opcodes[type], ModRM(0x0, dest, src));
 	    }
-	} else if (((long)offset <= 127) && ((long)offset > -128)) {
+	} else if (((intptr_t)offset <= 127) && ((intptr_t)offset > -128)) {
 	    if (float_op != 0) {
 		BYTE_OUT1R4(s, float_op, rex, 0x0f, 0x11, ModRM(0x1, dest, src), offset & 0xff);
 	    } else {
@@ -1447,7 +1454,7 @@ extern void x86_64_div(dill_stream s, int op3, int op, int dest, int src1,
 }
 
 extern void x86_64_divi(dill_stream s, int op3, int op, int dest, int src, 
-		      long imm)
+		      IMM_TYPE imm)
 {
 }
 
@@ -1586,7 +1593,7 @@ int sign;
 int imm;
 int dest;
 int src1;
-long src2;
+IMM_TYPE src2;
 {
     int rex = REX_W;
     /* make src1 be EAX */
@@ -1632,7 +1639,7 @@ int div;
 int type;
 int dest;
 int src1;
-long imm;
+IMM_TYPE imm;
 {
     x86_64_push_reg(s, EBP);
     x86_64_setl(s, EBP, imm);
@@ -1719,7 +1726,7 @@ int op;
 int typ;
 int dest;
 int src;
-long imm;
+IMM_TYPE imm;
 {
     int rex = 0;
     if ((typ == DILL_L) || (typ == DILL_UL) || (typ == DILL_P)) {
@@ -1813,7 +1820,7 @@ int op;
 int type;
 int dest;
 int src;
-long imm;
+IMM_TYPE imm;
 {
     int rex = 0;
     if ((type == DILL_L) || (type == DILL_UL) || (type == DILL_P)) {
@@ -2125,7 +2132,7 @@ x86_64_compare(dill_stream s, int op, int type, int dest, int src1, int src2)
 }
 
 extern void
-x86_64_comparei(dill_stream s, int op, int type, int dest, int src, long imm)
+x86_64_comparei(dill_stream s, int op, int type, int dest, int src, IMM_TYPE imm)
 {
     int rex = 0;
     if ((type == DILL_L) || (type == DILL_UL) || (type == DILL_P)) rex |= REX_W;
@@ -2172,7 +2179,7 @@ extern void x86_64_jump_to_reg(dill_stream s, unsigned long reg)
 
 extern void x86_64_jump_to_imm(dill_stream s, void *imm)
 {
-    x86_64_seti(s, EAX, (unsigned long) imm);
+    x86_64_seti(s, EAX, (intptr_t) imm);
     BYTE_OUT2(s, 0xff, ModRM(0x3, 0x4, EAX));
 }
 
@@ -2183,7 +2190,7 @@ x86_64_jal(dill_stream s, int return_addr_reg, int target)
 }
 
 extern void 
-x86_64_special(dill_stream s, special_operations type, long param)
+x86_64_special(dill_stream s, special_operations type, intptr_t param)
 {
     x86_64_mach_info smi = (x86_64_mach_info) s->p->mach_info;
 
@@ -2249,7 +2256,7 @@ static void internal_push(dill_stream s, int type, int immediate,
 	}	    
     }
     if ((arg.type != DILL_D) && (arg.type != DILL_F)) {
-      if (smi->int_arg_count < 6) {
+      if (smi->int_arg_count < sizeof(arg_regs) / sizeof(arg_regs[0])) {
 	arg.is_register = 1;
 	arg.in_reg = arg.out_reg = arg_regs[smi->int_arg_count];
 	smi->int_arg_count++;
@@ -2289,7 +2296,7 @@ static void internal_push(dill_stream s, int type, int immediate,
 		x86_64_setl(s, EAX, a.i);
 		arg_type = DILL_I;
 	    } else {
-		x86_64_setl(s, EAX, *(long*)value_ptr);
+		x86_64_setl(s, EAX, *(intptr_t*)value_ptr);
 		arg_type = DILL_L;
 	    }
 	    x86_64_pstorei(s, arg_type, 0, EAX, ESP, arg.offset);
@@ -2301,7 +2308,7 @@ static void internal_push(dill_stream s, int type, int immediate,
     } else {
 	if ((type != DILL_F) && (type != DILL_D)) {
 	    if (arg.is_immediate) {
-		x86_64_setl(s, arg.out_reg, *(long*)value_ptr);
+		x86_64_setl(s, arg.out_reg, *(intptr_t*)value_ptr);
 	    } else {
 		x86_64_pmov(s, arg.type, arg.out_reg, *(int*) value_ptr);
 	    }
@@ -2313,7 +2320,7 @@ static void internal_push(dill_stream s, int type, int immediate,
 		    x86_64_setf(s, type, 0, arg.out_reg, 
 			       *(double*)value_ptr);
 		} else {
-		    x86_64_setl(s, arg.out_reg, *(long*)value_ptr);
+		    x86_64_setl(s, arg.out_reg, *(intptr_t*)value_ptr);
 		}
 	    } else {
 		/* move to the appropriate float reg */
@@ -2354,7 +2361,7 @@ extern void x86_64_push(dill_stream s, int type, int reg)
     }
 }
 
-extern void x86_64_pushi(dill_stream s, int type, long value)
+extern void x86_64_pushi(dill_stream s, int type, IMM_TYPE value)
 {
     internal_push(s, type, 1, &value);
 }
@@ -2412,7 +2419,7 @@ extern int x86_64_callr(dill_stream s, int type, int src)
 }
 
 extern void
-x86_64_branchi(dill_stream s, int op, int type, int src, long imm, int label)
+x86_64_branchi(dill_stream s, int op, int type, int src, IMM_TYPE imm, int label)
 {
     int rex = 0;
     if ((type == DILL_L) || (type == DILL_UL) || (type == DILL_P)) rex |= REX_W;
@@ -2492,7 +2499,7 @@ extern void x86_64_retf(dill_stream s, int data1, int data2, double imm)
     }
 }
 
-extern void x86_64_reti(dill_stream s, int data1, int data2, long imm)
+extern void x86_64_reti(dill_stream s, int data1, int data2, IMM_TYPE imm)
 {
     switch (data1) {
     case DILL_C:
@@ -2583,6 +2590,12 @@ x86_64_emit_save(dill_stream s)
     s->p->cur_ip = save_ip;
 }
     
+#ifdef USE_VIRTUAL_PROTECT
+#include <windows.h>
+#include <memoryapi.h>
+#include <intrin.h>
+#endif
+
 static void
 x86_64_flush(void *base, void *limit)
 {
@@ -2592,15 +2605,29 @@ x86_64_flush(void *base, void *limit)
 
 	/* flush every 8 bytes of preallocated insn stream. */
 	while((char*)ptr < (char*) limit) {
+#ifndef _MSC_VER
+#ifdef __x86_64__
 	    asm volatile ("clflush (%0)" : /* */ : "r" (ptr));
+#endif
+#else
+	    _mm_clflush((const void *) ptr);
+#endif
 	    ptr = (char *)ptr + 8;
 	}
+#ifndef _MSC_VER
 	asm volatile("nop");
 	asm volatile("nop");
 	asm volatile("nop");
 	asm volatile("nop");
 	asm volatile("nop");
+#endif
     }
+#endif
+#ifdef USE_VIRTUAL_PROTECT
+    int result;
+    DWORD dummy;
+    size_t size = ((intptr_t)limit - (intptr_t)base);
+    result = VirtualProtect(base, size, PAGE_EXECUTE_READWRITE, &dummy);
 #endif
 }    
 extern void
@@ -2652,7 +2679,7 @@ int available_size;
 }
 
 extern void
-x86_64_pset(dill_stream s, int type, int junk, int dest, long imm)
+x86_64_pset(dill_stream s, int type, int junk, int dest, IMM_TYPE imm)
 {
     switch(type) {
     case DILL_L: case DILL_UL: case DILL_P:
@@ -2675,7 +2702,7 @@ x86_64_setf(dill_stream s, int type, int junk, int dest, double imm)
     union {
 	double d;
 	int i[2];
-	long l;
+	intptr_t l;
     } b;
     if (type == DILL_F) {
 	int rex = 0;
@@ -2816,7 +2843,7 @@ x86_64_count_insn(dill_stream s, int start, int end)
     i.buffer_length = MAXLENGTH;
     count = 0;
     insn_ptr = (char*) (i.buffer + start);
-    while((long)insn_ptr < (long)i.buffer + end) {
+    while((intptr_t)insn_ptr < (intptr_t)i.buffer + end) {
 	insn_ptr += print_insn_i386((bfd_vma)insn_ptr, &i);
 	count++;
     }
@@ -2833,8 +2860,14 @@ x86_64_count_insn(dill_stream s, int start, int end)
     return end - start;
 }
 extern int
-x86_64_init_disassembly_info(dill_stream s, void * ptr){return 0;}
-extern int x86_64_print_insn(dill_stream s, void *info_ptr, void *insn){return 0;}
+x86_64_init_disassembly_info(dill_stream s, void * ptr){return 1;}
+unsigned int x86_64_disassemble(unsigned char *bytes, unsigned int max, int offset, char *output);
+extern int x86_64_print_insn(dill_stream s, void *info_ptr, void *insn){
+    char out[128] = "";
+    int ret = x86_64_disassemble(insn, sizeof(out), 0, out);
+    printf("%s", out);
+    return ret;
+}
 #endif
 
 extern void

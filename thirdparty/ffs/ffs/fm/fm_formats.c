@@ -1317,7 +1317,7 @@ int *super_rep_size;
     cur_offset = (sizeof(struct _subformat_wire_format_1) + 
 		  (sizeof(struct _field_wire_format_1) * 
 		   (fmformat->field_count)));
-    rep->f.f1.server_rep_version = 1;
+    rep->f.f1.server_rep_version = 2;
     rep->f.f1.header_size = sizeof(struct _subformat_wire_format_1);
     
     rep->f.f1.column_major_arrays = fmformat->column_major_arrays;
@@ -1435,7 +1435,7 @@ FMFormat fmformat;
     rep->f.f1.format_rep_length = htons(rep_size & 0xffff);
     rep->f.f1.record_byte_order = fmformat->byte_reversal ? 
 	OTHER_BYTE_ORDER : OUR_BYTE_ORDER;
-    rep->f.f1.server_rep_version = 1;
+    rep->f.f1.server_rep_version = 2;
     rep->f.f1.subformat_count = subformat_count;
     rep->f.f1.recursive_flag = 0;  /* GSE must set right */
     rep->f.f1.top_bytes_format_rep_length = htons(rep_size>>16);
@@ -1693,6 +1693,10 @@ void add_format(FMFormat f, FMFormat* sorted, FMFormat *visited, FMFormat* stack
     /* if n has not been visited yet then */
     if (!on_list(f, visited)) {
 	FMFormat tmp[100];
+	FMFormat *tmp_list = &tmp[0];
+	if (f->field_count >= (sizeof(tmp)/sizeof(tmp[0]))) {
+	    tmp_list = malloc(f->field_count * sizeof(tmp[0]));
+	}
 	int count = 0;
 	int i;
         /* mark n as visited */
@@ -1701,15 +1705,16 @@ void add_format(FMFormat f, FMFormat* sorted, FMFormat *visited, FMFormat* stack
 	/* get subfields and sort them by name for predictability */
 	for (i=0; i < f->field_count; i++) {
 	    if (f->field_subformats[i] != NULL) {
-		tmp[count++] = f->field_subformats[i];
+		tmp_list[count++] = f->field_subformats[i];
 	    }
 	}
-	qsort(&tmp[0], count, sizeof(tmp[0]), compare_by_name_FMFormat);
+	qsort(&tmp_list[0], count, sizeof(tmp_list[0]), compare_by_name_FMFormat);
 
 	for (i=0; i < count; i++) {
-	    add_format(tmp[i], sorted, visited, stack);
+	    add_format(tmp_list[i], sorted, visited, stack);
 	}
 	add_to_list(f, sorted);
+	if (tmp_list != &tmp[0]) free(tmp_list);
     }
 }
 
@@ -1796,6 +1801,7 @@ register_data_format(FMContext context, FMStructDescList struct_list)
 	fmformat->record_length = 0;
 	fmformat->variant = 0;
 	fmformat->record_length = struct_list[i].struct_size;
+	fmformat->IOversion = 4;   // 64-bit sizes
 
 	new_field_list = 
 	    validate_and_copy_field_list(struct_list[i].field_list, fmformat);
@@ -3468,6 +3474,7 @@ struct _subformat_wire_format *rep;
     strcpy(format->format_name, (char *) rep + tmp);
     tmp = rep->f.f0.field_count;
     if (byte_reversal) byte_swap((char*)&tmp, 2);
+    format->IOversion = 2;
     format->field_count = tmp;
     format->variant = 0;
     tmp2 = rep->f.f0.record_length;
@@ -3591,6 +3598,7 @@ struct _subformat_wire_format *rep;
     tmp = rep->f.f1.floating_point_rep;
     if (byte_reversal) byte_swap((char*)&tmp, 2);
     format->float_format = (FMfloat_format) tmp;
+    format->IOversion = 3;
     if (format->float_format == Format_Unknown) {
 	/* old data must be pure-endian IEEE 754*/
 	if (rep->f.f1.record_byte_order == 1) {
@@ -3686,6 +3694,10 @@ struct _subformat_wire_format *rep;
 	return expand_subformat_from_rep_0(rep);
     } else if (rep->f.f0.server_rep_version == 1) {
 	return expand_subformat_from_rep_1(rep);
+    } else if (rep->f.f0.server_rep_version == 2) {
+	FMFormat ret = expand_subformat_from_rep_1(rep);
+	ret->IOversion = 4;
+	return ret;
     } else {
 	return NULL;
     }

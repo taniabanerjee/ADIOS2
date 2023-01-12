@@ -14,7 +14,7 @@ endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/ADIOSFunctions.cmake)
 
-setup_version(2.7.1)
+setup_version(2.8.3)
 
 project(ADIOS2 VERSION ${ADIOS2_VERSION})
 
@@ -95,6 +95,7 @@ endif()
 # Force C++11 and C99
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_EXTENSIONS OFF)
 if(NOT MSVC)
   set(CMAKE_C_STANDARD 99)
   set(CMAKE_C_STANDARD_REQUIRED True)
@@ -139,6 +140,7 @@ endif()
 include(CTest)
 
 adios_option(Blosc      "Enable support for Blosc transforms" AUTO)
+adios_option(Blosc2     "Enable support for c-blosc-2 transforms" AUTO)
 adios_option(BZip2      "Enable support for BZip2 transforms" AUTO)
 adios_option(ZFP        "Enable support for ZFP transforms" AUTO)
 adios_option(SZ         "Enable support for SZ transforms" AUTO)
@@ -162,6 +164,8 @@ adios_option(SysVShMem  "Enable support for SysV Shared Memory IPC on *NIX" AUTO
 adios_option(Profiling  "Enable support for profiling" AUTO)
 adios_option(Endian_Reverse "Enable support for Little/Big Endian Interoperability" AUTO)
 adios_option(Sodium     "Enable support for Sodium for encryption" AUTO)
+adios_option(Catalyst   "Enable support for in situ visualization plugin using ParaView Catalyst" AUTO)
+adios_option(AWSSDK     "Enable support for S3 compatible storage using AWS SDK's S3 module" AUTO)
 include(${PROJECT_SOURCE_DIR}/cmake/DetectOptions.cmake)
 
 if(ADIOS2_HAVE_CUDA)
@@ -222,7 +226,9 @@ endif()
 
 
 set(ADIOS2_CONFIG_OPTS
-    BP5 DataMan DataSpaces HDF5 HDF5_VOL MHS SST CUDA Fortran MPI Python Blosc BZip2 LIBPRESSIO MGARD PNG SZ ZFP DAOS IME O_DIRECT Sodium SysVShMem ZeroMQ Profiling Endian_Reverse
+    BP5 DataMan DataSpaces HDF5 HDF5_VOL MHS SST CUDA Fortran MPI Python Blosc Blosc2 
+    BZip2 LIBPRESSIO MGARD PNG SZ ZFP DAOS IME O_DIRECT Sodium Catalyst SysVShMem ZeroMQ 
+    Profiling Endian_Reverse GPU_Support AWSSDK
 )
 
 GenerateADIOSHeaderConfig(${ADIOS2_CONFIG_OPTS})
@@ -394,7 +400,7 @@ foreach(opt IN LISTS ADIOS2_CONFIG_OPTS)
   endif()
 endforeach()
 
-if (ADIOS2_HAVE_SST AND ADIOS2_SST_HAVE_LIBFABRIC) 
+if (ADIOS2_HAVE_SST AND (ADIOS2_SST_HAVE_LIBFABRIC OR ADIOS2_SST_HAVE_UCX))
 message("    RDMA Transport for Staging: Available")
 else()
 message("    RDMA Transport for Staging: Unconfigured")

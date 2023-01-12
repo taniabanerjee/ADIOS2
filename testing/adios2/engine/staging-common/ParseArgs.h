@@ -33,6 +33,7 @@ int LongFirstDelay = 0;
 int FirstTimestepMustBeZero = 0;
 int LockGeometry = 0;
 bool VaryingDataSize = false;
+bool TestVarDestruction = false;
 bool AdvancingAttrs = false;
 int NoData = 0;
 int NoDataNode = -1;
@@ -41,6 +42,10 @@ int EarlyExit = 0;
 int LocalCount = 1;
 int DataSize = 5 * 1024 * 1024 / 8; /* DefaultMinDeferredSize is 4*1024*1024
                                        This should be more than that. */
+bool ModifiableAttributes = false;
+bool RoundRobin = false;
+bool OnDemand = false;
+bool DontClose = false;
 
 std::string shutdown_name = "DieTest";
 adios2::Mode GlobalWriteMode = adios2::Mode::Deferred;
@@ -118,6 +123,10 @@ void ParseArgs(int argc, char **argv)
             IncreasingDelay = 1;
             NonBlockingBeginStep = 1;
         }
+        else if (std::string(argv[1]) == "--modifiable_attributes")
+        {
+            ModifiableAttributes = true;
+        }
         else if (std::string(argv[1]) == "--expect_contiguous_time")
         {
             TimeGapExpected = 0;
@@ -151,6 +160,10 @@ void ParseArgs(int argc, char **argv)
         else if (std::string(argv[1]) == "--shared_io")
         {
             SharedIO = true;
+        }
+        else if (std::string(argv[1]) == "--var_destruction")
+        {
+            TestVarDestruction = true;
         }
         else if (std::string(argv[1]) == "--shared_var")
         {
@@ -262,9 +275,19 @@ void ParseArgs(int argc, char **argv)
         {
             ZeroDataVar++;
         }
-        else if (std::string(argv[1]) == "--zero_data_rank")
+        else if (std::string(argv[1]) == "--round_robin")
         {
-            ZeroDataRank++;
+            if (OnDemand)
+                std::cerr << "OnDemand already specified, round robin ignored"
+                          << std::endl;
+            RoundRobin = true;
+        }
+        else if (std::string(argv[1]) == "--on_demand")
+        {
+            if (RoundRobin)
+                std::cerr << "RoundRobin already specified, on_demand ignored"
+                          << std::endl;
+            OnDemand = true;
         }
         else if (std::string(argv[1]) == "--no_data")
         {
@@ -304,6 +327,10 @@ void ParseArgs(int argc, char **argv)
         else if (std::string(argv[1]) == "--flush")
         {
             Flush++;
+        }
+        else if (std::string(argv[1]) == "--dont_close")
+        {
+            DontClose = true;
         }
         else if (std::string(argv[1]) == "--disable_mpmd")
         {

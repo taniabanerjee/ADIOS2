@@ -19,35 +19,17 @@ namespace engine
 namespace ssc
 {
 
-size_t GetTypeSize(DataType type)
-{
-    if (type == DataType::None)
-    {
-        helper::Throw<std::runtime_error>("Engine", "SscHelper", "GetTypeSize",
-                                          "unknown data type");
-    }
-#define declare_type(T)                                                        \
-    else if (type == helper::GetDataType<T>()) { return sizeof(T); }
-    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
-#undef declare_type
-    else
-    {
-        helper::Throw<std::runtime_error>("Engine", "SscHelper", "GetTypeSize",
-                                          "unknown data type");
-    }
-    return 0;
-}
-
-size_t TotalDataSize(const Dims &dims, DataType type, const ShapeID &shapeId)
+size_t TotalDataSize(const Dims &dims, const size_t elementSize,
+                     const ShapeID &shapeId)
 {
     if (shapeId == ShapeID::GlobalArray || shapeId == ShapeID::LocalArray)
     {
-        return std::accumulate(dims.begin(), dims.end(), GetTypeSize(type),
+        return std::accumulate(dims.begin(), dims.end(), elementSize,
                                std::multiplies<size_t>());
     }
     else if (shapeId == ShapeID::GlobalValue || shapeId == ShapeID::LocalValue)
     {
-        return GetTypeSize(type);
+        return elementSize;
     }
     helper::Throw<std::runtime_error>("Engine", "SscHelper", "TotalDataSize",
                                       "ShapeID not supported");
@@ -65,7 +47,7 @@ size_t TotalDataSize(const BlockVec &bv)
         }
         else
         {
-            s += TotalDataSize(b.count, b.type, b.shapeId);
+            s += TotalDataSize(b.count, b.elementSize, b.shapeId);
         }
     }
     return s;
@@ -142,6 +124,18 @@ void SerializeVariables(const BlockVec &input, Buffer &output, const int rank)
         output.value(pos) = static_cast<uint8_t>(b.type);
         ++pos;
 
+        if (b.type == DataType::Struct)
+        {
+            output.value(pos) = static_cast<uint8_t>(b.structDef.size());
+            ++pos;
+            std::memcpy(output.data(pos), b.structDef.data(),
+                        b.structDef.size());
+            pos += b.structDef.size();
+        }
+
+        output.value<uint64_t>(pos) = static_cast<uint64_t>(b.elementSize);
+        pos += 8;
+
         output.value(pos) = static_cast<uint8_t>(b.shape.size());
         ++pos;
 
@@ -176,6 +170,145 @@ void SerializeVariables(const BlockVec &input, Buffer &output, const int rank)
         pos += b.value.size();
 
         output.value<uint64_t>() = pos;
+    }
+}
+
+void DeserializeVariable(
+    const Buffer &input, const ShapeID shapeId, uint64_t &pos, BlockInfo &b,
+    IO &io, const bool regIO,
+    std::unordered_map<std::string, StructDefinition> &StructDefs)
+{
+    b.shapeId = static_cast<ShapeID>(shapeId);
+
+    uint8_t nameSize = input[pos];
+    ++pos;
+
+    std::vector<char> name(nameSize);
+    std::memcpy(name.data(), input.data(pos), nameSize);
+    b.name = std::string(name.begin(), name.end());
+    pos += nameSize;
+
+    b.type = static_cast<DataType>(input[pos]);
+    ++pos;
+
+    if (b.type == DataType::Struct)
+    {
+        uint8_t structDefSize = input.value<uint8_t>(pos);
+        ++pos;
+        std::vector<char> structDefChar(structDefSize);
+        std::memcpy(structDefChar.data(), input.data(pos), structDefSize);
+        pos += structDefSize;
+        b.structDef = std::string(structDefChar.begin(), structDefChar.end());
+    }
+
+    b.elementSize = input.value<uint64_t>(pos);
+    pos += 8;
+
+    uint8_t shapeSize = input[pos];
+    ++pos;
+    b.shape.resize(shapeSize);
+    b.start.resize(shapeSize);
+    b.count.resize(shapeSize);
+
+    std::memcpy(b.shape.data(), input.data(pos), 8 * shapeSize);
+    pos += 8 * shapeSize;
+
+    std::memcpy(b.start.data(), input.data(pos), 8 * shapeSize);
+    pos += 8 * shapeSize;
+
+    std::memcpy(b.count.data(), input.data(pos), 8 * shapeSize);
+    pos += 8 * shapeSize;
+
+    b.bufferStart = input.value<uint64_t>(pos);
+    pos += 8;
+
+    b.bufferCount = input.value<uint64_t>(pos);
+    pos += 8;
+
+    uint8_t valueSize = input[pos];
+    pos++;
+    b.value.resize(valueSize);
+    if (valueSize > 0)
+    {
+        std::memcpy(b.value.data(), input.data() + pos, valueSize);
+        pos += valueSize;
+    }
+
+    if (regIO)
+    {
+        if (b.type == DataType::Struct)
+        {
+            auto v = io.InquireStructVariable(b.name);
+            if (!v)
+            {
+                Dims vStart = b.start;
+                Dims vShape = b.shape;
+                if (io.m_ArrayOrder != ArrayOrdering::RowMajor)
+                {
+                    std::reverse(vStart.begin(), vStart.end());
+                    std::reverse(vShape.begin(), vShape.end());
+                }
+                if (b.shapeId == ShapeID::GlobalArray)
+                {
+                    StructDefinition *def = nullptr;
+                    auto it = StructDefs.find(b.structDef);
+                    if (it != StructDefs.end())
+                    {
+                        def = &it->second;
+                    }
+                    if (def == nullptr)
+                    {
+                        helper::Throw<std::runtime_error>(
+                            "Engine", "SscHelper", "DeserializeVariable",
+                            "struct type " + b.structDef + " not defined");
+                    }
+                    else
+                    {
+                        io.DefineStructVariable(b.name, *def, vShape, vStart,
+                                                vShape);
+                    }
+                }
+            }
+        }
+#define declare_type(T)                                                        \
+    else if (b.type == helper::GetDataType<T>())                               \
+    {                                                                          \
+        auto v = io.InquireVariable<T>(b.name);                                \
+        if (!v)                                                                \
+        {                                                                      \
+            Dims vStart = b.start;                                             \
+            Dims vShape = b.shape;                                             \
+            if (io.m_ArrayOrder != ArrayOrdering::RowMajor)                    \
+            {                                                                  \
+                std::reverse(vStart.begin(), vStart.end());                    \
+                std::reverse(vShape.begin(), vShape.end());                    \
+            }                                                                  \
+            if (b.shapeId == ShapeID::GlobalValue)                             \
+            {                                                                  \
+                io.DefineVariable<T>(b.name);                                  \
+            }                                                                  \
+            else if (b.shapeId == ShapeID::GlobalArray)                        \
+            {                                                                  \
+                io.DefineVariable<T>(b.name, vShape, vStart, vShape);          \
+            }                                                                  \
+            else if (b.shapeId == ShapeID::LocalValue)                         \
+            {                                                                  \
+                io.DefineVariable<T>(b.name, {adios2::LocalValueDim});         \
+            }                                                                  \
+            else if (b.shapeId == ShapeID::LocalArray)                         \
+            {                                                                  \
+                io.DefineVariable<T>(b.name, {}, {}, vShape);                  \
+            }                                                                  \
+        }                                                                      \
+    }
+        ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+        else
+        {
+            helper::Throw<std::runtime_error>("Engine", "SscHelper",
+                                              "DeserializeVariable",
+                                              "unknown variable data type");
+        }
     }
 }
 
@@ -290,7 +423,7 @@ void DeserializeAttribute(const Buffer &input, uint64_t &pos, IO &io,
             else
             {
                 helper::Throw<std::runtime_error>(
-                    "Engine", "SscHelper", "Deserialize",
+                    "Engine", "SscHelper", "DeserializeAttribute",
                     "unknown attribute data type");
             }
         }
@@ -298,104 +431,102 @@ void DeserializeAttribute(const Buffer &input, uint64_t &pos, IO &io,
     pos += size;
 }
 
-void DeserializeVariable(const Buffer &input, const ShapeID shapeId,
-                         uint64_t &pos, BlockInfo &b, IO &io, const bool regIO)
+void SerializeStructDefinitions(
+    const std::unordered_map<std::string, StructDefinition> &definitions,
+    Buffer &output)
 {
-    b.shapeId = static_cast<ShapeID>(shapeId);
-
-    uint8_t nameSize = input[pos];
-    ++pos;
-
-    std::vector<char> name(nameSize);
-    std::memcpy(name.data(), input.data(pos), nameSize);
-    b.name = std::string(name.begin(), name.end());
-    pos += nameSize;
-
-    b.type = static_cast<DataType>(input[pos]);
-    ++pos;
-
-    uint8_t shapeSize = input[pos];
-    ++pos;
-    b.shape.resize(shapeSize);
-    b.start.resize(shapeSize);
-    b.count.resize(shapeSize);
-
-    std::memcpy(b.shape.data(), input.data(pos), 8 * shapeSize);
-    pos += 8 * shapeSize;
-
-    std::memcpy(b.start.data(), input.data(pos), 8 * shapeSize);
-    pos += 8 * shapeSize;
-
-    std::memcpy(b.count.data(), input.data(pos), 8 * shapeSize);
-    pos += 8 * shapeSize;
-
-    b.bufferStart = input.value<uint64_t>(pos);
-    pos += 8;
-
-    b.bufferCount = input.value<uint64_t>(pos);
-    pos += 8;
-
-    uint8_t valueSize = input[pos];
-    pos++;
-    b.value.resize(valueSize);
-    if (valueSize > 0)
+    if (definitions.empty())
     {
-        std::memcpy(b.value.data(), input.data() + pos, valueSize);
-        pos += valueSize;
+        return;
     }
-
-    if (regIO)
+    uint64_t pos = output.value<uint64_t>();
+    output[pos] = 65;
+    ++pos;
+    output[pos] = static_cast<uint8_t>(definitions.size());
+    ++pos;
+    for (const auto &p : definitions)
     {
-        if (b.type == DataType::None)
+        output.resize(pos + 1024);
+        output[pos] = static_cast<uint8_t>(p.first.size());
+        ++pos;
+        std::memcpy(output.data(pos), p.first.data(), p.first.size());
+        pos += p.first.size();
+        output.value<uint64_t>(pos) = p.second.StructSize();
+        pos += 8;
+        output[pos] = static_cast<uint8_t>(p.second.Fields());
+        ++pos;
+        for (size_t i = 0; i < p.second.Fields(); ++i)
         {
-            helper::Throw<std::runtime_error>("Engine", "SscHelper",
-                                              "Deserialize",
-                                              "unknown variable data type");
+            output[pos] = static_cast<uint8_t>(p.second.Name(i).size());
+            ++pos;
+            std::memcpy(output.data(pos), p.second.Name(i).data(),
+                        p.second.Name(i).size());
+            pos += p.second.Name(i).size();
+            output.value<uint64_t>(pos) = p.second.Offset(i);
+            pos += 8;
+            output.value<DataType>(pos) = p.second.Type(i);
+            pos += sizeof(DataType);
+            output.value<uint64_t>(pos) = p.second.ElementCount(i);
+            pos += 8;
         }
-#define declare_type(T)                                                        \
-    else if (b.type == helper::GetDataType<T>())                               \
-    {                                                                          \
-        auto v = io.InquireVariable<T>(b.name);                                \
-        if (!v)                                                                \
-        {                                                                      \
-            Dims vStart = b.start;                                             \
-            Dims vShape = b.shape;                                             \
-            if (io.m_ArrayOrder != ArrayOrdering::RowMajor)                    \
-            {                                                                  \
-                std::reverse(vStart.begin(), vStart.end());                    \
-                std::reverse(vShape.begin(), vShape.end());                    \
-            }                                                                  \
-            if (b.shapeId == ShapeID::GlobalValue)                             \
-            {                                                                  \
-                io.DefineVariable<T>(b.name);                                  \
-            }                                                                  \
-            else if (b.shapeId == ShapeID::GlobalArray)                        \
-            {                                                                  \
-                io.DefineVariable<T>(b.name, vShape, vStart, vShape);          \
-            }                                                                  \
-            else if (b.shapeId == ShapeID::LocalValue)                         \
-            {                                                                  \
-                io.DefineVariable<T>(b.name, {adios2::LocalValueDim});         \
-            }                                                                  \
-            else if (b.shapeId == ShapeID::LocalArray)                         \
-            {                                                                  \
-                io.DefineVariable<T>(b.name, {}, {}, vShape);                  \
-            }                                                                  \
-        }                                                                      \
     }
-        ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
-#undef declare_type
-        else
+    output.value<uint64_t>() = pos;
+}
+
+void DeserializeStructDefinitions(
+    const Buffer &input, uint64_t &pos, IO &io, const bool regIO,
+    std::unordered_map<std::string, StructDefinition> &StructDefs)
+{
+    uint8_t defs = input.value<uint8_t>(pos);
+    ++pos;
+    for (uint8_t i = 0; i < defs; ++i)
+    {
+        uint8_t nameSize = input.value<uint8_t>(pos);
+        ++pos;
+        std::vector<char> defNameChar(nameSize);
+        std::memcpy(defNameChar.data(), input.data(pos), nameSize);
+        std::string defName =
+            std::string(defNameChar.begin(), defNameChar.end());
+        pos += nameSize;
+        size_t structSize = input.value<uint64_t>(pos);
+        pos += 8;
+        uint8_t items = input.value<uint8_t>(pos);
+        ++pos;
+        StructDefinition *structDefinition = nullptr;
+        if (StructDefs.find(defName) == StructDefs.end())
         {
-            helper::Throw<std::runtime_error>("Engine", "SscHelper",
-                                              "Deserialize",
-                                              "unknown variable data type");
+            structDefinition =
+                &StructDefs
+                     .emplace(defName, StructDefinition(defName, structSize))
+                     .first->second;
+        }
+        for (uint8_t j = 0; j < items; ++j)
+        {
+            nameSize = input.value<uint8_t>(pos);
+            ++pos;
+            defNameChar.resize(nameSize);
+            std::memcpy(defNameChar.data(), input.data(pos), nameSize);
+            std::string itemName =
+                std::string(defNameChar.begin(), defNameChar.end());
+            pos += nameSize;
+            size_t itemOffset = input.value<uint64_t>(pos);
+            pos += 8;
+            DataType itemType = input.value<DataType>(pos);
+            pos += sizeof(DataType);
+            size_t itemSize = input.value<uint64_t>(pos);
+            pos += 8;
+            if (structDefinition != nullptr)
+            {
+                structDefinition->AddField(itemName, itemOffset, itemType,
+                                           itemSize);
+            }
         }
     }
 }
 
 void Deserialize(const Buffer &input, BlockVecVec &output, IO &io,
-                 const bool regVars, const bool regAttrs)
+                 const bool regVars, const bool regAttrs, const bool regDefs,
+                 std::unordered_map<std::string, StructDefinition> &StructDefs)
 {
     for (auto &i : output)
     {
@@ -414,7 +545,11 @@ void Deserialize(const Buffer &input, BlockVecVec &output, IO &io,
         uint8_t shapeId = input[pos];
         ++pos;
 
-        if (shapeId == 66)
+        if (shapeId == 65)
+        {
+            DeserializeStructDefinitions(input, pos, io, regDefs, StructDefs);
+        }
+        else if (shapeId == 66)
         {
             DeserializeAttribute(input, pos, io, regAttrs);
         }
@@ -426,7 +561,7 @@ void Deserialize(const Buffer &input, BlockVecVec &output, IO &io,
             auto &b = output[rank].back();
 
             DeserializeVariable(input, static_cast<ShapeID>(shapeId), pos, b,
-                                io, regVars);
+                                io, regVars, StructDefs);
         }
     }
 }
@@ -679,6 +814,7 @@ void PrintBlock(const BlockInfo &b, const std::string &label)
     std::cout << label << std::endl;
     std::cout << b.name << std::endl;
     std::cout << "    DataType : " << b.type << std::endl;
+    std::cout << "    ElementSize : " << b.elementSize << std::endl;
     PrintDims(b.shape, "    Shape : ");
     PrintDims(b.start, "    Start : ");
     PrintDims(b.count, "    Count : ");
@@ -693,6 +829,7 @@ void PrintBlockVec(const BlockVec &bv, const std::string &label)
     {
         std::cout << i.name << std::endl;
         std::cout << "    DataType : " << i.type << std::endl;
+        std::cout << "    ElementSize : " << i.elementSize << std::endl;
         PrintDims(i.shape, "    Shape : ");
         PrintDims(i.start, "    Start : ");
         PrintDims(i.count, "    Count : ");
@@ -712,6 +849,7 @@ void PrintBlockVecVec(const BlockVecVec &bvv, const std::string &label)
         {
             std::cout << "    " << i.name << std::endl;
             std::cout << "        DataType : " << i.type << std::endl;
+            std::cout << "        ElementSize : " << i.elementSize << std::endl;
             PrintDims(i.shape, "        Shape : ");
             PrintDims(i.start, "        Start : ");
             PrintDims(i.count, "        Count : ");

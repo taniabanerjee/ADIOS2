@@ -28,6 +28,12 @@ if(ADIOS2_SST_HAVE_LIBFABRIC)
   endif()
 endif()
 
+if(ADIOS2_SST_HAVE_UCX)
+  target_sources(sst PRIVATE dp/ucx_dp.c)
+  target_link_libraries(sst
+                  PRIVATE ucx::ucx)
+endif()
+
 if(ADIOS2_HAVE_DAOS)
   target_sources(sst PRIVATE dp/daos_dp.c)
   target_link_libraries(sst PRIVATE DAOS::DAOS)
@@ -37,6 +43,11 @@ endif()
 if(ADIOS2_HAVE_ZFP)
   target_sources(sst PRIVATE cp/ffs_zfp.c)
   target_link_libraries(sst PRIVATE zfp::zfp)
+endif()
+
+if(ADIOS2_HAVE_MPI_CLIENT_SERVER)
+  target_sources(sst PRIVATE dp/mpi_dp.c)
+  target_link_libraries(sst PRIVATE MPI::MPI_C)
 endif()
 
 # Set library version information
@@ -51,9 +62,11 @@ set_target_properties(sst PROPERTIES
 #------------------------------------------------------------------------------#
 set(SST_CONFIG_OPTS
   LIBFABRIC
+  UCX
   FI_GNI
   CRAY_DRC
   NVStream
+  MPI
 )
 include(SSTFunctions)
 GenerateSSTHeaderConfig(${SST_CONFIG_OPTS})

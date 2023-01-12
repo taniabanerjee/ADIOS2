@@ -18,6 +18,7 @@
 /// \endcond
 
 #include "adios2/common/ADIOSTypes.h"
+#include "adios2/core/IO.h"
 #include "adios2/helper/adiosComm.h"
 
 namespace adios2
@@ -75,10 +76,21 @@ bool IsZeroIndexed(const std::string hostLanguage) noexcept;
  */
 int ExceptionToError(const std::string &function);
 
-bool IsHDF5File(const std::string &name, helper::Comm &comm,
+bool IsHDF5File(const std::string &name, core::IO &io, helper::Comm &comm,
                 const std::vector<Params> &transportsParameters) noexcept;
 char BPVersion(const std::string &name, helper::Comm &comm,
                const std::vector<Params> &transportsParameters) noexcept;
+
+/** Return the number of available hardware threads on the node.
+ * It might return 0 if the detection does not work
+ */
+unsigned int NumHardwareThreadsPerNode();
+
+/** Attempt to raise the limit of number of files opened at once
+ *  Return: the limit on number of open files
+ */
+size_t RaiseLimitNoFile();
+
 } // end namespace helper
 } // end namespace adios2
 

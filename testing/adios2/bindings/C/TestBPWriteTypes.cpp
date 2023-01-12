@@ -28,11 +28,11 @@ public:
     ADIOS2_C_API()
     {
 #if ADIOS2_USE_MPI
-        adiosH = adios2_init(MPI_COMM_WORLD, adios2_debug_mode_on);
+        adiosH = adios2_init_mpi(MPI_COMM_WORLD);
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
         MPI_Comm_size(MPI_COMM_WORLD, &size);
 #else
-        adiosH = adios2_init(adios2_debug_mode_on);
+        adiosH = adios2_init_serial();
 #endif
     }
 
@@ -519,7 +519,10 @@ TEST_F(ADIOS2_C_API_IO, ReturnedStrings)
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

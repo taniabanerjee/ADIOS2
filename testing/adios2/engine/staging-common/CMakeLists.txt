@@ -8,27 +8,38 @@ find_package(Threads REQUIRED)
 if(ADIOS2_HAVE_SST)
   gtest_add_tests_helper(StagingMPMD MPI_ONLY "" Engine.Staging. ".SST.FFS" EXTRA_ARGS "SST" "MarshalMethod=FFS")
   gtest_add_tests_helper(StagingMPMD MPI_ONLY "" Engine.Staging. ".SST.BP" EXTRA_ARGS "SST" "MarshalMethod=BP")
+  gtest_add_tests_helper(OnDemandMPI MPI_ONLY "" Engine.Staging. ".SST" EXTRA_ARGS "SST" "OnDemandContact")
   gtest_add_tests_helper(Threads MPI_NONE "" Engine.Staging. ".SST.FFS" EXTRA_ARGS "SST"  "--engine_params" "MarshalMethod=FFS")
   gtest_add_tests_helper(Threads MPI_NONE "" Engine.Staging. ".SST.BP" EXTRA_ARGS "SST"  "--engine_params" "MarshalMethod=BP")
   gtest_add_tests_helper(Threads MPI_NONE "" Engine.Staging. ".BP4_stream" EXTRA_ARGS "BP4"  "--engine_params" "OpenTimeoutSecs=5")
   gtest_add_tests_helper(Threads MPI_NONE "" Engine.Staging. ".FileStream" EXTRA_ARGS "FileStream")
 endif()
 
-foreach(helper
-    TestCommonWrite
+set (PROGS TestCommonWrite
     TestCommonWriteModes
     TestCommonWriteAttrs
     TestCommonWriteLocal
     TestCommonWriteShared
+    TestCommonSpanWrite
+    TestDistributionWrite
     TestDefSyncWrite
     TestCommonRead
+    TestCommonSpanRead
     TestCommonReadR64
     TestCommonReadLocal
     TestCommonReadShared
     TestCommonReadAttrs
     TestCommonServer
     TestCommonClient
-    )
+    TestDistributionRead
+    TestLocalWrite
+    TestLocalRead
+    TestStructWrite
+    TestStructRead
+    TestOnDemandWrite
+    TestOnDemandRead)
+
+foreach(helper ${PROGS} )
   add_executable(${helper} ${helper}.cpp)
 
   # Workaround for multiple versions of FindSst
@@ -103,7 +114,7 @@ if(ADIOS2_HAVE_MPI AND MPIEXEC_EXECUTABLE)
    endforeach()
 endif()
 
-set (SIMPLE_TESTS "1x1;1x1DefSync")
+set (SIMPLE_TESTS "1x1;1x1.Attrs;1x1.ModAttrs;1x1DefSync;1x1VarDestruction;1x1.SpanMinMax;1x1.Local2;1x1Struct")
 set (BP5File_ONLY_TESTS "1x1DataWrite")
 
 set (SIMPLE_FORTRAN_TESTS "")
@@ -136,7 +147,7 @@ set (ALL_SIMPLE_TESTS "")
 list (APPEND ALL_SIMPLE_TESTS ${SIMPLE_TESTS} ${SIMPLE_FORTRAN_TESTS} ${SIMPLE_MPI_TESTS} ${SIMPLE_ZFP_TESTS})
 
 set (SST_SPECIFIC_TESTS  "")
-list (APPEND SST_SPECIFIC_TESTS  "1x1.SstRUDP;1x1.LocalMultiblock")
+list (APPEND SST_SPECIFIC_TESTS  "1x1.SstRUDP;1x1.LocalMultiblock;RoundRobinDistribution.1x1x3;AllToAllDistribution.1x1x3;OnDemandSingle.1x1")
 if (ADIOS2_HAVE_MPI)
   list (APPEND SST_SPECIFIC_TESTS  "2x3.SstRUDP;2x1.LocalMultiblock;5x3.LocalMultiblock;")
 endif()
@@ -148,6 +159,7 @@ SET (BASIC_SST_TESTS "")
 if(ADIOS2_HAVE_SST)
   list (APPEND BASIC_SST_TESTS ${ALL_SIMPLE_TESTS} ${SPECIAL_TESTS} ${SST_SPECIFIC_TESTS})
   list (REMOVE_ITEM BASIC_SST_TESTS 1x1DefSync 1x1Flush)
+  list (REMOVE_ITEM BASIC_SST_TESTS 1x1.SpanMinMax)
 endif()
 
 
@@ -168,11 +180,14 @@ LIST (APPEND SST_TESTS ${FFS_SST_TESTS} ${BP_SST_TESTS})
 # Zero Data tests are unreliable with SST and BP marshaling
 list (FILTER SST_TESTS EXCLUDE REGEX "2x1ZeroData.*BP")
 
+# BP Marshalling doesn't support Struct data
+list (FILTER SST_TESTS EXCLUDE REGEX "1x1Struct.*BP$")
+
 foreach(test ${SST_TESTS})
     add_common_test(${test} SST)
 endforeach()
 
-if(ADIOS2_HAVE_MPI AND ADIOS2_RUN_MPI_MPMD_TESTS)
+if(ADIOS2_HAVE_MPI AND ADIOS2_RUN_MPI_MPMD_TESTS AND NOT MSVC)
     set (SSC_BASE_TESTS "1x1;1x1.Attrs;2x1;1x2;2x1ZeroDataVar;2x1ZeroDataR64;3x5;5x3;3x5LockGeometry")
     set (SSC_TESTS  ${SIMPLE_FORTRAN_TESTS} ${SIMPLE_MPI_FORTRAN_TESTS} ${SSC_BASE_TESTS})
     foreach(test ${SSC_TESTS})
@@ -194,6 +209,12 @@ if(NOT WIN32)    # not on windows
     list (FILTER BP_TESTS EXCLUDE REGEX ".*NoData$")
     # BP3 and BP4 don't do PerformDataWrite
     list (FILTER BP_TESTS EXCLUDE REGEX ".*DataWrite.*")
+    # BP3 and BP4 don't do Modifiable Attributes
+    list (FILTER BP_TESTS EXCLUDE REGEX ".*ModAttr.*")
+    # BP3 and BP4 don't do VarDestruction
+    list (FILTER BP_TESTS EXCLUDE REGEX ".*VarDestruction.*")
+    # BP3 and BP4 don't do structs
+    list (FILTER BP_TESTS EXCLUDE REGEX ".*1x1Struct.*")
     foreach(test ${BP_TESTS})
         add_common_test(${test} BP4)
     endforeach()
@@ -252,6 +273,8 @@ if(NOT MSVC)    # not on windows
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*SharedVar.BPS$")
     # Local fail with BP4_streaming*
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*Local.BPS$")
+    # BP3 and BP4 don't do VarDestruction
+    list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*VarDestruction.*")
     # Fortran scalar reads don't work for BP4 streaming
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX "(FtoF|CtoF).*")
     # Local Vars have a heisen failure for BP4 streaming
@@ -260,6 +283,10 @@ if(NOT MSVC)    # not on windows
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*NoData.BPS$")
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*1x1DefSync.*")
     list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*Flush.*")
+    # BP3 and BP4 don't do Modifiable Attributes
+    list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*ModAttr.*")
+    # BP3 and BP4 don't do structs
+    list (FILTER BP4_STREAM_TESTS EXCLUDE REGEX ".*1x1Struct.*")
     
     foreach(test ${BP4_STREAM_TESTS})
         add_common_test(${test} BP4_stream)
@@ -294,6 +321,10 @@ if(NOT MSVC)    # not on windows
     list (FILTER FILESTREAM_TESTS EXCLUDE REGEX ".*NoReaderNoWait.FS$")
     list (FILTER FILESTREAM_TESTS EXCLUDE REGEX ".*1x1DefSync.*")
     list (FILTER FILESTREAM_TESTS EXCLUDE REGEX ".*Flush.*")
+    # BP3 and BP4 don't do VarDestruction
+    list (FILTER FILESTREAM_TESTS EXCLUDE REGEX ".*VarDestruction.*")
+    # BP3 and BP4 don't do structs
+    list (FILTER FILESTREAM_TESTS EXCLUDE REGEX ".*1x1Struct.*")
 
     foreach(test ${FILESTREAM_TESTS})
         add_common_test(${test} FileStream)
@@ -319,6 +350,14 @@ if(NOT MSVC AND ADIOS2_HAVE_HDF5 AND (NOT ADIOS2_HAVE_MPI OR HDF5_IS_PARALLEL)) 
     list (FILTER HDF5_TESTS EXCLUDE REGEX "[2345]x")
     # The nobody-writes-data-in-a-timestep tests don't work with HDF5
     list (FILTER HDF5_TESTS EXCLUDE REGEX ".*HalfNoData$")
+    # The variables with HDF5 reads persist
+    list (FILTER HDF5_TESTS EXCLUDE REGEX ".*VarDestruction.*")
+    # The No span supoprt with HDF5
+    list (FILTER HDF5_TESTS EXCLUDE REGEX ".*SpanMinMax.*")
+    # HDF5 doesn't do Modifiable Attributes
+    list (FILTER HDF5_TESTS EXCLUDE REGEX ".*ModAttr.*")
+    # HDF5 engine doesn't do structs (but HDF5 does)
+    list (FILTER HDF5_TESTS EXCLUDE REGEX ".*1x1Struct.*")
     foreach(test ${HDF5_TESTS})
         add_common_test(${test} HDF5)
     endforeach()

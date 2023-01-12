@@ -94,8 +94,8 @@ static char *readContactInfoFile(const char *Name, SstStream Stream,
     int Badfile = 0;
     int ZeroCount = 0;
     FILE *WriterInfo;
-    int64_t TimeoutRemaining = Timeout * 1000 * 1000;
-    int64_t WaitWarningRemaining = 5 * 1000 * 1000;
+    int64_t TimeoutRemainingMsec = Timeout * 1000;
+    int64_t WaitWarningRemainingMsec = 5 * 1000;
     long SleepInterval = 100000;
     snprintf(FileName, len, "%s" SST_POSTFIX, Name);
     CP_verbose(Stream, PerRankVerbose,
@@ -107,16 +107,16 @@ redo:
     {
         // CMusleep(Stream->CPInfo->cm, SleepInterval);
         usleep(SleepInterval);
-        TimeoutRemaining -= SleepInterval;
-        WaitWarningRemaining -= SleepInterval;
-        if (WaitWarningRemaining == 0)
+        TimeoutRemainingMsec -= (SleepInterval / 1000);
+        WaitWarningRemainingMsec -= (SleepInterval / 1000);
+        if (WaitWarningRemainingMsec == 0)
         {
             fprintf(stderr,
                     "ADIOS2 SST Engine waiting for contact information "
                     "file %s to be created\n",
                     Name);
         }
-        if (TimeoutRemaining <= 0)
+        if (TimeoutRemainingMsec <= 0)
         {
             free(FileName);
             return NULL;
@@ -464,6 +464,8 @@ SstStream SstReaderOpen(const char *Name, SstParams Params, SMPI_Comm comm)
     char *Filename = strdup(Name);
     CMConnection rank0_to_rank0_conn = NULL;
     void *WriterFileID;
+    char NeededDataPlane[32] = {
+        0}; // Don't name a data plane longer than 31 chars
 
     Stream = CP_newStream();
     Stream->Role = ReaderRole;
@@ -475,11 +477,7 @@ SstStream SstReaderOpen(const char *Name, SstParams Params, SMPI_Comm comm)
     CP_validateParams(Stream, Params, 0 /* reader */);
     Stream->ConfigParams = Params;
 
-    Stream->DP_Interface =
-        SelectDP(&Svcs, Stream, Stream->ConfigParams, Stream->Rank);
-
-    Stream->CPInfo =
-        CP_getCPInfo(Stream->DP_Interface, Stream->ConfigParams->ControlModule);
+    Stream->CPInfo = CP_getCPInfo(Stream->ConfigParams->ControlModule);
 
     Stream->FinalTimestep = INT_MAX; /* set this on close */
     Stream->LastDPNotifiedTimestep = -1;
@@ -496,6 +494,77 @@ SstStream SstReaderOpen(const char *Name, SstParams Params, SMPI_Comm comm)
         free(Filename);
         return NULL;
     }
+
+    if (Stream->Rank == 0)
+    {
+        struct _DPQueryMsg DPQuery;
+        memset(&DPQuery, 0, sizeof(DPQuery));
+
+        DPQuery.WriterFile = WriterFileID;
+        DPQuery.WriterResponseCondition =
+            CMCondition_get(Stream->CPInfo->SharedCM->cm, rank0_to_rank0_conn);
+
+        CMCondition_set_client_data(Stream->CPInfo->SharedCM->cm,
+                                    DPQuery.WriterResponseCondition,
+                                    &NeededDataPlane[0]);
+
+        if (CMwrite(rank0_to_rank0_conn,
+                    Stream->CPInfo->SharedCM->DPQueryFormat, &DPQuery) != 1)
+        {
+            CP_verbose(
+                Stream, CriticalVerbose,
+                "DPQuery message failed to send to writer in SstReaderOpen\n");
+        }
+
+        /* wait for "go" from writer */
+        CP_verbose(
+            Stream, PerRankVerbose,
+            "Waiting for writer DPResponse message in SstReadOpen(\"%s\")\n",
+            Filename, DPQuery.WriterResponseCondition);
+        int result = CMCondition_wait(Stream->CPInfo->SharedCM->cm,
+                                      DPQuery.WriterResponseCondition);
+        if (result == 0)
+        {
+            fprintf(stderr, "The writer exited before contact could be made, "
+                            "SST Open failed.\n");
+            return NULL;
+        }
+        CP_verbose(Stream, PerRankVerbose,
+                   "finished wait writer DPresponse message in read_open, "
+                   "WRITER is using \"%s\" DataPlane\n",
+                   &NeededDataPlane[0]);
+
+        // NeededDP should now contain the name of the dataplane the writer is
+        // using
+        SMPI_Bcast(&NeededDataPlane[0], sizeof(NeededDataPlane), SMPI_CHAR, 0,
+                   Stream->mpiComm);
+    }
+    else
+    {
+        SMPI_Bcast(&NeededDataPlane[0], sizeof(NeededDataPlane), SMPI_CHAR, 0,
+                   Stream->mpiComm);
+    }
+    {
+        char *RequestedDP = Stream->ConfigParams->DataTransport;
+        Stream->ConfigParams->DataTransport = strdup(&NeededDataPlane[0]);
+        Stream->DP_Interface =
+            SelectDP(&Svcs, Stream, Stream->ConfigParams, Stream->Rank);
+        if (Stream->DP_Interface)
+            if (strcmp(Stream->DP_Interface->DPName, &NeededDataPlane[0]) != 0)
+            {
+                fprintf(stderr,
+                        "The writer is using the %s DataPlane for SST data "
+                        "transport, but the reader has failed to load this "
+                        "transport.  Communication cannot occur.  See the SST "
+                        "DataTransport engine parameter to force a match.",
+                        NeededDataPlane);
+                return NULL;
+            }
+        if (RequestedDP)
+            free(RequestedDP);
+    }
+
+    FinalizeCPInfo(Stream->CPInfo, Stream->DP_Interface);
 
     Stream->DP_Stream = Stream->DP_Interface->initReader(
         &Svcs, Stream, &dpInfo, Stream->ConfigParams, WriterContactAttributes,
@@ -569,8 +638,14 @@ SstStream SstReaderOpen(const char *Name, SstParams Params, SMPI_Comm comm)
             Stream, PerRankVerbose,
             "Waiting for writer response message in SstReadOpen(\"%s\")\n",
             Filename, ReaderRegister.WriterResponseCondition);
-        CMCondition_wait(Stream->CPInfo->SharedCM->cm,
-                         ReaderRegister.WriterResponseCondition);
+        int result = CMCondition_wait(Stream->CPInfo->SharedCM->cm,
+                                      ReaderRegister.WriterResponseCondition);
+        if (result == 0)
+        {
+            fprintf(stderr, "The writer exited before the SST Reader Open "
+                            "could be completed.\n");
+            return NULL;
+        }
         CP_verbose(Stream, PerRankVerbose,
                    "finished wait writer response message in read_open\n");
 
@@ -810,7 +885,7 @@ void queueTimestepMetadataMsgAndNotify(SstStream Stream,
         }
     }
 
-    struct _TimestepMetadataList *New = malloc(sizeof(struct _RequestQueue));
+    struct _TimestepMetadataList *New = malloc(sizeof(struct _RegisterQueue));
     New->MetadataMsg = tsm;
     New->Next = NULL;
     if (Stream->Timesteps)
@@ -1020,6 +1095,42 @@ void CP_WriterResponseHandler(CManager cm, CMConnection conn, void *Msg_v,
     response_ptr =
         CMCondition_get_client_data(cm, Msg->WriterResponseCondition);
     *response_ptr = Msg;
+
+    /* wake the main thread */
+    CMCondition_signal(cm, Msg->WriterResponseCondition);
+    PERFSTUBS_TIMER_STOP_FUNC(timer);
+}
+
+// CP_DPQueryResponseHandler is called by the network handler thread to
+// handle DPQueryResponse messages.  One of these will be sent to rank0
+// reader from rank0 writer in response to the DPQuery message.
+// It will find rank0 writer in CMCondition_wait().  It's only action
+// is to associate the incoming response message to the CMcondition
+// we're waiting on,m so no locking is necessary.
+void CP_DPQueryResponseHandler(CManager cm, CMConnection conn, void *Msg_v,
+                               void *client_data, attr_list attrs)
+{
+    PERFSTUBS_REGISTER_THREAD();
+    PERFSTUBS_TIMER_START_FUNC(timer);
+    struct _DPQueryResponseMsg *Msg = (struct _DPQueryResponseMsg *)Msg_v;
+    char *NeededDP_ptr;
+
+    //    fprintf(stderr, "Received a writer_response message for condition
+    //    %d\n",
+    //            Msg->WriterResponseCondition);
+    //    fprintf(stderr, "The responding writer has cohort of size %d :\n",
+    //            Msg->writer_CohortSize);
+    //    for (int i = 0; i < Msg->writer_CohortSize; i++) {
+    //        fprintf(stderr, " rank %d CP contact info: %s, %p\n", i,
+    //                Msg->CP_WriterInfo[i]->ContactInfo,
+    //                Msg->CP_WriterInfo[i]->WriterID);
+    //    }
+
+    /* attach the message to the CMCondition so it an be retrieved by the main
+     * thread */
+    NeededDP_ptr =
+        CMCondition_get_client_data(cm, Msg->WriterResponseCondition);
+    strcpy(NeededDP_ptr, Msg->OperativeDP);
 
     /* wake the main thread */
     CMCondition_signal(cm, Msg->WriterResponseCondition);
@@ -1356,8 +1467,13 @@ static TSMetadataList waitForNextMetadata(SstStream Stream, long LastTimestep)
                            "SstAdvanceStep installing precious "
                            "metadata for discarded TS %d\n",
                            Next->MetadataMsg->Timestep);
-                FFSMarshalInstallPreciousMetadata(Stream, Next->MetadataMsg);
-                if (Stream->WriterConfigParams->MarshalMethod == SstMarshalBP5)
+                if (Stream->WriterConfigParams->MarshalMethod == SstMarshalFFS)
+                {
+                    FFSMarshalInstallPreciousMetadata(Stream,
+                                                      Next->MetadataMsg);
+                }
+                else if (Stream->WriterConfigParams->MarshalMethod ==
+                         SstMarshalBP5)
                 {
                     AddFormatsToMetaMetaInfo(Stream, Next->MetadataMsg);
                     AddAttributesToAttrDataList(Stream, Next->MetadataMsg);
@@ -2213,6 +2329,17 @@ extern SstStatusValue SstAdvanceStep(SstStream Stream, const float timeout_sec)
         }
         free(Stream->CurrentMetadata);
         Stream->CurrentMetadata = NULL;
+    }
+
+    if (Stream->WriterConfigParams->StepDistributionMode == StepsOnDemand)
+    {
+        struct _ReaderRequestStepMsg Msg;
+        CP_verbose(Stream, PerRankVerbose,
+                   "Sending Reader Request Step messages to writer\n");
+        memset(&Msg, 0, sizeof(Msg));
+        sendOneToEachWriterRank(
+            Stream, Stream->CPInfo->SharedCM->ReaderRequestStepFormat, &Msg,
+            &Msg.WSR_Stream);
     }
 
     SstStepMode mode = SstNextAvailable;

@@ -28,11 +28,21 @@ namespace engine
 BP3Writer::BP3Writer(IO &io, const std::string &name, const Mode mode,
                      helper::Comm comm)
 : Engine("BP3", io, name, mode, std::move(comm)), m_BP3Serializer(m_Comm),
-  m_FileDataManager(m_Comm), m_FileMetadataManager(m_Comm)
+  m_FileDataManager(io, m_Comm), m_FileMetadataManager(io, m_Comm)
 {
     PERFSTUBS_SCOPED_TIMER("BP3Writer::Open");
     m_IO.m_ReadStreaming = false;
     Init();
+    m_IsOpen = true;
+}
+
+BP3Writer::~BP3Writer()
+{
+    if (m_IsOpen)
+    {
+        DestructorClose(m_FailVerbose);
+    }
+    m_IsOpen = false;
 }
 
 StepStatus BP3Writer::BeginStep(StepMode mode, const float timeoutSeconds)
@@ -63,7 +73,7 @@ void BP3Writer::PerformPuts()
     for (const std::string &variableName : m_BP3Serializer.m_DeferredVariables)
     {
         const DataType type = m_IO.InquireVariableType(variableName);
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
             // not supported
         }

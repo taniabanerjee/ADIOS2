@@ -37,7 +37,18 @@ void printUsage()
 
 int main(int argc, char *argv[])
 {
-    MPI_Init(&argc, &argv);
+    int provided;
+
+    std::string engineName = std::string(argv[argc - 1]);
+
+    int threadSupportLevel = MPI_THREAD_SINGLE;
+    if (engineName == "SST")
+    {
+        threadSupportLevel = MPI_THREAD_MULTIPLE;
+    }
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, threadSupportLevel, &provided);
 
     /* When writer and reader is launched together with a single mpirun command,
        the world comm spans all applications. We have to split and create the

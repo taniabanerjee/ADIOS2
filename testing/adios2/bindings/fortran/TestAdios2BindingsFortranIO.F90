@@ -14,7 +14,7 @@ contains
 
     integer :: ierr
 
-    call adios2_init(adios, MPI_COMM_WORLD, adios2_debug_mode_on, ierr)
+    call adios2_init(adios, MPI_COMM_WORLD, ierr)
 
   end subroutine testing_adios_init
 
@@ -151,7 +151,10 @@ program main
   external testing_adios_io_engine
   external testing_adios_io_engine_default
 
-  call MPI_Init(ierr)
+  INTEGER provided
+
+  ! MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+  call MPI_Init_thread(MPI_THREAD_MULTIPLE, provided, ierr)
 
   call testing_adios_io_engine()
   call testing_adios_io_engine_default()

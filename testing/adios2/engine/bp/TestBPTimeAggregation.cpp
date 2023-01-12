@@ -157,7 +157,6 @@ void TimeAggregation1D8(const std::string flushstepscount)
             bpWriter.Put(var_u64, currentTestData.U64.data());
             bpWriter.Put(var_r32, currentTestData.R32.data());
             bpWriter.Put(var_r64, currentTestData.R64.data());
-            bpWriter.PerformPuts();
 
             bpWriter.EndStep();
         }
@@ -493,7 +492,6 @@ void TimeAggregation2D4x2(const std::string flushstepscount)
             bpWriter.Put(var_u64, currentTestData.U64.data());
             bpWriter.Put(var_r32, currentTestData.R32.data());
             bpWriter.Put(var_r64, currentTestData.R64.data());
-            bpWriter.PerformPuts();
 
             bpWriter.EndStep();
         }
@@ -716,7 +714,10 @@ INSTANTIATE_TEST_SUITE_P(FlushStepsCount, BPTestTimeAggregation,
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

@@ -5,8 +5,8 @@
 # TestNullEngine.py
 #
 #
-#  Created on: Apr 11th, 2019
-#      Author: William F Godoy godoywf@ornl.gov
+# Created on : Apr 11th, 2019
+# Author : William F Godoy godoywf @ornl.gov
 #
 
 from mpi4py import MPI
@@ -26,7 +26,7 @@ count = [Nx, Ny]
 start = [rank * Nx, 0]
 shape = [size * Nx, Ny]
 
-temperatures = np.zeros(count, dtype=np.int)
+temperatures = np.zeros(count, dtype=np.int32)
 
 for i in range(0, Nx):
     for j in range(0, Ny):
@@ -42,25 +42,23 @@ ioWrite.SetEngine("NULL")
 
 nullWriter = ioWrite.Open('NULL_py.bp', adios2.Mode.Write)
 
-assert(nullWriter.Type() == "NULL")
+assert(nullWriter.Type() == "NullWriter")
 
 status = nullWriter.BeginStep()
-assert(status == adios2.StepStatus.EndOfStream)
+assert(status == adios2.StepStatus.OK)
 
 nullWriter.Put(varTemperature, temperatures)
-nullWriter.PerformPuts()
 nullWriter.EndStep()
 nullWriter.Close()
-
 
 # ADIOS2 read
 ioRead = adios.DeclareIO("ioReader")
 ioRead.SetEngine("null")
 nullReader = ioRead.Open('NULL_py.bp', adios2.Mode.Read, MPI.COMM_SELF)
 
-assert(nullReader.Type() == "NULL")
+assert(nullReader.Type() == "NullReader")
 
-inTemperatures = np.zeros(1, dtype=np.int)
+inTemperatures = np.zeros(1, dtype=np.int32)
 
 status = nullReader.BeginStep()
 assert(status == adios2.StepStatus.EndOfStream)
@@ -70,7 +68,8 @@ var_inTemperature = ioRead.InquireVariable("temperature2D")
 if(var_inTemperature is True):
     raise ValueError('var_inTemperature is not False')
 
-nullReader.Get(var_inTemperature, inTemperatures)
+# nullReader.Get(var_inTemperature, inTemperatures)
+
 nullReader.PerformGets()
 nullReader.EndStep()
 nullReader.Close()

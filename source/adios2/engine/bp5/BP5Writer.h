@@ -44,7 +44,7 @@ public:
     BP5Writer(IO &io, const std::string &name, const Mode mode,
               helper::Comm comm);
 
-    ~BP5Writer() = default;
+    ~BP5Writer();
 
     StepStatus BeginStep(StepMode mode,
                          const float timeoutSeconds = -1.0) final;
@@ -115,6 +115,8 @@ private:
     /** Notify the engine when a new attribute is defined or modified. Called
      * from IO.tcc
      */
+    void NotifyEngineAttribute(std::string name, AttributeBase *Attr,
+                               void *data) noexcept;
 
     void EnterComputationBlock() noexcept;
     /** Inform about computation block through User->ADIOS->IO */
@@ -138,8 +140,7 @@ private:
     ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
 
-    template <class T>
-    void PutCommon(Variable<T> &variable, const T *data, bool sync);
+    void PutCommon(VariableBase &variable, const void *data, bool sync);
 
 #define declare_type(T, L)                                                     \
     T *DoBufferData_##L(const int bufferIdx, const size_t payloadPosition,     \
@@ -147,6 +148,11 @@ private:
 
     ADIOS2_FOREACH_PRIMITVE_STDTYPE_2ARGS(declare_type)
 #undef declare_type
+
+    void DoPutStructSync(VariableStruct &, const void *) final;
+    void DoPutStructDeferred(VariableStruct &, const void *) final;
+
+    void PutStruct(VariableStruct &, const void *, bool);
 
     void FlushData(const bool isFinal = false);
 
@@ -196,7 +202,12 @@ private:
     bool m_IAmDraining = false;
     bool m_IAmWritingData = false;
     helper::Comm *DataWritingComm; // processes that write the same data file
+    // aggregators only (valid if m_Aggregator->m_Comm.Rank() == 0)
+    helper::Comm m_CommAggregators;
     adios2::profiling::JSONProfiler m_Profiler;
+
+protected:
+    virtual void DestructorClose(bool Verbose) noexcept;
 
 private:
     // updated during WriteMetaData

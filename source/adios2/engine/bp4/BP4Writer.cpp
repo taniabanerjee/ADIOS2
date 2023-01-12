@@ -30,8 +30,8 @@ namespace engine
 BP4Writer::BP4Writer(IO &io, const std::string &name, const Mode mode,
                      helper::Comm comm)
 : Engine("BP4Writer", io, name, mode, std::move(comm)), m_BP4Serializer(m_Comm),
-  m_FileDataManager(m_Comm), m_FileMetadataManager(m_Comm),
-  m_FileMetadataIndexManager(m_Comm), m_FileDrainer()
+  m_FileDataManager(io, m_Comm), m_FileMetadataManager(io, m_Comm),
+  m_FileMetadataIndexManager(io, m_Comm), m_FileDrainer()
 {
     PERFSTUBS_SCOPED_TIMER("BP4Writer::Open");
     helper::GetParameter(m_IO.m_Parameters, "Verbose", m_Verbosity);
@@ -41,6 +41,17 @@ BP4Writer::BP4Writer(IO &io, const std::string &name, const Mode mode,
     m_IO.m_ReadStreaming = false;
 
     Init();
+
+    m_IsOpen = true;
+}
+
+BP4Writer::~BP4Writer()
+{
+    if (m_IsOpen)
+    {
+        DestructorClose(m_FailVerbose);
+    }
+    m_IsOpen = false;
 }
 
 StepStatus BP4Writer::BeginStep(StepMode mode, const float timeoutSeconds)
@@ -78,7 +89,7 @@ void BP4Writer::PerformPuts()
     for (const std::string &variableName : m_BP4Serializer.m_DeferredVariables)
     {
         const DataType type = m_IO.InquireVariableType(variableName);
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
             // not supported
         }
@@ -435,6 +446,19 @@ void BP4Writer::DoFlush(const bool isFinal, const int transportIndex)
     {
         WriteData(isFinal, transportIndex);
     }
+}
+
+void BP4Writer::DestructorClose(bool Verbose) noexcept
+{
+    if (Verbose)
+    {
+        std::cerr << "BP4 Writer \"" << m_Name
+                  << "\" Destroyed without a prior Close()." << std::endl;
+        std::cerr << "This may result in corrupt output." << std::endl;
+    }
+    // at least close metadata index file
+    UpdateActiveFlag(false);
+    m_IsOpen = false;
 }
 
 void BP4Writer::DoClose(const int transportIndex)
@@ -854,6 +878,12 @@ size_t BP4Writer::DebugGetDataBufferSize() const
 void BP4Writer::NotifyEngineAttribute(std::string name, DataType type) noexcept
 {
     m_BP4Serializer.m_SerializedAttributes.erase(name);
+}
+
+void BP4Writer::NotifyEngineAttribute(std::string name, AttributeBase *attr,
+                                      void *Data) noexcept
+{
+    NotifyEngineAttribute(name, attr->m_Type);
 }
 
 } // end namespace engine

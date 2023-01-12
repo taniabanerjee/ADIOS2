@@ -22,6 +22,7 @@
 #include "adios2/common/ADIOSTypes.h"
 #include "adios2/core/CoreTypes.h"
 #include "adios2/core/Operator.h"
+#include "adios2/core/VariableStruct.h"
 #include "adios2/helper/adiosComm.h"
 
 namespace adios2
@@ -131,6 +132,13 @@ public:
     std::pair<std::string, Params> *
     InquireOperator(const std::string &name) noexcept;
 
+    /*
+     * StructDefinitions are defined using the operators in the IO,
+     * but they are emplaced into a set in the ADIOS to give them
+     * global scope
+     */
+    std::unordered_map<std::string, StructDefinition> m_StructDefinitions;
+
     /**
      * DANGER ZONE: removes a particular IO. This will effectively eliminate any
      * parameter from the config.xml file
@@ -183,6 +191,19 @@ private:
     void XMLInit(const std::string &configFileXML);
 
     void YAMLInit(const std::string &configFileYAML);
+
+private:
+    /* Global services that we want to initialize at most once and shutdown
+       automatically when the ADIOS object is destructed. This only works
+       properly if the app creates an ADIOS object that is created before all
+       other ADIOS objects and is destructed after all other ADIOS objects are
+       destructed*/
+    class GlobalServices;
+    static class GlobalServices m_GlobalServices;
+
+public:
+    /** Global service AWS SDK initialization */
+    static void Global_init_AWS_API();
 };
 
 } // end namespace core

@@ -30,8 +30,8 @@
 #include "adios2/engine/inline/InlineWriter.h"
 #include "adios2/engine/mhs/MhsReader.h"
 #include "adios2/engine/mhs/MhsWriter.h"
-#include "adios2/engine/null/NullEngine.h"
-#include "adios2/engine/nullcore/NullCoreWriter.h"
+#include "adios2/engine/null/NullReader.h"
+#include "adios2/engine/null/NullWriter.h"
 #include "adios2/engine/plugin/PluginEngine.h"
 #include "adios2/engine/skeleton/SkeletonReader.h"
 #include "adios2/engine/skeleton/SkeletonWriter.h"
@@ -126,10 +126,10 @@ std::unordered_map<std::string, IO::EngineFactoryEntry> Factory = {
      {IO::MakeEngine<engine::InlineReader>,
       IO::MakeEngine<engine::InlineWriter>}},
     {"null",
-     {IO::MakeEngine<engine::NullEngine>, IO::MakeEngine<engine::NullEngine>}},
+     {IO::MakeEngine<engine::NullReader>, IO::MakeEngine<engine::NullWriter>}},
     {"nullcore",
      {IO::NoEngine("ERROR: nullcore engine does not support read mode"),
-      IO::MakeEngine<engine::NullCoreWriter>}},
+      IO::MakeEngine<engine::NullWriter>}},
     {"plugin",
      {IO::MakeEngine<plugin::PluginEngine>,
       IO::MakeEngine<plugin::PluginEngine>}},
@@ -389,7 +389,7 @@ IO::GetAvailableVariables(const std::set<std::string> &keys) noexcept
         const std::string variableName = variablePair.first;
         const DataType type = InquireVariableType(variableName);
 
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
         }
 #define declare_template_instantiation(T)                                      \
@@ -417,7 +417,7 @@ IO::GetAvailableAttributes(const std::string &variableName,
         auto itVariable = m_Variables.find(variableName);
         const DataType type = InquireVariableType(itVariable);
 
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
         }
         else
@@ -433,7 +433,7 @@ IO::GetAvailableAttributes(const std::string &variableName,
     {
         const std::string &name = attributePair.first;
 
-        if (attributePair.second->m_Type == DataType::Compound)
+        if (attributePair.second->m_Type == DataType::Struct)
         {
         }
         else
@@ -463,7 +463,7 @@ DataType IO::InquireVariableType(const VarMap::const_iterator itVariable) const
 
     if (m_ReadStreaming)
     {
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
         }
         else
@@ -580,7 +580,8 @@ Engine &IO::Open(const std::string &name, const Mode mode, helper::Comm comm)
                     /* We need to figure out the type of file
                      * from the file itself
                      */
-                    if (helper::IsHDF5File(name, comm, m_TransportsParameters))
+                    if (helper::IsHDF5File(name, *this, comm,
+                                           m_TransportsParameters))
                     {
                         engineTypeLC = "hdf5";
                     }
@@ -778,7 +779,7 @@ void IO::ResetVariablesStepSelection(const bool zeroStart,
             continue;
         }
 
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
         }
         else
@@ -809,7 +810,7 @@ void IO::SetPrefixedNames(const bool isStep) noexcept
             continue;
         }
 
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
         }
         else
@@ -848,6 +849,137 @@ void IO::CheckTransportType(const std::string type) const
                 ", must be a single word for a supported transport type, in "
                 "call to IO AddTransport");
     }
+}
+
+StructDefinition &IO::DefineStruct(const std::string &name, const size_t size)
+{
+    if (m_ADIOS.m_StructDefinitions.find(name) !=
+        m_ADIOS.m_StructDefinitions.end())
+    {
+        helper::Throw<std::invalid_argument>(
+            "Core", "IO", "DefineStruct", "Struct " + name + " defined twice");
+    }
+    return m_ADIOS.m_StructDefinitions
+        .emplace(name, StructDefinition(name, size))
+        .first->second;
+}
+
+VariableStruct &IO::DefineStructVariable(const std::string &name,
+                                         StructDefinition &def,
+                                         const Dims &shape, const Dims &start,
+                                         const Dims &count,
+                                         const bool constantDims)
+{
+
+    PERFSTUBS_SCOPED_TIMER("IO::DefineStructVariable");
+
+    {
+        auto itVariable = m_Variables.find(name);
+        if (itVariable != m_Variables.end())
+        {
+            helper::Throw<std::invalid_argument>(
+                "Core", "IO", "DefineStructVariable",
+                "variable " + name + " already defined in IO " + m_Name);
+        }
+    }
+
+    auto itVariablePair = m_Variables.emplace(
+        name, std::unique_ptr<VariableBase>(new VariableStruct(
+                  name, def, shape, start, count, constantDims)));
+
+    VariableStruct &variable =
+        static_cast<VariableStruct &>(*itVariablePair.first->second);
+
+    // check IO placeholder for variable operations
+    auto itOperations = m_VarOpsPlaceholder.find(name);
+    if (itOperations != m_VarOpsPlaceholder.end())
+    {
+        variable.m_Operations.reserve(itOperations->second.size());
+        for (auto &operation : itOperations->second)
+        {
+            variable.AddOperation(operation.first, operation.second);
+        }
+    }
+
+    def.Freeze();
+
+    return variable;
+}
+
+VariableStruct *IO::InquireStructVariable(const std::string &name) noexcept
+{
+    PERFSTUBS_SCOPED_TIMER("IO::InquireStructVariable");
+
+    if (m_Variables.empty())
+    {
+        for (auto &e : m_Engines)
+        {
+            e.second->NotifyEngineNoVarsQuery();
+        }
+        return nullptr;
+    }
+
+    auto itVariable = m_Variables.find(name);
+
+    if (itVariable == m_Variables.end())
+    {
+        return nullptr;
+    }
+
+    if (itVariable->second->m_Type != DataType::Struct)
+    {
+        return nullptr;
+    }
+
+    VariableStruct *variable =
+        static_cast<VariableStruct *>(itVariable->second.get());
+    if (m_ReadStreaming)
+    {
+        if (!variable->IsValidStep(m_EngineStep + 1))
+        {
+            return nullptr;
+        }
+    }
+    return variable;
+}
+
+VariableStruct *IO::InquireStructVariable(const std::string &name,
+                                          const StructDefinition &def,
+                                          const bool allowReorganize) noexcept
+{
+    auto ret = InquireStructVariable(name);
+    if (ret == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (ret->m_StructDefinition.Fields() != def.Fields())
+    {
+        return nullptr;
+    }
+
+    for (size_t i = 0; i < def.Fields(); ++i)
+    {
+        if (ret->m_StructDefinition.Name(i) != def.Name(i))
+        {
+            return nullptr;
+        }
+        if (ret->m_StructDefinition.Offset(i) != def.Offset(i) &&
+            !allowReorganize)
+        {
+            return nullptr;
+        }
+        if (ret->m_StructDefinition.Type(i) != def.Type(i))
+        {
+            return nullptr;
+        }
+        if (ret->m_StructDefinition.ElementCount(i) != def.ElementCount(i))
+        {
+            return nullptr;
+        }
+    }
+
+    return ret;
 }
 
 // Explicitly instantiate the necessary public template implementations

@@ -8,7 +8,7 @@
  *      Author: Jason Wang
  */
 
-#include "SscWriterGeneric.tcc"
+#include "SscWriterGeneric.h"
 
 namespace adios2
 {
@@ -144,13 +144,130 @@ void SscWriterGeneric::Close(const int transportIndex)
     }
 }
 
-#define declare_type(T)                                                        \
-    void SscWriterGeneric::PutDeferred(Variable<T> &variable, const T *data)   \
-    {                                                                          \
-        PutDeferredCommon(variable, data);                                     \
+void SscWriterGeneric::PutDeferred(VariableBase &variable, const void *data)
+{
+    if (variable.m_Type == DataType::String)
+    {
+        const auto dataString = reinterpret_cast<const std::string *>(data);
+        bool found = false;
+        for (const auto &b : m_GlobalWritePattern[m_StreamRank])
+        {
+            if (b.name == variable.m_Name)
+            {
+                if (b.bufferCount < dataString->size())
+                {
+                    helper::Throw<std::invalid_argument>(
+                        "Engine", "SSCWriter", "PutDeferredCommon",
+                        "SSC only accepts fixed length string variables");
+                }
+                std::memcpy(m_Buffer.data() + b.bufferStart, dataString->data(),
+                            dataString->size());
+                found = true;
+            }
+        }
+
+        if (!found)
+        {
+            if (m_CurrentStep == 0 || m_WriterDefinitionsLocked == false ||
+                m_ReaderSelectionsLocked == false)
+            {
+                m_GlobalWritePattern[m_StreamRank].emplace_back();
+                auto &b = m_GlobalWritePattern[m_StreamRank].back();
+                b.name = variable.m_Name;
+                b.type = DataType::String;
+                b.shapeId = variable.m_ShapeID;
+                b.shape = variable.m_Shape;
+                b.start = variable.m_Start;
+                b.count = variable.m_Count;
+                b.bufferStart = m_Buffer.size();
+                b.bufferCount = dataString->size();
+                m_Buffer.resize(b.bufferStart + b.bufferCount);
+                std::memcpy(m_Buffer.data() + b.bufferStart, dataString->data(),
+                            dataString->size());
+                b.value.resize(dataString->size());
+                std::memcpy(b.value.data(), dataString->data(),
+                            dataString->size());
+            }
+            else
+            {
+                helper::Throw<std::invalid_argument>(
+                    "Engine", "SSCWriter", "PutDeferredCommon",
+                    "IO pattern changed after locking");
+            }
+        }
+        return;
     }
-ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
-#undef declare_type
+
+    if ((variable.m_ShapeID == ShapeID::GlobalValue ||
+         variable.m_ShapeID == ShapeID::LocalValue ||
+         variable.m_Type == DataType::String) &&
+        m_WriterRank != 0)
+    {
+        return;
+    }
+
+    Dims vStart = variable.m_Start;
+    Dims vCount = variable.m_Count;
+    Dims vShape = variable.m_Shape;
+
+    if (m_IO.m_ArrayOrder != ArrayOrdering::RowMajor)
+    {
+        std::reverse(vStart.begin(), vStart.end());
+        std::reverse(vCount.begin(), vCount.end());
+        std::reverse(vShape.begin(), vShape.end());
+    }
+
+    bool found = false;
+    for (const auto &b : m_GlobalWritePattern[m_StreamRank])
+    {
+        if (b.name == variable.m_Name && ssc::AreSameDims(vStart, b.start) &&
+            ssc::AreSameDims(vCount, b.count) &&
+            ssc::AreSameDims(vShape, b.shape))
+        {
+            std::memcpy(m_Buffer.data() + b.bufferStart, data, b.bufferCount);
+            found = true;
+        }
+    }
+
+    if (!found)
+    {
+        if (m_CurrentStep == 0 || m_WriterDefinitionsLocked == false ||
+            m_ReaderSelectionsLocked == false)
+        {
+            m_GlobalWritePattern[m_StreamRank].emplace_back();
+            auto &b = m_GlobalWritePattern[m_StreamRank].back();
+            b.name = variable.m_Name;
+            b.type = variable.m_Type;
+            b.shapeId = variable.m_ShapeID;
+            b.shape = vShape;
+            b.start = vStart;
+            b.count = vCount;
+            b.elementSize = variable.m_ElementSize;
+            b.bufferStart = m_Buffer.size();
+            b.bufferCount =
+                ssc::TotalDataSize(b.count, b.elementSize, b.shapeId);
+            m_Buffer.resize(b.bufferStart + b.bufferCount);
+            std::memcpy(m_Buffer.data() + b.bufferStart, data, b.bufferCount);
+            if (b.shapeId == ShapeID::GlobalValue ||
+                b.shapeId == ShapeID::LocalValue)
+            {
+                b.value.resize(variable.m_ElementSize);
+                std::memcpy(b.value.data(), data, b.bufferCount);
+            }
+            if (variable.m_Type == DataType::Struct)
+            {
+                b.structDef = reinterpret_cast<VariableStruct *>(&variable)
+                                  ->m_StructDefinition.StructName();
+            }
+        }
+        else
+        {
+            helper::Throw<std::invalid_argument>(
+                "Engine", "SSCWriter", "PutDeferredCommon",
+                "IO pattern changed after locking");
+        }
+    }
+}
 
 void SscWriterGeneric::EndStepFirst()
 {
@@ -181,19 +298,26 @@ void SscWriterGeneric::EndStepConsequentFlexible()
 void SscWriterGeneric::SyncWritePattern(bool finalStep)
 {
 
-    helper::Log("Engine", "SSCWriter", "SyncWritePattern", "", 0, m_WriterRank,
-                5, m_Verbosity, helper::LogMode::INFO);
+    helper::Log("Engine", "SscWriter", "SyncWritePattern", "",
+                m_Verbosity >= 10 ? m_WriterRank : 0, m_WriterRank, 5,
+                m_Verbosity, helper::LogMode::INFO);
 
     ssc::Buffer localBuffer(8);
     localBuffer.value<uint64_t>() = 8;
 
-    ssc::SerializeVariables(m_GlobalWritePattern[m_StreamRank], localBuffer,
-                            m_StreamRank);
-
     if (m_WriterRank == 0)
+    {
+        ssc::SerializeStructDefinitions(m_IO.m_ADIOS.m_StructDefinitions,
+                                        localBuffer);
+    }
+
+    if (m_WriterRank == m_WriterSize - 1)
     {
         ssc::SerializeAttributes(m_IO, localBuffer);
     }
+
+    ssc::SerializeVariables(m_GlobalWritePattern[m_StreamRank], localBuffer,
+                            m_StreamRank);
 
     ssc::Buffer globalBuffer;
 
@@ -203,7 +327,8 @@ void SscWriterGeneric::SyncWritePattern(bool finalStep)
     ssc::BroadcastMetadata(globalBuffer, m_WriterMasterStreamRank,
                            m_StreamComm);
 
-    ssc::Deserialize(globalBuffer, m_GlobalWritePattern, m_IO, false, false);
+    ssc::Deserialize(globalBuffer, m_GlobalWritePattern, m_IO, false, false,
+                     false, m_StructDefinitions);
 
     if (m_Verbosity >= 20 && m_WriterRank == 0)
     {
@@ -214,8 +339,9 @@ void SscWriterGeneric::SyncWritePattern(bool finalStep)
 void SscWriterGeneric::SyncReadPattern()
 {
 
-    helper::Log("Engine", "SSCWriter", "SyncReadPattern", "", 0, m_WriterRank,
-                5, m_Verbosity, helper::LogMode::INFO);
+    helper::Log("Engine", "SscWriter", "SyncReadPattern", "",
+                m_Verbosity >= 10 ? m_WriterRank : 0, m_WriterRank, 5,
+                m_Verbosity, helper::LogMode::INFO);
 
     ssc::Buffer globalBuffer;
 
@@ -224,7 +350,8 @@ void SscWriterGeneric::SyncReadPattern()
 
     m_ReaderSelectionsLocked = globalBuffer[1];
 
-    ssc::Deserialize(globalBuffer, m_GlobalReadPattern, m_IO, false, false);
+    ssc::Deserialize(globalBuffer, m_GlobalReadPattern, m_IO, false, false,
+                     false, m_StructDefinitions);
     m_AllSendingReaderRanks = ssc::CalculateOverlap(
         m_GlobalReadPattern, m_GlobalWritePattern[m_StreamRank]);
     CalculatePosition(m_GlobalWritePattern, m_GlobalReadPattern, m_WriterRank,

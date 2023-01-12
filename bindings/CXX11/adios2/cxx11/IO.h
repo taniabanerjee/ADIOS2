@@ -11,15 +11,16 @@
 #ifndef ADIOS2_BINDINGS_CXX11_CXX11_IO_H_
 #define ADIOS2_BINDINGS_CXX11_CXX11_IO_H_
 
+#if ADIOS2_USE_MPI
+#include <mpi.h>
+#endif
+
 #include "Attribute.h"
 #include "Engine.h"
 #include "Group.h"
 #include "Operator.h"
 #include "Variable.h"
-#if ADIOS2_USE_MPI
-#include <mpi.h>
-#endif
-
+#include "VariableNT.h"
 #include "adios2/common/ADIOSMacros.h"
 #include "adios2/common/ADIOSTypes.h"
 
@@ -152,6 +153,21 @@ public:
                    const Dims &start = Dims(), const Dims &count = Dims(),
                    const bool constantDims = false);
 
+    VariableNT DefineVariable(const DataType type, const std::string &name,
+                              const Dims &shape = Dims(),
+                              const Dims &start = Dims(),
+                              const Dims &count = Dims(),
+                              const bool constantDims = false);
+
+    StructDefinition DefineStruct(const std::string &name, const size_t size);
+
+    VariableNT DefineStructVariable(const std::string &name,
+                                    const StructDefinition &def,
+                                    const Dims &shape = Dims(),
+                                    const Dims &start = Dims(),
+                                    const Dims &count = Dims(),
+                                    const bool constantDims = false);
+
     /**
      * Retrieve a Variable object within current IO object
      * @param name unique variable identifier within IO object
@@ -160,6 +176,13 @@ public:
      */
     template <class T>
     Variable<T> InquireVariable(const std::string &name);
+
+    VariableNT InquireVariable(const std::string &name);
+
+    VariableNT InquireStructVariable(const std::string &name);
+
+    VariableNT InquireStructVariable(const std::string &name,
+                                     const StructDefinition def);
 
     /**
      * @brief Define attribute inside io. Array input version
@@ -363,32 +386,6 @@ private:
     IO(core::IO *io);
     core::IO *m_IO = nullptr;
 };
-
-// Explicit declaration of the public template methods
-// Limits the types
-#define declare_template_instantiation(T)                                      \
-    extern template Variable<T> IO::DefineVariable(const std::string &,        \
-                                                   const Dims &, const Dims &, \
-                                                   const Dims &, const bool);  \
-                                                                               \
-    extern template Variable<T> IO::InquireVariable<T>(const std::string &);
-
-ADIOS2_FOREACH_TYPE_1ARG(declare_template_instantiation)
-#undef declare_template_instantiation
-
-#define declare_template_instantiation(T)                                      \
-    extern template Attribute<T> IO::DefineAttribute(                          \
-        const std::string &, const T *, const size_t, const std::string &,     \
-        const std::string, const bool);                                        \
-                                                                               \
-    extern template Attribute<T> IO::DefineAttribute(                          \
-        const std::string &, const T &, const std::string &,                   \
-        const std::string, const bool);                                        \
-                                                                               \
-    extern template Attribute<T> IO::InquireAttribute<T>(                      \
-        const std::string &, const std::string &, const std::string);
-ADIOS2_FOREACH_ATTRIBUTE_TYPE_1ARG(declare_template_instantiation)
-#undef declare_template_instantiation
 
 std::string ToString(const IO &io);
 

@@ -157,7 +157,7 @@ the underlying network communication mechanism to use for exchanging
 data in SST.  Generally this is chosen by SST based upon what is
 available on the current platform.  However, specifying this engine
 parameter allows overriding SST's choice.  Current allowed values are
-**"RDMA"** and **"WAN"**.  (**ib** and **fabric** are accepted as
+**"UCX"**,**"MPI"**, **"RDMA"**, and **"WAN"**.  (**ib** and **fabric** are accepted as
 equivalent to **RDMA** and **evpath** is equivalent to **WAN**.)
 Generally both the reader and writer should be using the same network
 transport, and the network transport chosen may be dictated by the
@@ -267,15 +267,28 @@ eager data sending of all data from each writer to all readers.
 Currently value is interpreted by only by the SST Reader engine.
 
 
-============================= ===================== ================================================
+17. ``StepDistributionMode``: Default **"AllToAll"**.  This value
+controls how steps are distributed, particularly when there are
+multiple readers.  By default, the value is **"AllToAll"**, which
+means that all timesteps are to be delivered to all readers (subject
+to discard rules, etc.).  In other distribution modes, this is not the
+case.  For example, in **"RoundRobin"**, each step is delivered
+only to a single reader, determined in a round-robin fashion based
+upon the number or readers who have opened the stream at the time the
+step is submitted.  In **"OnDemand"** each step is delivered to a
+single reader, but only upon request (with a request being initiated
+by the reader doing BeginStep()).  Normal reader-side rules (like
+BeginStep timeouts) and writer-side rules (like queue limit behavior) apply.
+
+============================= ===================== ====================================================
  **Key**                        **Value Format**      **Default** and Examples
-============================= ===================== ================================================
+============================= ===================== ====================================================
  RendezvousReaderCount           integer             **1**
  RegistrationMethod              string              **File**, Screen
  QueueLimit                      integer             **0** (no queue limits)
  QueueFullPolicy                 string              **Block**, Discard
  ReserveQueueLimit               integer             **0** (no queue limits)
- DataTransport                   string              **default varies by platform**, RDMA, WAN
+ DataTransport                   string              **default varies by platform**, UCX, MPI, RDMA, WAN
  WANDataTransport                string              **sockets**, enet, ib
  ControlTransport                string              **TCP**, Scalable
  NetworkInterface                string              **NULL**
@@ -286,4 +299,4 @@ Currently value is interpreted by only by the SST Reader engine.
  OpenTimeoutSecs                 integer             **60**
  SpeculativePreloadMode          string              **AUTO**, ON, OFF
  SpecAutoNodeThreshold           integer             **1**
-============================= ===================== ================================================
+============================= ===================== =====================================================

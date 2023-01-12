@@ -14,12 +14,15 @@ program TestBPReadGlobalsByName
     type(adios2_engine):: writer, reader
 
     ! Launch MPI
-    call MPI_Init(ierr)
+    INTEGER provided
+
+    ! MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    call MPI_Init_thread(MPI_THREAD_MULTIPLE, provided, ierr)
     call MPI_Comm_rank(MPI_COMM_WORLD, irank, ierr)
     call MPI_Comm_size(MPI_COMM_WORLD, isize, ierr)
 
     ! Start adios2
-    call adios2_init(adios, MPI_COMM_SELF, adios2_debug_mode_on, ierr)
+    call adios2_init(adios, MPI_COMM_SELF, ierr)
 
     ! writer
     call adios2_declare_io(ioWrite, adios, "FWriter", ierr)

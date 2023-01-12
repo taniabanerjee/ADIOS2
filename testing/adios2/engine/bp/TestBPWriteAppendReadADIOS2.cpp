@@ -212,7 +212,6 @@ TEST_F(BPWriteAppendReadTestADIOS2, ADIOS2BPWriteAppendRead2D2x4)
             // fill in the variable with values from starting index to
             // starting index + count
             bpWriter.BeginStep();
-            bpWriter.Put(var_i16, currentTestData.I16.data());
             bpWriter.Put(var_iString, currentTestData.S1);
             bpWriter.Put(var_i8, currentTestData.I8.data());
             bpWriter.Put(var_i16, currentTestData.I16.data());
@@ -224,7 +223,6 @@ TEST_F(BPWriteAppendReadTestADIOS2, ADIOS2BPWriteAppendRead2D2x4)
             bpWriter.Put(var_u64, currentTestData.U64.data());
             bpWriter.Put(var_r32, currentTestData.R32.data());
             bpWriter.Put(var_r64, currentTestData.R64.data());
-            bpWriter.PerformPuts();
 
             bpWriter.EndStep();
         }
@@ -366,7 +364,6 @@ TEST_F(BPWriteAppendReadTestADIOS2, ADIOS2BPWriteAppendRead2D2x4)
             // fill in the variable with values from starting index to
             // starting index + count
             bpAppender.BeginStep();
-            bpAppender.Put(var_i16, currentTestData.I16.data());
             bpAppender.Put(var_iString, currentTestData.S1);
             bpAppender.Put(var_i8, currentTestData.I8.data());
             bpAppender.Put(var_i16, currentTestData.I16.data());
@@ -378,7 +375,6 @@ TEST_F(BPWriteAppendReadTestADIOS2, ADIOS2BPWriteAppendRead2D2x4)
             bpAppender.Put(var_u64, currentTestData.U64.data());
             bpAppender.Put(var_r32, currentTestData.R32.data());
             bpAppender.Put(var_r64, currentTestData.R64.data());
-            bpAppender.PerformPuts();
 
             bpAppender.EndStep();
         }
@@ -916,7 +912,10 @@ TEST_F(BPWriteAppendReadTestADIOS2, ADIOS2BPWriteAppendReadVaryingAggregation)
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

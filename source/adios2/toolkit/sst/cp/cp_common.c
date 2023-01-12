@@ -16,6 +16,71 @@
 char *SSTStreamStatusStr[] = {"NotOpen",    "Opening",    "Established",
                               "PeerClosed", "PeerFailed", "Closed"};
 
+#ifdef MUTEX_DEBUG
+#define STREAM_MUTEX_LOCK(Stream)                                              \
+    {                                                                          \
+        fprintf(stderr, "(PID %lx, TID %lx) CP_COMMON Trying lock line %d\n",  \
+                (long)getpid(), (long)gettid(), __LINE__);                     \
+        pthread_mutex_lock(&Stream->DataLock);                                 \
+        Stream->Locked++;                                                      \
+        fprintf(stderr, "(PID %lx, TID %lx) CP_COMMON Got lock\n",             \
+                (long)getpid(), (long)gettid());                               \
+    }
+
+#define STREAM_MUTEX_UNLOCK(Stream)                                            \
+    {                                                                          \
+        fprintf(stderr, "(PID %lx, TID %lx) CP_COMMON UNlocking line %d\n",    \
+                (long)getpid(), (long)gettid(), __LINE__);                     \
+        Stream->Locked--;                                                      \
+        pthread_mutex_unlock(&Stream->DataLock);                               \
+    }
+#define STREAM_CONDITION_WAIT(Stream)                                          \
+    {                                                                          \
+        fprintf(                                                               \
+            stderr,                                                            \
+            "(PID %lx, TID %lx) CP_COMMON Dropping Condition Lock line %d\n",  \
+            (long)getpid(), (long)gettid(), __LINE__);                         \
+        Stream->Locked = 0;                                                    \
+        pthread_cond_wait(&Stream->DataCondition, &Stream->DataLock);          \
+        fprintf(                                                               \
+            stderr,                                                            \
+            "(PID %lx, TID %lx) CP_COMMON Acquired Condition Lock line %d\n",  \
+            (long)getpid(), (long)gettid(), __LINE__);                         \
+        Stream->Locked = 1;                                                    \
+    }
+#define STREAM_CONDITION_SIGNAL(Stream)                                        \
+    {                                                                          \
+        assert(Stream->Locked == 1);                                           \
+        fprintf(stderr,                                                        \
+                "(PID %lx, TID %lx) CP_COMMON Signalling Condition line %d\n", \
+                (long)getpid(), (long)gettid(), __LINE__);                     \
+        pthread_cond_signal(&Stream->DataCondition);                           \
+    }
+
+#define STREAM_ASSERT_LOCKED(Stream)                                           \
+    {                                                                          \
+        assert(Stream->Locked == 1);                                           \
+    }
+#else
+#define STREAM_MUTEX_LOCK(Stream)                                              \
+    {                                                                          \
+        pthread_mutex_lock(&Stream->DataLock);                                 \
+    }
+#define STREAM_MUTEX_UNLOCK(Stream)                                            \
+    {                                                                          \
+        pthread_mutex_unlock(&Stream->DataLock);                               \
+    }
+#define STREAM_CONDITION_WAIT(Stream)                                          \
+    {                                                                          \
+        pthread_cond_wait(&Stream->DataCondition, &Stream->DataLock);          \
+    }
+#define STREAM_CONDITION_SIGNAL(Stream)                                        \
+    {                                                                          \
+        pthread_cond_signal(&Stream->DataCondition);                           \
+    }
+#define STREAM_ASSERT_LOCKED(Stream)
+#endif
+
 void CP_validateParams(SstStream Stream, SstParams Params, int Writer)
 {
     if (Params->RendezvousReaderCount >= 0)
@@ -65,6 +130,14 @@ void CP_validateParams(SstStream Stream, SstParams Params, int Writer)
                  (strcmp(SelectedTransport, "fabric") == 0))
         {
             Params->DataTransport = strdup("rdma");
+        }
+        else if (strcmp(SelectedTransport, "ucx") == 0)
+        {
+            Params->DataTransport = strdup("ucx");
+        }
+        else
+        {
+            Params->DataTransport = strdup(SelectedTransport);
         }
         free(SelectedTransport);
     }
@@ -171,6 +244,8 @@ static char *SstQueueFullStr[] = {"Block", "Discard"};
 static char *SstCompressStr[] = {"None", "ZFP"};
 static char *SstCommPatternStr[] = {"Min", "Peer"};
 static char *SstPreloadModeStr[] = {"Off", "On", "Auto"};
+static char *SstStepDistributionModeStr[] = {"StepsAllToAll", "StepsRoundRobin",
+                                             "StepsOnDemand"};
 
 extern void CP_dumpParams(SstStream Stream, struct _SstParams *Params,
                           int ReaderSide)
@@ -188,6 +263,8 @@ extern void CP_dumpParams(SstStream Stream, struct _SstParams *Params,
                 (Params->QueueLimit == 0) ? "(unlimited)" : "");
         fprintf(stderr, "Param -   QueueFullPolicy=%s\n",
                 SstQueueFullStr[Params->QueueFullPolicy]);
+        fprintf(stderr, "Param -   StepDistributionMode=%s\n",
+                SstStepDistributionModeStr[Params->StepDistributionMode]);
     }
     fprintf(stderr, "Param -   DataTransport=%s\n",
             Params->DataTransport ? Params->DataTransport : "");
@@ -312,6 +389,29 @@ static FMStructDescRec CP_DP_WriterArrayStructs[] = {
     {"CombinedWriterInfo", CP_DP_ArrayWriterList,
      sizeof(struct _CombinedWriterInfo), NULL},
     {"SstParams", NULL, sizeof(struct _SstParams), NULL},
+    {NULL, NULL, 0, NULL}};
+
+static FMField CP_DPQueryList[] = {
+    {"writer_ID", "integer", sizeof(void *),
+     FMOffset(struct _DPQueryMsg *, WriterFile)},
+    {"writer_response_condition", "integer", sizeof(int),
+     FMOffset(struct _DPQueryMsg *, WriterResponseCondition)},
+    {NULL, NULL, 0, 0}};
+
+static FMStructDescRec CP_DPQueryStructs[] = {
+    {"DPQuery", CP_DPQueryList, sizeof(struct _DPQueryMsg), NULL},
+    {NULL, NULL, 0, NULL}};
+
+static FMField CP_DPQueryResponseList[] = {
+    {"writer_response_condition", "integer", sizeof(int),
+     FMOffset(struct _DPQueryResponseMsg *, WriterResponseCondition)},
+    {"writer_data_plane", "string", sizeof(char *),
+     FMOffset(struct _DPQueryResponseMsg *, OperativeDP)},
+    {NULL, NULL, 0, 0}};
+
+static FMStructDescRec CP_DPQueryResponseStructs[] = {
+    {"DPQueryResponse", CP_DPQueryResponseList,
+     sizeof(struct _DPQueryResponseMsg), NULL},
     {NULL, NULL, 0, NULL}};
 
 static FMField CP_ReaderRegisterList[] = {
@@ -532,6 +632,16 @@ static FMStructDescRec ReaderActivateStructs[] = {
      NULL},
     {NULL, NULL, 0, NULL}};
 
+static FMField ReaderRequestStepList[] = {
+    {"WSR_Stream", "integer", sizeof(void *),
+     FMOffset(struct _ReaderRequestStepMsg *, WSR_Stream)},
+    {NULL, NULL, 0, 0}};
+
+static FMStructDescRec ReaderRequestStepStructs[] = {
+    {"ReaderRequestStep", ReaderRequestStepList,
+     sizeof(struct _ReaderRequestStepMsg), NULL},
+    {NULL, NULL, 0, NULL}};
+
 static FMField WriterCloseList[] = {
     {"RS_Stream", "integer", sizeof(void *),
      FMOffset(struct _WriterCloseMsg *, RS_Stream)},
@@ -664,7 +774,7 @@ void **CP_consolidateDataToRankZero(SstStream Stream, void *LocalInfo,
                                     FFSTypeHandle Type, void **RetDataBlock)
 {
     FFSBuffer Buf = create_FFSBuffer();
-    int DataSize;
+    size_t DataSize;
     size_t *RecvCounts = NULL;
     char *Buffer;
 
@@ -676,8 +786,7 @@ void **CP_consolidateDataToRankZero(SstStream Stream, void *LocalInfo,
     {
         RecvCounts = malloc(Stream->CohortSize * sizeof(*RecvCounts));
     }
-    size_t DataSz = DataSize;
-    SMPI_Gather(&DataSz, 1, SMPI_SIZE_T, RecvCounts, 1, SMPI_SIZE_T, 0,
+    SMPI_Gather(&DataSize, 1, SMPI_SIZE_T, RecvCounts, 1, SMPI_SIZE_T, 0,
                 Stream->mpiComm);
 
     /*
@@ -748,8 +857,10 @@ void *CP_distributeDataFromRankZero(SstStream Stream, void *root_info,
     if (Stream->Rank == 0)
     {
         FFSBuffer Buf = create_FFSBuffer();
+        size_t encodeSize;
         char *tmp =
-            FFSencode(Buf, FMFormat_of_original(Type), root_info, &DataSize);
+            FFSencode(Buf, FMFormat_of_original(Type), root_info, &encodeSize);
+        DataSize = (int)encodeSize;
         SMPI_Bcast(&DataSize, 1, SMPI_INT, 0, Stream->mpiComm);
         SMPI_Bcast(tmp, DataSize, SMPI_CHAR, 0, Stream->mpiComm);
         Buffer = malloc(DataSize);
@@ -777,7 +888,7 @@ void **CP_consolidateDataToAll(SstStream Stream, void *LocalInfo,
                                FFSTypeHandle Type, void **RetDataBlock)
 {
     FFSBuffer Buf = create_FFSBuffer();
-    int DataSize;
+    size_t DataSize;
     size_t *RecvCounts;
     char *Buffer;
 
@@ -787,8 +898,7 @@ void **CP_consolidateDataToAll(SstStream Stream, void *LocalInfo,
 
     RecvCounts = malloc(Stream->CohortSize * sizeof(*RecvCounts));
 
-    size_t DataSz = DataSize;
-    SMPI_Allgather(&DataSz, 1, SMPI_SIZE_T, RecvCounts, 1, SMPI_SIZE_T,
+    SMPI_Allgather(&DataSize, 1, SMPI_SIZE_T, RecvCounts, 1, SMPI_SIZE_T,
                    Stream->mpiComm);
 
     /*
@@ -871,8 +981,48 @@ static void FreeCustomStructs(CP_StructList *List)
     free(List->CustomStructList);
 }
 
-static void doCMFormatRegistration(CP_GlobalCMInfo CPInfo,
-                                   CP_DP_Interface DPInfo)
+static void doPrelimCMFormatRegistration(CP_GlobalCMInfo CPInfo)
+{
+    CPInfo->PeerSetupFormat = CMregister_format(CPInfo->cm, PeerSetupStructs);
+    CMregister_handler(CPInfo->PeerSetupFormat, CP_PeerSetupHandler, NULL);
+
+    CPInfo->DPQueryFormat = CMregister_format(CPInfo->cm, CP_DPQueryStructs);
+    CMregister_handler(CPInfo->DPQueryFormat, CP_DPQueryHandler, NULL);
+    CPInfo->DPQueryResponseFormat =
+        CMregister_format(CPInfo->cm, CP_DPQueryResponseStructs);
+    CMregister_handler(CPInfo->DPQueryResponseFormat, CP_DPQueryResponseHandler,
+                       NULL);
+    CPInfo->ReaderActivateFormat =
+        CMregister_format(CPInfo->cm, ReaderActivateStructs);
+    CMregister_handler(CPInfo->ReaderActivateFormat, CP_ReaderActivateHandler,
+                       NULL);
+    CPInfo->ReaderRequestStepFormat =
+        CMregister_format(CPInfo->cm, ReaderRequestStepStructs);
+    CMregister_handler(CPInfo->ReaderRequestStepFormat,
+                       CP_ReaderRequestStepHandler, NULL);
+
+    CPInfo->ReleaseTimestepFormat =
+        CMregister_format(CPInfo->cm, ReleaseTimestepStructs);
+    CMregister_handler(CPInfo->ReleaseTimestepFormat, CP_ReleaseTimestepHandler,
+                       NULL);
+    CPInfo->LockReaderDefinitionsFormat =
+        CMregister_format(CPInfo->cm, LockReaderDefinitionsStructs);
+    CMregister_handler(CPInfo->LockReaderDefinitionsFormat,
+                       CP_LockReaderDefinitionsHandler, NULL);
+    CPInfo->CommPatternLockedFormat =
+        CMregister_format(CPInfo->cm, CommPatternLockedStructs);
+    CMregister_handler(CPInfo->CommPatternLockedFormat,
+                       CP_CommPatternLockedHandler, NULL);
+    CPInfo->WriterCloseFormat =
+        CMregister_format(CPInfo->cm, WriterCloseStructs);
+    CMregister_handler(CPInfo->WriterCloseFormat, CP_WriterCloseHandler, NULL);
+    CPInfo->ReaderCloseFormat =
+        CMregister_format(CPInfo->cm, ReaderCloseStructs);
+    CMregister_handler(CPInfo->ReaderCloseFormat, CP_ReaderCloseHandler, NULL);
+}
+
+static void doFinalCMFormatRegistration(CP_GlobalCMInfo CPInfo,
+                                        CP_DP_Interface DPInfo)
 {
     FMStructDescList FullReaderRegisterStructs, FullWriterResponseStructs,
         CombinedTimestepMetadataStructs;
@@ -902,32 +1052,6 @@ static void doCMFormatRegistration(CP_GlobalCMInfo CPInfo,
     CMregister_handler(CPInfo->DeliverTimestepMetadataFormat,
                        CP_TimestepMetadataHandler, NULL);
     AddCustomStruct(&CPInfo->CustomStructs, CombinedTimestepMetadataStructs);
-
-    CPInfo->PeerSetupFormat = CMregister_format(CPInfo->cm, PeerSetupStructs);
-    CMregister_handler(CPInfo->PeerSetupFormat, CP_PeerSetupHandler, NULL);
-
-    CPInfo->ReaderActivateFormat =
-        CMregister_format(CPInfo->cm, ReaderActivateStructs);
-    CMregister_handler(CPInfo->ReaderActivateFormat, CP_ReaderActivateHandler,
-                       NULL);
-    CPInfo->ReleaseTimestepFormat =
-        CMregister_format(CPInfo->cm, ReleaseTimestepStructs);
-    CMregister_handler(CPInfo->ReleaseTimestepFormat, CP_ReleaseTimestepHandler,
-                       NULL);
-    CPInfo->LockReaderDefinitionsFormat =
-        CMregister_format(CPInfo->cm, LockReaderDefinitionsStructs);
-    CMregister_handler(CPInfo->LockReaderDefinitionsFormat,
-                       CP_LockReaderDefinitionsHandler, NULL);
-    CPInfo->CommPatternLockedFormat =
-        CMregister_format(CPInfo->cm, CommPatternLockedStructs);
-    CMregister_handler(CPInfo->CommPatternLockedFormat,
-                       CP_CommPatternLockedHandler, NULL);
-    CPInfo->WriterCloseFormat =
-        CMregister_format(CPInfo->cm, WriterCloseStructs);
-    CMregister_handler(CPInfo->WriterCloseFormat, CP_WriterCloseHandler, NULL);
-    CPInfo->ReaderCloseFormat =
-        CMregister_format(CPInfo->cm, ReaderCloseStructs);
-    CMregister_handler(CPInfo->ReaderCloseFormat, CP_ReaderCloseHandler, NULL);
 }
 
 static void doFFSFormatRegistration(CP_Info CPInfo, CP_DP_Interface DPInfo)
@@ -1108,9 +1232,9 @@ extern void SstStreamDestroy(SstStream Stream)
      * in a safe way after all streams have been destroyed
      */
     struct _SstStream StackStream;
-    pthread_mutex_lock(&Stream->DataLock);
     CP_verbose(Stream, PerStepVerbose, "Destroying stream %p, name %s\n",
                Stream, Stream->Filename);
+    STREAM_MUTEX_LOCK(Stream);
     StackStream = *Stream;
     Stream->Status = Destroyed;
     struct _TimestepMetadataList *Next = Stream->Timesteps;
@@ -1120,9 +1244,10 @@ extern void SstStreamDestroy(SstStream Stream)
         free(Stream->Timesteps);
         Stream->Timesteps = Next;
     }
+
     if (Stream->DP_Stream)
     {
-        pthread_mutex_unlock(&Stream->DataLock);
+        STREAM_MUTEX_UNLOCK(Stream);
         if (Stream->Role == ReaderRole)
         {
             Stream->DP_Interface->destroyReader(&Svcs, Stream->DP_Stream);
@@ -1131,8 +1256,10 @@ extern void SstStreamDestroy(SstStream Stream)
         {
             Stream->DP_Interface->destroyWriter(&Svcs, Stream->DP_Stream);
         }
-        pthread_mutex_lock(&Stream->DataLock);
+        Stream->DP_Stream = NULL;
+        STREAM_MUTEX_LOCK(Stream);
     }
+
     if (Stream->Readers)
     {
         for (int i = 0; i < Stream->ReaderCount; i++)
@@ -1257,7 +1384,7 @@ extern void SstStreamDestroy(SstStream Stream)
     FreeCustomStructs(&Stream->CPInfo->CustomStructs);
     free(Stream->CPInfo);
 
-    pthread_mutex_unlock(&Stream->DataLock);
+    STREAM_MUTEX_UNLOCK(Stream);
     //   Stream is free'd in LastCall
 
     pthread_mutex_lock(&StateMutex);
@@ -1331,7 +1458,15 @@ static void CP_versionError(CMConnection conn, char *formatName)
                     "with the same version of ADIOS2.\n");
 }
 
-extern CP_Info CP_getCPInfo(CP_DP_Interface DPInfo, char *ControlModule)
+extern void FinalizeCPInfo(CP_Info StreamCP, CP_DP_Interface DPInfo)
+{
+    pthread_mutex_lock(&StateMutex);
+    doFinalCMFormatRegistration(SharedCMInfo, DPInfo);
+    doFFSFormatRegistration(StreamCP, DPInfo);
+    pthread_mutex_unlock(&StateMutex);
+}
+
+extern CP_Info CP_getCPInfo(char *ControlModule)
 {
     CP_Info StreamCP;
 
@@ -1410,7 +1545,7 @@ extern CP_Info CP_getCPInfo(CP_DP_Interface DPInfo, char *ControlModule)
                 CP_WriterResponseStructs[i].field_list = CP_SstParamsList;
             }
         }
-        doCMFormatRegistration(SharedCMInfo, DPInfo);
+        doPrelimCMFormatRegistration(SharedCMInfo);
     }
     SharedCMInfoRefCount++;
     pthread_mutex_unlock(&StateMutex);
@@ -1419,8 +1554,6 @@ extern CP_Info CP_getCPInfo(CP_DP_Interface DPInfo, char *ControlModule)
     StreamCP->SharedCM = SharedCMInfo;
     StreamCP->fm_c = create_local_FMcontext();
     StreamCP->ffs_c = create_FFSContext_FM(StreamCP->fm_c);
-
-    doFFSFormatRegistration(StreamCP, DPInfo);
 
     return StreamCP;
 }
@@ -1435,6 +1568,8 @@ SstStream CP_newStream()
     pthread_cond_init(&Stream->DataCondition, NULL);
     Stream->WriterTimestep = -1; // Filled in by ProvideTimestep
     Stream->ReaderTimestep = -1; // first beginstep will get us timestep 0
+    Stream->CloseTimestepCount = (size_t)-1;
+    Stream->LastDemandTimestep = (size_t)-1;
     Stream->LastReleasedTimestep = -1;
     Stream->DiscardPriorTimestep =
         -1; // Timesteps prior to this discarded/released upon arrival

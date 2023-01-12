@@ -13,9 +13,15 @@
 #ifdef SST_HAVE_LIBFABRIC
 extern CP_DP_Interface LoadRdmaDP();
 #endif /* SST_HAVE_LIBFABRIC */
+#ifdef SST_HAVE_UCX
+extern CP_DP_Interface LoadUcxDP();
+#endif /* SST_HAVE_UCX */
 #ifdef SST_HAVE_DAOS
 extern CP_DP_Interface LoadDaosDP();
 #endif /* SST_HAVE_LIBFABRIC */
+#ifdef SST_HAVE_MPI
+extern CP_DP_Interface LoadMpiDP();
+#endif /* SST_HAVE_MPI*/
 extern CP_DP_Interface LoadEVpathDP();
 
 typedef struct _DPElement
@@ -63,10 +69,18 @@ CP_DP_Interface SelectDP(CP_Services Svcs, void *CP_Stream,
         AddDPPossibility(Svcs, CP_Stream, List, LoadRdmaDP(), "rdma", Params);
 #endif /* SST_HAVE_LIBFABRIC */
 
+#ifdef SST_HAVE_UCX
+    List = AddDPPossibility(Svcs, CP_Stream, List, LoadUcxDP(), "ucx", Params);
+#endif /* SST_HAVE_UCX */
+
 #ifdef SST_HAVE_DAOS
     List =
         AddDPPossibility(Svcs, CP_Stream, List, LoadDaosDP(), "daos", Params);
 #endif /* SST_HAVE_DAOS */
+
+#ifdef SST_HAVE_MPI
+    List = AddDPPossibility(Svcs, CP_Stream, List, LoadMpiDP(), "mpi", Params);
+#endif /* SST_HAVE_MPI */
 
     int SelectedDP = -1;
     int BestPriority = -1;

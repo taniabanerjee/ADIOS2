@@ -18,6 +18,8 @@
 #include "ffs.h"
 #include "fm.h"
 
+#include <mutex>
+
 #ifdef _WIN32
 #pragma warning(disable : 4250)
 #endif
@@ -45,21 +47,39 @@ public:
         size_t StartOffset;
         size_t ReadLength;
         char *DestinationAddr;
-        void *Internal;
+        bool DirectToAppMemory;
+        size_t ReqIndex;
+        size_t OffsetInBlock;
+        size_t BlockID;
     };
     void InstallMetaMetaData(MetaMetaInfoBlock &MMList);
     void InstallMetaData(void *MetadataBlock, size_t BlockLen,
                          size_t WriterRank, size_t Step = SIZE_MAX);
     void InstallAttributeData(void *AttributeBlock, size_t BlockLen,
                               size_t Step = SIZE_MAX);
+    void InstallAttributesV1(FFSTypeHandle FFSformat, void *BaseData,
+                             size_t Step);
+    void InstallAttributesV2(FFSTypeHandle FFSformat, void *BaseData,
+                             size_t Step);
+
     void SetupForStep(size_t Step, size_t WriterCount);
     // return from QueueGet is true if a sync is needed to fill the data
     bool QueueGet(core::VariableBase &variable, void *DestData);
     bool QueueGetSingle(core::VariableBase &variable, void *DestData,
                         size_t Step);
 
-    std::vector<ReadRequest> GenerateReadRequests();
-    void FinalizeGets(std::vector<ReadRequest>);
+    /* generate read requests. return vector of requests AND the size of
+     * the largest allocation block necessary for reading.
+     * input flag: true allocates a temporary buffer for each read request
+     * unless the request can go directly to user memory.
+     * False will not allocate a temporary buffer
+     * (RR.DestinationAddress==nullptr) but may also assign the user memory
+     * pointer for direct read in
+     */
+    std::vector<ReadRequest> GenerateReadRequests(const bool doAllocTempBuffers,
+                                                  size_t *maxReadSize);
+    void FinalizeGet(const ReadRequest &, const bool freeAddr);
+    void FinalizeGets(std::vector<ReadRequest> &);
 
     MinVarInfo *AllRelativeStepsMinBlocksInfo(const VariableBase &var);
     MinVarInfo *AllStepsMinBlocksInfo(const VariableBase &var);
@@ -83,6 +103,7 @@ private:
         char *VarName = NULL;
         size_t DimCount = 0;
         ShapeID OrigShapeID;
+        core::StructDefinition *Def = nullptr;
         char *Operator = NULL;
         DataType Type;
         int ElementSize = 0;
@@ -164,17 +185,23 @@ private:
     BP5VarRec *LookupVarByKey(void *Key) const;
     BP5VarRec *LookupVarByName(const char *Name);
     BP5VarRec *CreateVarRec(const char *ArrayName);
-    void ReverseDimensions(size_t *Dimensions, int count, int times);
-    void BreakdownVarName(const char *Name, char **base_name_p,
-                          DataType *type_p, int *element_size_p);
+    void ReverseDimensions(size_t *Dimensions, size_t count, size_t times);
+    const char *BreakdownVarName(const char *Name, DataType *type_p,
+                                 int *element_size_p);
+    void BreakdownFieldType(const char *FieldType, bool &Operator,
+                            bool &MinMax);
     void BreakdownArrayName(const char *Name, char **base_name_p,
                             DataType *type_p, int *element_size_p,
-                            char **Operator, bool *MinMax);
+                            FMFormat *Format);
+    void BreakdownV1ArrayName(const char *Name, char **base_name_p,
+                              DataType *type_p, int *element_size_p,
+                              bool &Operator, bool &MinMax);
     void *VarSetup(core::Engine *engine, const char *variableName,
                    const DataType type, void *data);
     void *ArrayVarSetup(core::Engine *engine, const char *variableName,
                         const DataType type, int DimCount, size_t *Shape,
-                        size_t *Start, size_t *Count);
+                        size_t *Start, size_t *Count,
+                        core::StructDefinition *Def);
     void MapGlobalToLocalIndex(size_t Dims, const size_t *GlobalIndex,
                                const size_t *LocalOffsets, size_t *LocalIndex);
     size_t RelativeToAbsoluteStep(const BP5VarRec *VarRec, size_t RelStep);
@@ -201,10 +228,16 @@ private:
         void *Data;
     };
     std::vector<BP5ArrayRequest> PendingRequests;
-    bool NeedWriter(BP5ArrayRequest Req, size_t i, size_t &NodeFirst);
     void *GetMetadataBase(BP5VarRec *VarRec, size_t Step,
                           size_t WriterRank) const;
+    bool IsContiguousTransfer(BP5ArrayRequest *Req, size_t *offsets,
+                              size_t *count);
+
     size_t CurTimestep = 0;
+
+    /* We assume operators are not thread-safe, call Decompress() one at a time
+     */
+    std::mutex mutexDecompress;
 };
 
 } // end namespace format

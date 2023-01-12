@@ -56,7 +56,7 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
         adios2::DataType Type = (adios2::DataType)type;
         class SstReader::SstReader *Reader =
             reinterpret_cast<class SstReader::SstReader *>(reader);
-        if (Type == adios2::DataType::Compound)
+        if (Type == adios2::DataType::Struct)
         {
             return (void *)NULL;
         }
@@ -68,6 +68,7 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
             &(Reader->m_IO.DefineVariable<T>(variableName));                   \
         variable->SetData((T *)data);                                          \
         variable->m_AvailableStepsCount = 1;                                   \
+        Reader->RegisterCreatedVariable(variable);                             \
         return (void *)variable;                                               \
     }
 
@@ -90,19 +91,19 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
         }
         try
         {
-            if (Type == adios2::DataType::Compound)
+            if (Type == adios2::DataType::Struct)
             {
                 return;
             }
             else if (Type == helper::GetDataType<std::string>())
             {
-                Reader->m_IO.DefineAttribute<std::string>(attrName,
-                                                          *(char **)data);
+                Reader->m_IO.DefineAttribute<std::string>(
+                    attrName, *(char **)data, "", "/", true);
             }
 #define declare_type(T)                                                        \
     else if (Type == helper::GetDataType<T>())                                 \
     {                                                                          \
-        Reader->m_IO.DefineAttribute<T>(attrName, *(T *)data);                 \
+        Reader->m_IO.DefineAttribute<T>(attrName, *(T *)data, "", "/", true);  \
     }
 
             ADIOS2_FOREACH_ATTRIBUTE_PRIMITIVE_STDTYPE_1ARG(declare_type)
@@ -153,7 +154,7 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
             }
         }
 
-        if (Type == adios2::DataType::Compound)
+        if (Type == adios2::DataType::Struct)
         {
             return (void *)NULL;
         }
@@ -163,6 +164,7 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
         Variable<T> *variable = &(Reader->m_IO.DefineVariable<T>(              \
             variableName, VecShape, VecStart, VecCount));                      \
         variable->m_AvailableStepsCount = 1;                                   \
+        Reader->RegisterCreatedVariable(variable);                             \
         return (void *)variable;                                               \
     }
         ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
@@ -204,7 +206,7 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
                 }
             }
 
-            if (Type == adios2::DataType::Compound)
+            if (Type == adios2::DataType::Struct)
             {
                 return;
             }
@@ -269,13 +271,36 @@ SstReader::SstReader(IO &io, const std::string &name, const Mode mode,
                                  arrayBlocksInfoCallback);
 
     delete[] cstr;
+    m_IsOpen = true;
 }
 
 SstReader::~SstReader()
 {
+    if (m_IsOpen)
+    {
+        DestructorClose(m_FailVerbose);
+    }
+
     if (m_BP5Deserializer)
         delete m_BP5Deserializer;
     SstStreamDestroy(m_Input);
+}
+
+/**
+ * Called if destructor is called on an open engine.  Should warn or take any
+ * non-complex measure that might help recover.
+ */
+void SstReader::DestructorClose(bool Verbose) noexcept
+{
+    if (Verbose)
+    {
+        std::cerr << "SST Reader \"" << m_Name
+                  << "\" Destroyed without a prior Close()." << std::endl;
+        std::cerr << "This may result in \"unexpected close\" or \"failed to "
+                     "send\" warning from a connected SST Writer."
+                  << std::endl;
+    }
+    m_IsOpen = false;
 }
 
 StepStatus SstReader::BeginStep(StepMode Mode, const float timeout_sec)
@@ -300,7 +325,7 @@ StepStatus SstReader::BeginStep(StepMode Mode, const float timeout_sec)
     case adios2::StepMode::Read:
         break;
     }
-    m_IO.RemoveAllVariables();
+    RemoveCreatedVars();
     result = SstAdvanceStep(m_Input, timeout_sec);
     if (result == SstEndOfStream)
     {
@@ -356,7 +381,7 @@ StepStatus SstReader::BeginStep(StepMode Mode, const float timeout_sec)
             i++;
         }
 
-        m_IO.RemoveAllVariables();
+        RemoveCreatedVars();
         m_BP5Deserializer->SetupForStep(
             SstCurrentStep(m_Input),
             static_cast<size_t>(m_CurrentStepMetaData->WriterCohortSize));
@@ -421,7 +446,7 @@ StepStatus SstReader::BeginStep(StepMode Mode, const float timeout_sec)
                     (*m_CurrentStepMetaData->WriterMetadata)->block,
                     (*m_CurrentStepMetaData->WriterMetadata)->DataSize);
 
-        m_IO.RemoveAllVariables();
+        RemoveCreatedVars();
         m_BP3Deserializer->ParseMetadata(m_BP3Deserializer->m_Metadata, *this);
         m_IO.ResetVariablesStepSelection(true,
                                          "in call to SST Reader BeginStep");
@@ -638,9 +663,56 @@ void SstReader::Init()
 ADIOS2_FOREACH_STDTYPE_1ARG(declare_gets)
 #undef declare_gets
 
+void SstReader::DoGetStructSync(VariableStruct &variable, void *data)
+{
+    PERFSTUBS_SCOPED_TIMER("BP5Reader::Get");
+    if (m_WriterMarshalMethod != SstMarshalBP5)
+    {
+        helper::Throw<std::runtime_error>(
+            "Engine", "SstReader", "GetStructSync",
+            "SST only supports struct transmission when BP5 marshalling is "
+            "selected");
+    }
+    bool need_sync = m_BP5Deserializer->QueueGet(variable, data);
+    if (need_sync)
+        BP5PerformGets();
+}
+
+void SstReader::DoGetStructDeferred(VariableStruct &variable, void *data)
+{
+    PERFSTUBS_SCOPED_TIMER("SstReader::Get");
+    if (m_WriterMarshalMethod != SstMarshalBP5)
+    {
+        helper::Throw<std::runtime_error>(
+            "Engine", "SstReader", "GetStructSync",
+            "SST only supports struct transmission when BP5 marshalling is "
+            "selected");
+    }
+    m_BP5Deserializer->QueueGet(variable, data);
+}
+
+Dims *SstReader::VarShape(const VariableBase &Var, const size_t Step) const
+{
+    if (m_WriterMarshalMethod != SstMarshalBP5)
+        return nullptr;
+
+    return m_BP5Deserializer->VarShape(Var, Step);
+}
+
+bool SstReader::VariableMinMax(const VariableBase &Var, const size_t Step,
+                               MinMaxStruct &MinMax)
+{
+    if (m_WriterMarshalMethod != SstMarshalBP5)
+        return false;
+
+    return m_BP5Deserializer->VariableMinMax(Var, Step, MinMax);
+}
+
 void SstReader::BP5PerformGets()
 {
-    auto ReadRequests = m_BP5Deserializer->GenerateReadRequests();
+    size_t maxReadSize;
+    auto ReadRequests =
+        m_BP5Deserializer->GenerateReadRequests(true, &maxReadSize);
     std::vector<void *> sstReadHandlers;
     for (const auto &Req : ReadRequests)
     {
@@ -692,7 +764,7 @@ void SstReader::PerformGets()
         {
             const DataType type = m_IO.InquireVariableType(name);
 
-            if (type == DataType::Compound)
+            if (type == DataType::Struct)
             {
             }
 #define declare_type(T)                                                        \
@@ -724,7 +796,7 @@ void SstReader::PerformGets()
         {
             const DataType type = m_IO.InquireVariableType(name);
 
-            if (type == DataType::Compound)
+            if (type == DataType::Struct)
             {
             }
 #define declare_type(T)                                                        \

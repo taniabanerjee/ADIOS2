@@ -26,14 +26,25 @@ namespace engine
 BP4Reader::BP4Reader(IO &io, const std::string &name, const Mode mode,
                      helper::Comm comm)
 : Engine("BP4Reader", io, name, mode, std::move(comm)),
-  m_BP4Deserializer(m_Comm), m_MDFileManager(m_Comm), m_DataFileManager(m_Comm),
-  m_MDIndexFileManager(m_Comm), m_ActiveFlagFileManager(m_Comm)
+  m_BP4Deserializer(m_Comm), m_MDFileManager(io, m_Comm),
+  m_DataFileManager(io, m_Comm), m_MDIndexFileManager(io, m_Comm),
+  m_ActiveFlagFileManager(io, m_Comm)
 {
     PERFSTUBS_SCOPED_TIMER("BP4Reader::Open");
     helper::GetParameter(m_IO.m_Parameters, "Verbose", m_Verbosity);
     helper::Log("Engine", "BP4Reader", "Open", m_Name, 0, m_Comm.Rank(), 5,
                 m_Verbosity, helper::LogMode::INFO);
     Init();
+    m_IsOpen = true;
+}
+
+BP4Reader::~BP4Reader()
+{
+    if (m_IsOpen)
+    {
+        DestructorClose(m_FailVerbose);
+    }
+    m_IsOpen = false;
 }
 
 StepStatus BP4Reader::BeginStep(StepMode mode, const float timeoutSeconds)
@@ -145,7 +156,7 @@ void BP4Reader::PerformGets()
     {
         const DataType type = m_IO.InquireVariableType(name);
 
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
         }
 #define declare_type(T)                                                        \
@@ -182,6 +193,8 @@ void BP4Reader::Init()
 
     m_BP4Deserializer.Init(m_IO.m_Parameters, "in call to BP4::Open to write");
     InitTransports();
+
+    helper::RaiseLimitNoFile();
 
     /* Do a collective wait for the file(s) to appear within timeout.
        Make sure every process comes to the same conclusion */
@@ -655,9 +668,8 @@ size_t BP4Reader::UpdateBuffer(const TimePoint &timeoutInstant,
 }
 void BP4Reader::ProcessMetadataForNewSteps(const size_t newIdxSize)
 {
-    /* Remove all existing variables from previous steps
-       It seems easier than trying to update them */
-    m_IO.RemoveAllVariables();
+    /* Remove all variables we created in the last step */
+    RemoveCreatedVars();
 
     /* Parse metadata index table (without header) */
     /* We need to skew the index table pointers with the
@@ -809,8 +821,12 @@ void BP4Reader::DoClose(const int transportIndex)
     helper::Log("Engine", "BP4Reader", "Close", m_Name, 0, m_Comm.Rank(), 5,
                 m_Verbosity, helper::LogMode::INFO);
     PerformGets();
+    /* Remove all variables we created in the last step */
+    RemoveCreatedVars();
+
     m_DataFileManager.CloseFiles();
     m_MDFileManager.CloseFiles();
+    m_MDIndexFileManager.CloseFiles();
 }
 
 #define declare_type(T)                                                        \

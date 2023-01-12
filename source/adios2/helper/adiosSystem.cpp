@@ -12,6 +12,12 @@
 #include <ctime>
 #include <stdexcept> // std::runtime_error, std::exception
 #include <system_error>
+#include <thread>
+
+#ifndef _WIN32
+#include <sys/resource.h> // getrlimits, setrlimits
+#include <sys/time.h>
+#endif
 
 #include <adios2sys/SystemTools.hxx>
 
@@ -37,7 +43,7 @@ namespace helper
 
 bool CreateDirectory(const std::string &fullPath) noexcept
 {
-    return adios2sys::SystemTools::MakeDirectory(fullPath);
+    return static_cast<bool>(adios2sys::SystemTools::MakeDirectory(fullPath));
 }
 
 bool IsLittleEndian() noexcept
@@ -97,30 +103,30 @@ int ExceptionToError(const std::string &function)
     catch (std::invalid_argument &e)
     {
         helper::Log("Helper", "adiosSystem", "ExceptionToError",
-                    function + ": " + e.what(), helper::LogMode::ERROR);
+                    function + ": " + e.what(), helper::FATALERROR);
         return 1;
     }
     catch (std::system_error &e)
     {
         helper::Log("Helper", "adiosSystem", "ExceptionToError",
-                    function + ": " + e.what(), helper::LogMode::ERROR);
+                    function + ": " + e.what(), helper::FATALERROR);
         return 2;
     }
     catch (std::runtime_error &e)
     {
         helper::Log("Helper", "adiosSystem", "ExceptionToError",
-                    function + ": " + e.what(), helper::LogMode::ERROR);
+                    function + ": " + e.what(), helper::FATALERROR);
         return 3;
     }
     catch (std::exception &e)
     {
         helper::Log("Helper", "adiosSystem", "ExceptionToError",
-                    function + ": " + e.what(), helper::LogMode::ERROR);
+                    function + ": " + e.what(), helper::FATALERROR);
         return 4;
     }
 }
 
-bool IsHDF5File(const std::string &name, helper::Comm &comm,
+bool IsHDF5File(const std::string &name, core::IO &io, helper::Comm &comm,
                 const std::vector<Params> &transportsParameters) noexcept
 {
     bool isHDF5 = false;
@@ -128,7 +134,7 @@ bool IsHDF5File(const std::string &name, helper::Comm &comm,
     {
         try
         {
-            transportman::TransportMan tm(comm);
+            transportman::TransportMan tm(io, comm);
             if (transportsParameters.empty())
             {
                 std::vector<Params> defaultTransportParameters(1);
@@ -179,6 +185,60 @@ char BPVersion(const std::string &name, helper::Comm &comm,
     }
     version = comm.BroadcastValue(version);
     return version;
+}
+
+unsigned int NumHardwareThreadsPerNode()
+{
+    return std::thread::hardware_concurrency();
+}
+
+size_t RaiseLimitNoFile()
+{
+#ifdef _WIN32
+    return _setmaxstdio(8192);
+#else
+    static size_t raisedLimit = 0;
+    static bool firstCallRaiseLimit = true;
+
+    if (firstCallRaiseLimit)
+    {
+        struct rlimit limit;
+        errno = 0;
+        int err = getrlimit(RLIMIT_NOFILE, &limit);
+        raisedLimit = limit.rlim_cur;
+        if (!err)
+        {
+            /*std::cout
+                << "adios2::helper::RaiseLimitNoFile() found limits soft = "
+                << limit.rlim_cur << " hard = " << limit.rlim_max <<
+               std::endl;*/
+            if (limit.rlim_cur < limit.rlim_max)
+            {
+                limit.rlim_cur = limit.rlim_max;
+                err = setrlimit(RLIMIT_NOFILE, &limit);
+                if (!err)
+                {
+                    getrlimit(RLIMIT_NOFILE, &limit);
+                    raisedLimit = limit.rlim_cur;
+                    /*std::cout << "adios2::helper::RaiseLimitNoFile() set "
+                                 "limits soft = "
+                              << limit.rlim_cur << " hard = " << limit.rlim_max
+                              << std::endl;*/
+                }
+            }
+        }
+
+        if (err)
+        {
+            std::cerr << "adios2::helper::RaiseLimitNoFile(soft="
+                      << limit.rlim_cur << ", hard=" << limit.rlim_max
+                      << ") failed with error code " << errno << ": "
+                      << strerror(errno) << std::endl;
+        }
+        firstCallRaiseLimit = false;
+    }
+    return raisedLimit;
+#endif
 }
 
 } // end namespace helper

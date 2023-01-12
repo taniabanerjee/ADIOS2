@@ -12,11 +12,19 @@
 #include "Engine.tcc"
 
 #include "adios2/core/Engine.h"
-
 #include "adios2/helper/adiosFunctions.h"
 
 namespace adios2
 {
+
+#ifdef ADIOS2_HAVE_GPU_SUPPORT
+void Engine::CheckMemorySpace(MemorySpace variableMem, MemorySpace bufferMem)
+{
+    if (variableMem != MemorySpace::Detect && variableMem != bufferMem)
+        helper::Throw<std::runtime_error>("CXX-Bindings", "Engine", "Put",
+                                          "Memory space mismatch");
+}
+#endif
 
 Engine::operator bool() const noexcept
 {
@@ -49,61 +57,43 @@ Mode Engine::OpenMode() const
 StepStatus Engine::BeginStep()
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::BeginStep");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return StepStatus::EndOfStream;
-    }
     return m_Engine->BeginStep();
+}
+
+bool Engine::BetweenStepPairs()
+{
+    helper::CheckForNullptr(m_Engine, "in call to Engine::BetweenStepPairs");
+    return m_Engine->BetweenStepPairs();
 }
 
 StepStatus Engine::BeginStep(const StepMode mode, const float timeoutSeconds)
 {
     helper::CheckForNullptr(
         m_Engine, "in call to Engine::BeginStep(const StepMode, const float)");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return StepStatus::EndOfStream;
-    }
     return m_Engine->BeginStep(mode, timeoutSeconds);
 }
 
 size_t Engine::CurrentStep() const
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::CurrentStep");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return MaxSizeT;
-    }
     return m_Engine->CurrentStep();
 }
 
 void Engine::PerformPuts()
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::PerformPuts");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return;
-    }
     m_Engine->PerformPuts();
 }
 
 void Engine::PerformDataWrite()
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::PerformDataWrite");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return;
-    }
     m_Engine->PerformDataWrite();
 }
 
 void Engine::PerformGets()
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::PerformGets");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return;
-    }
     m_Engine->PerformGets();
 }
 
@@ -111,10 +101,6 @@ void Engine::LockWriterDefinitions()
 {
     helper::CheckForNullptr(m_Engine,
                             "in call to Engine::LockWriterDefinitions");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return;
-    }
     m_Engine->LockWriterDefinitions();
 }
 
@@ -122,40 +108,24 @@ void Engine::LockReaderSelections()
 {
     helper::CheckForNullptr(m_Engine,
                             "in call to Engine::LockReaderSelections");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return;
-    }
     m_Engine->LockReaderSelections();
 }
 
 void Engine::EndStep()
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::EndStep");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return;
-    }
     m_Engine->EndStep();
 }
 
 void Engine::Flush(const int transportIndex)
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::Flush");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return;
-    }
     m_Engine->Flush(transportIndex);
 }
 
 void Engine::Close(const int transportIndex)
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::Close");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return;
-    }
     m_Engine->Close(transportIndex);
 
     // erase Engine object from IO
@@ -168,14 +138,94 @@ void Engine::Close(const int transportIndex)
 size_t Engine::Steps() const
 {
     helper::CheckForNullptr(m_Engine, "in call to Engine::Steps");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return 0;
-    }
     return m_Engine->Steps();
 }
 
 Engine::Engine(core::Engine *engine) : m_Engine(engine) {}
+
+void Engine::Put(VariableNT &variable, const void *data, const Mode launch)
+{
+    helper::CheckForNullptr(m_Engine, "in call to Engine::Put");
+    helper::CheckForNullptr(variable.m_Variable,
+                            "for variable in call to Engine::Put");
+#define declare_type(T)                                                        \
+    if (variable.m_Variable->m_Type == helper::GetDataType<T>())               \
+    {                                                                          \
+        m_Engine->Put(                                                         \
+            *reinterpret_cast<core::Variable<T> *>(variable.m_Variable),       \
+            reinterpret_cast<const T *>(data), launch);                        \
+    }
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+    else if (variable.m_Variable->m_Type == DataType::Struct)
+    {
+        m_Engine->Put(
+            *reinterpret_cast<core::VariableStruct *>(variable.m_Variable),
+            data, launch);
+    }
+}
+
+#define declare_type(T)                                                        \
+    void Engine::Put(VariableNT &variable, const T &datum, const Mode launch)  \
+    {                                                                          \
+        helper::CheckForNullptr(m_Engine, "in call to Engine::Put");           \
+        helper::CheckForNullptr(variable.m_Variable,                           \
+                                "for variable in call to Engine::Put");        \
+        m_Engine->Put(                                                         \
+            *reinterpret_cast<core::Variable<T> *>(variable.m_Variable),       \
+            datum, launch);                                                    \
+    }
+ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+
+void Engine::Get(VariableNT &variable, void *data, const Mode launch)
+{
+    adios2::helper::CheckForNullptr(m_Engine, "in call to Engine::Get");
+    adios2::helper::CheckForNullptr(variable.m_Variable,
+                                    "for variable in call to Engine::Get");
+#define declare_type(T)                                                        \
+    if (variable.m_Variable->m_Type == helper::GetDataType<T>())               \
+    {                                                                          \
+        m_Engine->Get(                                                         \
+            *reinterpret_cast<core::Variable<T> *>(variable.m_Variable),       \
+            reinterpret_cast<T *>(data), launch);                              \
+    }
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+    else if (variable.m_Variable->m_Type == DataType::Struct)
+    {
+        m_Engine->Get(
+            *reinterpret_cast<core::VariableStruct *>(variable.m_Variable),
+            data, launch);
+    }
+}
+
+#define declare_type(T)                                                        \
+    void Engine::Get(VariableNT &variable, T &datum, const Mode launch)        \
+    {                                                                          \
+        adios2::helper::CheckForNullptr(m_Engine, "in call to Engine::Get");   \
+        adios2::helper::CheckForNullptr(                                       \
+            variable.m_Variable, "for variable in call to Engine::Get");       \
+        m_Engine->Get(                                                         \
+            *reinterpret_cast<core::Variable<T> *>(variable.m_Variable),       \
+            datum, launch);                                                    \
+    }
+ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+
+#define declare_type(T)                                                        \
+    void Engine::Get(VariableNT &variable, std::vector<T> &datum,              \
+                     const Mode launch)                                        \
+    {                                                                          \
+        adios2::helper::CheckForNullptr(m_Engine, "in call to Engine::Get");   \
+        adios2::helper::CheckForNullptr(                                       \
+            variable.m_Variable, "for variable in call to Engine::Get");       \
+        m_Engine->Get(                                                         \
+            *reinterpret_cast<core::Variable<T> *>(variable.m_Variable),       \
+            datum, launch);                                                    \
+    }
+ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
 
 #define declare_template_instantiation(T)                                      \
                                                                                \
@@ -186,6 +236,121 @@ Engine::Engine(core::Engine *engine) : m_Engine(engine) {}
 
 ADIOS2_FOREACH_PRIMITIVE_TYPE_1ARG(declare_template_instantiation)
 #undef declare_template_instantiation
+
+std::vector<VariableNT::Info> Engine::BlocksInfo(const VariableNT &variable,
+                                                 const size_t step) const
+{
+    std::vector<VariableNT::Info> ret;
+    if (variable.m_Variable->m_Type == DataType::Struct)
+    {
+        adios2::helper::CheckForNullptr(
+            m_Engine, "for Engine in call to Engine::BlocksInfo");
+        adios2::helper::CheckForNullptr(
+            variable.m_Variable, "for variable in call to Engine::BlocksInfo");
+        auto blocksInfo = m_Engine->BlocksInfoStruct(
+            *reinterpret_cast<core::VariableStruct *>(variable.m_Variable),
+            step);
+        for (const auto &b : blocksInfo)
+        {
+            ret.emplace_back();
+            auto &br = ret.back();
+            br.Start = b.Start;
+            br.Count = b.Count;
+            br.WriterID = b.WriterID;
+            br.Step = b.Step;
+            br.IsReverseDims = b.IsReverseDims;
+            br.IsValue = b.IsValue;
+        }
+    }
+#define declare_type(T)                                                        \
+    else if (variable.m_Variable->m_Type == helper::GetDataType<T>())          \
+    {                                                                          \
+        auto blocksInfoT =                                                     \
+            BlocksInfo(Variable<T>(reinterpret_cast<core::Variable<T> *>(      \
+                           variable.m_Variable)),                              \
+                       step);                                                  \
+        for (const auto &b : blocksInfoT)                                      \
+        {                                                                      \
+            ret.emplace_back();                                                \
+            auto &br = ret.back();                                             \
+            br.Start = b.Start;                                                \
+            br.Count = b.Count;                                                \
+            br.WriterID = b.WriterID;                                          \
+            br.Step = b.Step;                                                  \
+            br.IsReverseDims = b.IsReverseDims;                                \
+            br.IsValue = b.IsValue;                                            \
+        }                                                                      \
+    }
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+    else
+    {
+        helper::Throw<std::runtime_error>("bindings::CXX11", "Engine",
+                                          "BlocksInfo", "invalid data type");
+    }
+    return ret;
+}
+
+std::map<size_t, std::vector<VariableNT::Info>>
+Engine::AllStepsBlocksInfo(const VariableNT &variable) const
+{
+    std::map<size_t, std::vector<VariableNT::Info>> ret;
+    if (variable.m_Variable->m_Type == DataType::Struct)
+    {
+        adios2::helper::CheckForNullptr(
+            m_Engine, "for Engine in call to Engine::AllStepsBlocksInfo");
+        adios2::helper::CheckForNullptr(
+            variable.m_Variable,
+            "for variable in call to Engine::AllStepsBlocksInfo");
+        auto blocksInfo = m_Engine->AllStepsBlocksInfoStruct(
+            *reinterpret_cast<core::VariableStruct *>(variable.m_Variable));
+        for (const auto &bv : blocksInfo)
+        {
+            auto &bvr = ret[bv.first];
+            for (const auto &b : bv.second)
+            {
+                bvr.emplace_back();
+                auto &br = bvr.back();
+                br.Start = b.Start;
+                br.Count = b.Count;
+                br.WriterID = b.WriterID;
+                br.Step = b.Step;
+                br.IsReverseDims = b.IsReverseDims;
+                br.IsValue = b.IsValue;
+            }
+        }
+    }
+#define declare_type(T)                                                        \
+    else if (variable.m_Variable->m_Type == helper::GetDataType<T>())          \
+    {                                                                          \
+        auto blocksInfoT = AllStepsBlocksInfo(Variable<T>(                     \
+            reinterpret_cast<core::Variable<T> *>(variable.m_Variable)));      \
+        for (const auto &bv : blocksInfoT)                                     \
+        {                                                                      \
+            auto &bvr = ret[bv.first];                                         \
+            for (const auto &b : bv.second)                                    \
+            {                                                                  \
+                bvr.emplace_back();                                            \
+                auto &br = bvr.back();                                         \
+                br.Start = b.Start;                                            \
+                br.Count = b.Count;                                            \
+                br.WriterID = b.WriterID;                                      \
+                br.Step = b.Step;                                              \
+                br.IsReverseDims = b.IsReverseDims;                            \
+                br.IsValue = b.IsValue;                                        \
+            }                                                                  \
+        }                                                                      \
+    }
+    ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
+#undef declare_type
+    else
+    {
+        helper::Throw<std::runtime_error>("bindings::CXX11", "Engine",
+                                          "AllStepsBlocksInfo",
+                                          "invalid data type");
+    }
+    return ret;
+}
 
 #define declare_template_instantiation(T)                                      \
     template void Engine::Put<T>(Variable<T>, const T *, const Mode);          \
@@ -223,10 +388,6 @@ size_t Engine::DebugGetDataBufferSize() const
 {
     helper::CheckForNullptr(m_Engine,
                             "in call to Engine::DebugGetDataBufferSize");
-    if (m_Engine->m_EngineType == "NULL")
-    {
-        return 0;
-    }
     return m_Engine->DebugGetDataBufferSize();
 }
 

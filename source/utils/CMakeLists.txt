@@ -11,7 +11,9 @@ configure_file(
 
 # BPLS
 add_executable(bpls ./bpls/bpls.cpp)
-target_link_libraries(bpls adios2_core adios2sys adios2::thirdparty::pugixml)
+target_link_libraries(bpls
+                      PUBLIC adios2_core adios2sys
+                      PRIVATE adios2::thirdparty::pugixml $<$<PLATFORM_ID:Windows>:shlwapi>)
 target_include_directories(bpls PRIVATE ${PROJECT_BINARY_DIR})
 set_property(TARGET bpls PROPERTY OUTPUT_NAME bpls${ADIOS2_EXECUTABLE_SUFFIX})
 install(TARGETS bpls EXPORT adios2
@@ -72,6 +74,10 @@ endif()
 if(Python_Interpreter_FOUND)
   add_subdirectory(bp4dbg)
   add_subdirectory(bp5dbg)
+  install(PROGRAMS adios2_json_pp.py
+    RENAME adios2_json_pp
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT adios2_scripts-runtime)
 endif()
 
 install(PROGRAMS adios2_deactivate_bp

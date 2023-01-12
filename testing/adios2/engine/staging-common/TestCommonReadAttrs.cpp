@@ -155,7 +155,14 @@ TEST_F(CommonReadTest, ADIOS2CommonRead1D8)
         ASSERT_EQ(attr_r64.Name(), r64_Single);
         ASSERT_EQ(attr_r64.Data().size() == 1, true);
         ASSERT_EQ(attr_r64.Type(), adios2::GetType<double>());
-        ASSERT_EQ(attr_r64.Data().front(), data_R64.front());
+        if (ModifiableAttributes)
+        {
+            ASSERT_EQ(attr_r64.Data().front(), (double)3.14159 + (double)t);
+        }
+        else
+        {
+            ASSERT_EQ(attr_r64.Data().front(), (double)3.14159);
+        }
 
         auto scalar_r64 = io.InquireVariable<double>("scalar_r64");
         EXPECT_TRUE(scalar_r64);
@@ -354,8 +361,19 @@ TEST_F(CommonReadTest, ADIOS2CommonRead1D8)
 
 int main(int argc, char **argv)
 {
+    int result;
+    ::testing::InitGoogleTest(&argc, argv);
+
+    ParseArgs(argc, argv);
+
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+    int thread_support_level = (engine == "SST" || engine == "sst")
+                                   ? MPI_THREAD_MULTIPLE
+                                   : MPI_THREAD_SINGLE;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, thread_support_level, &provided);
 
     int key;
     MPI_Comm_rank(MPI_COMM_WORLD, &key);
@@ -364,15 +382,14 @@ int main(int argc, char **argv)
     MPI_Comm_split(MPI_COMM_WORLD, color, key, &testComm);
 #endif
 
-    int result;
-    ::testing::InitGoogleTest(&argc, argv);
-
-    ParseArgs(argc, argv);
-
     result = RUN_ALL_TESTS();
 
 #if ADIOS2_USE_MPI
+#ifdef CRAY_MPICH_VERSION
+    MPI_Barrier(MPI_COMM_WORLD);
+#else
     MPI_Finalize();
+#endif
 #endif
 
     return result;

@@ -277,7 +277,10 @@ TEST_F(MhsEngineTest, TestMhsSingleRank)
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(&argc, &argv);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
 #endif
     int result;
     ::testing::InitGoogleTest(&argc, argv);

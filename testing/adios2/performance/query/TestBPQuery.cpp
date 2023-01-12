@@ -227,7 +227,6 @@ void BPQueryTest::WriteFile(const std::string &fname, adios2::ADIOS &adios,
             bpWriter.BeginStep();
             bpWriter.Put(var_i32, m_TestData.m_IntData.data());
             bpWriter.Put(var_r64, m_TestData.m_DoubleData.data());
-            bpWriter.PerformPuts();
 
             bpWriter.EndStep();
         }
@@ -295,8 +294,10 @@ TEST_F(BPQueryTest, BP4)
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    // MPI_Init(nullptr, nullptr);
-    MPI_Init(&argc, &argv);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

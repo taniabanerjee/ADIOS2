@@ -462,9 +462,12 @@ void HDF5NativeReader::ReadVar(const std::string varName, void *dataArray,
                 "Unable to create a selection for dataset" + varName);
         }
 
+        /*
         hsize_t dimsm[1];
         dimsm[0] = memspaceSize;
         hid_t memspace = H5Screate_simple(1, dimsm, NULL);
+        */
+        hid_t memspace = H5S_ALL;
 
         hid_t ret = H5Dread(dataSetId, h5type, memspace, dataspace, H5P_DEFAULT,
                             dataArray);
@@ -1112,7 +1115,10 @@ TEST_F(H5VolWriteReadTest, H5VolWriteHDF5Read2D4x2)
 int main(int argc, char **argv)
 {
 #ifdef TEST_HDF5_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

@@ -221,8 +221,8 @@ std::string ToString(DataType type)
         return "double complex";
     case DataType::String:
         return "string";
-    case DataType::Compound:
-        return "compound";
+    case DataType::Struct:
+        return "struct";
     }
     return std::string();
 }
@@ -304,7 +304,7 @@ void MinMaxStruct::Init(DataType Type)
     case DataType::FloatComplex:
     case DataType::DoubleComplex:
     case DataType::String:
-    case DataType::Compound:
+    case DataType::Struct:
         break;
     }
 }
@@ -363,8 +363,46 @@ void MinMaxStruct::Dump(DataType Type)
     case DataType::FloatComplex:
     case DataType::DoubleComplex:
     case DataType::String:
-    case DataType::Compound:
+    case DataType::Struct:
         break;
     }
 }
+
+int TypeElementSize(DataType adiosvartype)
+{
+    switch (adiosvartype)
+    {
+    case DataType::UInt8:
+        return 1;
+    case DataType::Int8:
+        return 1;
+    case DataType::String:
+        return -1;
+    case DataType::UInt16:
+        return 2;
+    case DataType::Int16:
+        return 2;
+    case DataType::UInt32:
+        return 4;
+    case DataType::Int32:
+        return 4;
+    case DataType::UInt64:
+        return 8;
+    case DataType::Int64:
+        return 8;
+    case DataType::Float:
+        return 4;
+    case DataType::Double:
+        return 8;
+    case DataType::FloatComplex:
+        return 8;
+    case DataType::DoubleComplex:
+        return 16;
+    case DataType::LongDouble:
+        return 16;
+    default:
+        return -1;
+    }
+}
+
 } // end namespace adios2

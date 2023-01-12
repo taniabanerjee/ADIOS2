@@ -41,11 +41,15 @@ public:
     virtual void Close(const int transportIndex) = 0;
 
 #define declare_type(T)                                                        \
-    virtual void GetDeferred(Variable<T> &, T *) = 0;                          \
     virtual std::vector<typename Variable<T>::BPInfo> BlocksInfo(              \
         const Variable<T> &variable, const size_t step) const = 0;
     ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
+
+    virtual std::vector<VariableStruct::BPInfo>
+    BlocksInfo(const VariableStruct &variable, const size_t step) const = 0;
+
+    virtual void GetDeferred(VariableBase &, void *) = 0;
 
 protected:
     void SyncMpiPattern(MPI_Comm comm);
@@ -60,6 +64,8 @@ protected:
     int m_ReaderSize;
     int m_WriterMasterStreamRank;
     int m_ReaderMasterStreamRank;
+
+    std::unordered_map<std::string, StructDefinition> m_StructDefinitions;
 
     ssc::Buffer m_Buffer;
 

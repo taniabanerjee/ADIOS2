@@ -13,7 +13,10 @@
 
 int main(int argc, char **argv)
 {
-    MPI_Init(&argc, &argv);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
 
     adios2::ADIOS adios(MPI_COMM_WORLD);
 

@@ -12,11 +12,11 @@ class ADIOSInterfaceWriteTest : public ::testing::Test
 public:
 #if ADIOS2_USE_MPI
     ADIOSInterfaceWriteTest()
-    : adios(MPI_COMM_SELF, true), io(adios.DeclareIO("TestIO"))
+    : adios(MPI_COMM_SELF), io(adios.DeclareIO("TestIO"))
     {
     }
 #else
-    ADIOSInterfaceWriteTest() : adios(true), io(adios.DeclareIO("TestIO")) {}
+    ADIOSInterfaceWriteTest() : adios(), io(adios.DeclareIO("TestIO")) {}
 #endif
 
 protected:
@@ -621,7 +621,10 @@ TEST_F(ADIOSInterfaceWriteTest, Exceptions)
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

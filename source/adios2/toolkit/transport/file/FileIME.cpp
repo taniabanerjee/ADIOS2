@@ -89,14 +89,14 @@ void FileIME::Open(const std::string &name, const Mode openMode,
     m_OpenMode = openMode;
     switch (m_OpenMode)
     {
-    case (Mode::Write):
+    case Mode::Write:
         ProfilerStart("open");
         m_FileDescriptor = ime_client_native2_open(
             m_Name.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
         ProfilerStop("open");
         break;
 
-    case (Mode::Append):
+    case Mode::Append:
         ProfilerStart("open");
         m_FileDescriptor =
             ime_client_native2_open(m_Name.c_str(), O_RDWR | O_CREAT, 0777);
@@ -104,7 +104,7 @@ void FileIME::Open(const std::string &name, const Mode openMode,
         ProfilerStop("open");
         break;
 
-    case (Mode::Read):
+    case Mode::Read:
         ProfilerStart("open");
         m_FileDescriptor =
             ime_client_native2_open(m_Name.c_str(), O_RDONLY, 0000);
@@ -124,16 +124,11 @@ void FileIME::Open(const std::string &name, const Mode openMode,
 
 void FileIME::SetParameters(const Params &parameters)
 {
-    for (const auto &pair : parameters)
+    auto param = params.find("synctopfs");
+    if (param != params.end())
     {
-        const std::string key = helper::LowerCase(pair.first);
-        const std::string value = helper::LowerCase(pair.second);
-
-        if (key == "synctopfs")
-        {
-            m_SyncToPFS =
-                helper::StringTo<bool>(value, " in Parameter key=SyncToPFS");
-        }
+        m_SyncToPFS =
+            helper::StringTo<bool>(value, " in Parameter key=SyncToPFS");
     }
 }
 

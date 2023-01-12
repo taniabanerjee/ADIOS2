@@ -388,7 +388,7 @@ Reorganize::Decompose(int numproc, int rank, VarInfo &vi,
         return writesize;
     }
 
-    size_t ndim = vi.v->GetShape().size();
+    size_t ndim = vi.v->Shape().size();
 
     /* Scalars */
     if (ndim == 0)
@@ -462,12 +462,12 @@ Reorganize::Decompose(int numproc, int rank, VarInfo &vi,
         }
         else
         {
-            count = vi.v->GetShape()[i] / np[i];
+            count = vi.v->Shape()[i] / np[i];
             start = count * pos[i];
             if (pos[i] == np[i] - 1)
             {
                 // last one in the dimension may need to read more than the rest
-                count = vi.v->GetShape()[i] - count * (np[i] - 1);
+                count = vi.v->Shape()[i] - count * (np[i] - 1);
             }
         }
         vi.start.push_back(start);
@@ -503,7 +503,7 @@ int Reorganize::ProcessMetadata(core::Engine &rStream, core::IO &io,
         print0("Get info on variable ", varidx, ": ", name);
         size_t nBlocks = 1;
 
-        if (type == DataType::Compound)
+        if (type == DataType::Struct)
         {
             // not supported
         }
@@ -532,15 +532,15 @@ int Reorganize::ProcessMetadata(core::Engine &rStream, core::IO &io,
             {
                 std::cout << "    " << ToString(type) << " " << name;
             }
-            // if (variable->GetShape().size() > 0)
+            // if (variable->Shape().size() > 0)
             if (variable->m_ShapeID == adios2::ShapeID::GlobalArray)
             {
                 if (!m_Rank)
                 {
-                    std::cout << "[" << variable->GetShape()[0];
-                    for (size_t j = 1; j < variable->GetShape().size(); j++)
+                    std::cout << "[" << variable->Shape()[0];
+                    for (size_t j = 1; j < variable->Shape().size(); j++)
                     {
-                        std::cout << ", " << variable->GetShape()[j];
+                        std::cout << ", " << variable->Shape()[j];
                     }
                     std::cout << "]" << std::endl;
                 }
@@ -597,7 +597,7 @@ int Reorganize::ProcessMetadata(core::Engine &rStream, core::IO &io,
                     "write buffer size needs to hold about " +
                         std::to_string(bufsize) + " bytes but max is set to " +
                         std::to_string(max_write_buffer_size),
-                    m_Rank, m_Rank, 0, 0, helper::LogMode::ERROR);
+                    m_Rank, m_Rank, 0, 0, helper::FATALERROR);
         return 1;
     }
 
@@ -608,7 +608,7 @@ int Reorganize::ProcessMetadata(core::Engine &rStream, core::IO &io,
                         std::to_string(largest_block) +
                         " bytes but max is set to " +
                         std::to_string(max_read_buffer_size),
-                    m_Rank, m_Rank, 0, 0, helper::LogMode::ERROR);
+                    m_Rank, m_Rank, 0, 0, helper::FATALERROR);
         return 1;
     }
     return retval;
@@ -628,7 +628,7 @@ int Reorganize::ReadWrite(core::Engine &rStream, core::Engine &wStream,
                 std::to_string(nvars) +
                 ") to read does not match the number of processed variables (" +
                 std::to_string(varinfo.size()) + ")",
-            m_Rank, m_Rank, 0, 0, helper::LogMode::ERROR);
+            m_Rank, m_Rank, 0, 0, helper::FATALERROR);
     }
 
     /*
@@ -646,7 +646,7 @@ int Reorganize::ReadWrite(core::Engine &rStream, core::Engine &wStream,
                 std::cout << "rank " << m_Rank << ": Read variable " << name
                           << std::endl;
                 const DataType type = variables.at(name)->m_Type;
-                if (type == DataType::Compound)
+                if (type == DataType::Struct)
                 {
                     // not supported
                 }
@@ -690,7 +690,7 @@ int Reorganize::ReadWrite(core::Engine &rStream, core::Engine &wStream,
                 std::cout << "rank " << m_Rank << ": Write variable " << name
                           << std::endl;
                 const DataType type = variables.at(name)->m_Type;
-                if (type == DataType::Compound)
+                if (type == DataType::Struct)
                 {
                     // not supported
                 }

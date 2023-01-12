@@ -17,7 +17,10 @@ program TestRemove
 
 #if ADIOS2_USE_MPI
     ! Launch MPI
-    call MPI_Init(ierr)
+    INTEGER provided
+
+    ! MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    call MPI_Init_thread(MPI_THREAD_MULTIPLE, provided, ierr)
     call MPI_Comm_rank(MPI_COMM_WORLD, irank, ierr)
     call MPI_Comm_size(MPI_COMM_WORLD, isize, ierr)
 #else
@@ -35,9 +38,9 @@ program TestRemove
 
     ! Create adios handler passing the communicator, debug mode and error flag
 #if ADIOS2_USE_MPI
-    call adios2_init(adios, MPI_COMM_WORLD, adios2_debug_mode_on, ierr)
+    call adios2_init(adios, MPI_COMM_WORLD, ierr)
 #else
-    call adios2_init(adios, adios2_debug_mode_on, ierr)
+    call adios2_init(adios, ierr)
 #endif
 
     !!!!!!!!!!!!!!!!!!!!!!!!! WRITER !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

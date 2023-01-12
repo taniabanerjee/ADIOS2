@@ -15,10 +15,6 @@
 
 #include "adios2/helper/adiosType.h"
 
-#ifdef ADIOS2_HAVE_CUDA
-#include <cuda_runtime.h>
-#endif
-
 namespace adios2
 {
 namespace helper
@@ -251,70 +247,73 @@ void ClipColumnMajor(char *dest, const Dims &destStart, const Dims &destCount,
 
 } // end empty namespace
 
-int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
+int NdCopy(const char *in, const CoreDims &inStart, const CoreDims &inCount,
            const bool inIsRowMajor, const bool inIsLittleEndian, char *out,
-           const Dims &outStart, const Dims &outCount, const bool outIsRowMajor,
-           const bool outIsLittleEndian, const int typeSize,
-           const Dims &inMemStart, const Dims &inMemCount,
-           const Dims &outMemStart, const Dims &outMemCount,
-           const bool safeMode, MemorySpace MemSpace)
+           const CoreDims &outStart, const CoreDims &outCount,
+           const bool outIsRowMajor, const bool outIsLittleEndian,
+           const int typeSize, const CoreDims &inMemStart,
+           const CoreDims &inMemCount, const CoreDims &outMemStart,
+           const CoreDims &outMemCount, const bool safeMode,
+           MemorySpace MemSpace)
 
 {
 
     // use values of ioStart and ioCount if ioMemStart and ioMemCount are
     // left as default
-    Dims inMemStartNC = inMemStart.empty() ? inStart : inMemStart;
-    Dims inMemCountNC = inMemCount.empty() ? inCount : inMemCount;
-    Dims outMemStartNC = outMemStart.empty() ? outStart : outMemStart;
-    Dims outMemCountNC = outMemCount.empty() ? outCount : outMemCount;
+    DimsArray inMemStartNC = inMemStart.empty() ? inStart : inMemStart;
+    DimsArray inMemCountNC = inMemCount.empty() ? inCount : inMemCount;
+    DimsArray outMemStartNC = outMemStart.empty() ? outStart : outMemStart;
+    DimsArray outMemCountNC = outMemCount.empty() ? outCount : outMemCount;
 
-    Dims inEnd(inStart.size());
-    Dims outEnd(inStart.size());
-    Dims ovlpStart(inStart.size());
-    Dims ovlpEnd(inStart.size());
-    Dims ovlpCount(inStart.size());
-    Dims inStride(inStart.size());
-    Dims outStride(inStart.size());
-    Dims inOvlpGapSize(inStart.size());
-    Dims outOvlpGapSize(inStart.size());
-    Dims inRltvOvlpStartPos(inStart.size());
-    Dims outRltvOvlpStartPos(inStart.size());
+    DimsArray inEnd(inStart.size());
+    DimsArray outEnd(inStart.size());
+    DimsArray ovlpStart(inStart.size());
+    DimsArray ovlpEnd(inStart.size());
+    DimsArray ovlpCount(inStart.size());
+    DimsArray inStride(inStart.size());
+    DimsArray outStride(inStart.size());
+    DimsArray inOvlpGapSize(inStart.size());
+    DimsArray outOvlpGapSize(inStart.size());
+    DimsArray inRltvOvlpStartPos(inStart.size());
+    DimsArray outRltvOvlpStartPos(inStart.size());
     size_t minContDim, blockSize;
     const char *inOvlpBase = nullptr;
     char *outOvlpBase = nullptr;
-    auto GetInEnd = [](Dims &inEnd, const Dims &inStart, const Dims &inCount) {
+    auto GetInEnd = [](CoreDims &inEnd, const CoreDims &inStart,
+                       const CoreDims &inCount) {
         for (size_t i = 0; i < inStart.size(); i++)
         {
             inEnd[i] = inStart[i] + inCount[i] - 1;
         }
     };
-    auto GetOutEnd = [](Dims &outEnd, const Dims &outStart,
-                        const Dims &output_count) {
+    auto GetOutEnd = [](CoreDims &outEnd, const CoreDims &outStart,
+                        const CoreDims &output_count) {
         for (size_t i = 0; i < outStart.size(); i++)
         {
             outEnd[i] = outStart[i] + output_count[i] - 1;
         }
     };
-    auto GetOvlpStart = [](Dims &ovlpStart, const Dims &inStart,
-                           const Dims &outStart) {
+    auto GetOvlpStart = [](CoreDims &ovlpStart, const CoreDims &inStart,
+                           const CoreDims &outStart) {
         for (size_t i = 0; i < ovlpStart.size(); i++)
         {
             ovlpStart[i] = inStart[i] > outStart[i] ? inStart[i] : outStart[i];
         }
     };
-    auto GetOvlpEnd = [](Dims &ovlpEnd, Dims &inEnd, Dims &outEnd) {
+    auto GetOvlpEnd = [](CoreDims &ovlpEnd, CoreDims &inEnd, CoreDims &outEnd) {
         for (size_t i = 0; i < ovlpEnd.size(); i++)
         {
             ovlpEnd[i] = inEnd[i] < outEnd[i] ? inEnd[i] : outEnd[i];
         }
     };
-    auto GetOvlpCount = [](Dims &ovlpCount, Dims &ovlpStart, Dims &ovlpEnd) {
+    auto GetOvlpCount = [](CoreDims &ovlpCount, CoreDims &ovlpStart,
+                           CoreDims &ovlpEnd) {
         for (size_t i = 0; i < ovlpCount.size(); i++)
         {
             ovlpCount[i] = ovlpEnd[i] - ovlpStart[i] + 1;
         }
     };
-    auto HasOvlp = [](Dims &ovlpStart, Dims &ovlpEnd) {
+    auto HasOvlp = [](CoreDims &ovlpStart, CoreDims &ovlpEnd) {
         for (size_t i = 0; i < ovlpStart.size(); i++)
         {
             if (ovlpEnd[i] < ovlpStart[i])
@@ -325,7 +324,7 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         return true;
     };
 
-    auto GetIoStrides = [](Dims &ioStride, const Dims &ioCount,
+    auto GetIoStrides = [](CoreDims &ioStride, const CoreDims &ioCount,
                            size_t elmSize) {
         // ioStride[i] holds the total number of elements under each element
         // of the i'th dimension
@@ -354,8 +353,8 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
     };
 
     auto GetInOvlpBase = [](const char *&inOvlpBase, const char *in,
-                            const Dims &inStart, Dims &inStride,
-                            Dims &ovlpStart) {
+                            const CoreDims &inStart, CoreDims &inStride,
+                            CoreDims &ovlpStart) {
         inOvlpBase = in;
         for (size_t i = 0; i < inStart.size(); i++)
         {
@@ -363,8 +362,8 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         }
     };
     auto GetOutOvlpBase = [](char *&outOvlpBase, char *out,
-                             const Dims &outStart, Dims &outStride,
-                             Dims &ovlpStart) {
+                             const CoreDims &outStart, CoreDims &outStride,
+                             CoreDims &ovlpStart) {
         outOvlpBase = out;
         for (size_t i = 0; i < outStart.size(); i++)
         {
@@ -372,15 +371,15 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
                 outOvlpBase + (ovlpStart[i] - outStart[i]) * outStride[i];
         }
     };
-    auto GetIoOvlpGapSize = [](Dims &ioOvlpGapSize, Dims &ioStride,
-                               const Dims &ioCount, Dims &ovlpCount) {
+    auto GetIoOvlpGapSize = [](CoreDims &ioOvlpGapSize, CoreDims &ioStride,
+                               const CoreDims &ioCount, CoreDims &ovlpCount) {
         for (size_t i = 0; i < ioOvlpGapSize.size(); i++)
         {
             ioOvlpGapSize[i] = (ioCount[i] - ovlpCount[i]) * ioStride[i];
         }
     };
-    auto GetMinContDim = [](const Dims &inCount, const Dims outCount,
-                            Dims &ovlpCount) {
+    auto GetMinContDim = [](const CoreDims &inCount, const CoreDims &outCount,
+                            CoreDims &ovlpCount) {
         //    note: minContDim is the first index where its input box and
         //    overlap box
         //    are not fully match. therefore all data below this branch is
@@ -403,7 +402,8 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         }
         return i;
     };
-    auto GetBlockSize = [](Dims &ovlpCount, size_t minContDim, size_t elmSize) {
+    auto GetBlockSize = [](CoreDims &ovlpCount, size_t minContDim,
+                           size_t elmSize) {
         size_t res = elmSize;
         for (size_t i = minContDim; i < ovlpCount.size(); i++)
         {
@@ -412,8 +412,9 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         return res;
     };
 
-    auto GetRltvOvlpStartPos = [](Dims &ioRltvOvlpStart, const Dims &ioStart,
-                                  Dims &ovlpStart) {
+    auto GetRltvOvlpStartPos = [](CoreDims &ioRltvOvlpStart,
+                                  const CoreDims &ioStart,
+                                  CoreDims &ovlpStart) {
         for (size_t i = 0; i < ioStart.size(); i++)
         {
             ioRltvOvlpStart[i] = ovlpStart[i] - ioStart[i];
@@ -448,14 +449,13 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         // algorithm used.
         if (inIsLittleEndian == outIsLittleEndian)
         {
-#ifdef ADIOS2_HAVE_CUDA
-            if (MemSpace == MemorySpace::CUDA)
+            if (MemSpace != MemorySpace::Host)
             {
-                helper::CudaMemCopyFromBuffer(outOvlpBase, 0, inOvlpBase,
-                                              blockSize);
+                helper::NdCopyGPU(inOvlpBase, outOvlpBase, inOvlpGapSize,
+                                  outOvlpGapSize, ovlpCount, minContDim,
+                                  blockSize, MemSpace);
                 return 0;
             }
-#endif
             // most efficient algm
             // warning: number of function stacks used is number of dimensions
             // of data.
@@ -478,14 +478,12 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         // different endianess mode
         else
         {
-#ifdef ADIOS2_HAVE_CUDA
-            if (MemSpace == MemorySpace::CUDA)
+            if (MemSpace != MemorySpace::Host)
             {
                 helper::Throw<std::invalid_argument>(
                     "Helper", "Memory", "CopyContiguousMemory",
                     "Direct byte order reversal not supported for GPU buffers");
             }
-#endif
             if (!safeMode)
             {
                 NdCopyRecurDFSeqPaddingRevEndian(
@@ -509,8 +507,14 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
     // padding
     else
     {
-        //        Dims revInCount(inCount);
-        //        Dims revOutCount(outCount);
+        if (MemSpace != MemorySpace::Host)
+        {
+            helper::Throw<std::invalid_argument>(
+                "Helper", "Memory", "CopyContiguousMemory",
+                "Direct byte order reversal not supported for GPU buffers");
+        }
+        //        CoreDims revInCount(inCount);
+        //        CoreDims revOutCount(outCount);
         //
         // col-major ==> col-major mode
         if (!inIsRowMajor && !outIsRowMajor)
@@ -535,8 +539,8 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         // row-major ==> col-major mode
         else if (inIsRowMajor && !outIsRowMajor)
         {
-            Dims revOutStart(outStart);
-            Dims revOutCount(outCount);
+            DimsArray revOutStart(outStart);
+            DimsArray revOutCount(outCount);
 
             std::reverse(outMemStartNC.begin(), outMemStartNC.end());
             std::reverse(outMemCountNC.begin(), outMemCountNC.end());
@@ -563,7 +567,7 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
             GetRltvOvlpStartPos(inRltvOvlpStartPos, inMemStartNC, ovlpStart);
 
             // get reversed order outOvlpStart
-            Dims revOvlpStart(ovlpStart);
+            DimsArray revOvlpStart(ovlpStart);
             std::reverse(revOvlpStart.begin(), revOvlpStart.end());
             GetRltvOvlpStartPos(outRltvOvlpStartPos, outMemStartNC,
                                 revOvlpStart);
@@ -571,8 +575,8 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         // col-major ==> row-major mode
         else if (!inIsRowMajor && outIsRowMajor)
         {
-            Dims revInStart(inStart);
-            Dims revInCount(inCount);
+            DimsArray revInStart(inStart);
+            DimsArray revInCount(inCount);
             std::reverse(inMemStartNC.begin(), inMemStartNC.end());
             std::reverse(inMemCountNC.begin(), inMemCountNC.end());
 
@@ -595,7 +599,7 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
             std::reverse(inStride.begin(), inStride.end());
 
             // get reversed order inOvlpStart
-            Dims revOvlpStart(ovlpStart);
+            DimsArray revOvlpStart(ovlpStart);
             std::reverse(revOvlpStart.begin(), revOvlpStart.end());
             GetRltvOvlpStartPos(inRltvOvlpStartPos, inMemStartNC, revOvlpStart);
             // get normal order outOvlpStart
@@ -607,14 +611,6 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         // Same Endian"
         if (inIsLittleEndian == outIsLittleEndian)
         {
-#ifdef ADIOS2_HAVE_CUDA
-            if (MemSpace == MemorySpace::CUDA)
-            {
-                helper::CudaMemCopyFromBuffer(outOvlpBase, 0, inOvlpBase,
-                                              blockSize);
-                return 0;
-            }
-#endif
             if (!safeMode)
             {
                 NdCopyRecurDFNonSeqDynamic(0, inOvlpBase, outOvlpBase,
@@ -632,14 +628,6 @@ int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
         // different Endian"
         else
         {
-#ifdef ADIOS2_HAVE_CUDA
-            if (MemSpace == MemorySpace::CUDA)
-            {
-                helper::Throw<std::invalid_argument>(
-                    "Helper", "Memory", "CopyContiguousMemory",
-                    "Direct byte order reversal not supported for GPU buffers");
-            }
-#endif
             if (!safeMode)
             {
                 NdCopyRecurDFNonSeqDynamicRevEndian(
@@ -721,18 +709,5 @@ uint64_t PaddingToAlignOffset(uint64_t offset, uint64_t alignment_size)
     }
     return padSize;
 }
-
-#ifdef ADIOS2_HAVE_CUDA
-void MemcpyGPUToBuffer(void *dst, const char *GPUbuffer, size_t byteCount)
-{
-    cudaMemcpy(dst, GPUbuffer, byteCount, cudaMemcpyDeviceToHost);
-}
-
-void MemcpyBufferToGPU(char *GPUbuffer, const char *src, size_t byteCount)
-{
-    cudaMemcpy(GPUbuffer, src, byteCount, cudaMemcpyHostToDevice);
-}
-#endif
-
 } // end namespace helper
 } // end namespace adios2

@@ -13,9 +13,9 @@ class ADIOSDefineVariableTest : public ::testing::Test
 public:
 #if ADIOS2_USE_MPI
     ADIOSDefineVariableTest()
-    : adios(MPI_COMM_WORLD, true), io(adios.DeclareIO("TestIO"))
+    : adios(MPI_COMM_WORLD), io(adios.DeclareIO("TestIO"))
 #else
-    ADIOSDefineVariableTest() : adios(true), io(adios.DeclareIO("TestIO"))
+    ADIOSDefineVariableTest() : adios(), io(adios.DeclareIO("TestIO"))
 #endif
     {
     }
@@ -655,10 +655,81 @@ TEST_F(ADIOSDefineVariableTest, DefineCheckType)
     EXPECT_EQ(io.VariableType("ul"), adios2::GetType<unsigned long>());
 }
 
+TEST_F(ADIOSDefineVariableTest, DefineStructVariable)
+{
+    const adios2::Dims shape = {10};
+    const adios2::Dims start = {0};
+    const adios2::Dims count = {10};
+
+    typedef struct def1
+    {
+        int8_t a;
+        int32_t b[5];
+    } def1;
+    auto struct1 = io.DefineStruct("def1", sizeof(def1));
+    struct1.AddField("a", offsetof(def1, a), adios2::DataType::Int8);
+    struct1.AddField("b", offsetof(def1, b), adios2::DataType::Int32, 5);
+    struct1.Freeze();
+    EXPECT_THROW(struct1.AddField("c", 0, adios2::DataType::Int32),
+                 std::runtime_error);
+
+    typedef struct def2
+    {
+        int8_t a;
+        int32_t b[5];
+        int32_t c;
+    } def2;
+    auto struct2 = io.DefineStruct("def2", sizeof(def2));
+    struct2.AddField("a", offsetof(def2, a), adios2::DataType::Int8);
+    struct2.AddField("b", offsetof(def2, b), adios2::DataType::Int32, 5);
+    struct2.AddField("c", 24, adios2::DataType::Int32);
+    EXPECT_THROW(struct2.AddField("c", 27, adios2::DataType::Int32),
+                 std::runtime_error);
+
+    auto structVar =
+        io.DefineStructVariable("particle", struct1, shape, start, count);
+
+    EXPECT_EQ(structVar.Shape().size(), 1);
+    EXPECT_EQ(structVar.Start().size(), 1);
+    EXPECT_EQ(structVar.Count().size(), 1);
+    EXPECT_EQ(structVar.Name(), "particle");
+    EXPECT_EQ(structVar.Type(), "struct");
+    EXPECT_EQ(structVar.Sizeof(), 24);
+    EXPECT_EQ(structVar.StructFields(), 2);
+    EXPECT_EQ(structVar.StructFieldName(0), "a");
+    EXPECT_EQ(structVar.StructFieldName(1), "b");
+    EXPECT_EQ(structVar.StructFieldOffset(0), 0);
+    EXPECT_EQ(structVar.StructFieldOffset(1), offsetof(def1, b));
+    EXPECT_EQ(structVar.StructFieldType(0), adios2::DataType::Int8);
+    EXPECT_EQ(structVar.StructFieldType(1), adios2::DataType::Int32);
+    EXPECT_EQ(structVar.StructFieldElementCount(0), 1);
+    EXPECT_EQ(structVar.StructFieldElementCount(1), 5);
+
+    EXPECT_THROW(structVar.StructFieldName(2), std::invalid_argument);
+    EXPECT_THROW(structVar.StructFieldOffset(2), std::invalid_argument);
+    EXPECT_THROW(structVar.StructFieldType(2), std::invalid_argument);
+    EXPECT_THROW(structVar.StructFieldElementCount(2), std::invalid_argument);
+
+    auto inquire1 = io.InquireVariable("particle");
+    EXPECT_TRUE(inquire1);
+
+    auto inquire2 = io.InquireStructVariable("particle");
+    EXPECT_TRUE(inquire2);
+
+    auto inquire3 = io.InquireStructVariable("particle", struct1);
+    EXPECT_TRUE(inquire3);
+
+    auto inquire4 = io.InquireStructVariable("particle", struct2);
+    EXPECT_FALSE(inquire4);
+}
+
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

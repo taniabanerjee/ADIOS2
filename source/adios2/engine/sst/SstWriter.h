@@ -41,6 +41,15 @@ public:
     void PerformPuts() final;
     void EndStep() final;
     void Flush(const int transportIndex = -1) final;
+    void NotifyEngineAttribute(std::string name, DataType type) noexcept;
+    void NotifyEngineAttribute(std::string name, AttributeBase *Attr,
+                               void *data) noexcept;
+
+    /**
+     * Called if destructor is called on an open engine.  Should warn or take
+     * any non-complex measure that might help recover.
+     */
+    void DestructorClose(bool Verbose) noexcept final;
 
 private:
     void Init(); ///< calls InitCapsules and InitTransports based on Method,
@@ -51,6 +60,11 @@ private:
     void DoPutDeferred(Variable<T> &, const T *) final;
     ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 #undef declare_type
+
+    void DoPutStructSync(VariableStruct &, const void *) final;
+    void DoPutStructDeferred(VariableStruct &, const void *) final;
+
+    void PutStructCommon(VariableBase &, const void *);
 
     template <class T>
     void PutSyncCommon(Variable<T> &variable, const T *values);
@@ -79,7 +93,7 @@ private:
     SstStream m_Output;
     long m_WriterStep = -1;
     bool m_DefinitionsNotified = false;
-    size_t m_MarshaledAttributesCount = 0;
+    bool m_MarshalAttributesNecessary = true; // first time through, marshal
     struct _SstParams Params;
 
     void MarshalAttributes();

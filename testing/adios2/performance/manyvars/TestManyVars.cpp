@@ -188,10 +188,10 @@ public:
         }
 
         char fmt[32];
-        sprintf(fmt, "v%%%d.%dd", digit, digit);
+        snprintf(fmt, sizeof(fmt), "v%%%d.%dd", digit, digit);
         for (size_t i = 0; i < NVARS; i++)
         {
-            sprintf(varnames[i], fmt, i);
+            snprintf(varnames[i], 16, fmt, i);
         }
     }
 
@@ -252,10 +252,9 @@ public:
 
         alloc_vars();
 #if ADIOS2_USE_MPI
-        adios2_adios *adiosH =
-            adios2_init(MPI_COMM_WORLD, adios2_debug_mode_on);
+        adios2_adios *adiosH = adios2_init_mpi(MPI_COMM_WORLD);
 #else
-        adios2_adios *adiosH = adios2_init(adios2_debug_mode_on);
+        adios2_adios *adiosH = adios2_init_serial();
 #endif
 
         ioW = adios2_declare_io(adiosH, "multiblockwrite"); // group for writing
@@ -484,7 +483,10 @@ INSTANTIATE_TEST_SUITE_P(NxM, TestManyVars,
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(&argc, &argv);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
 #endif
     ::testing::InitGoogleTest(&argc, argv);
 

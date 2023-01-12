@@ -49,7 +49,6 @@
 #ifdef _WIN32
 #include "shlwapi.h"
 #include "windows.h"
-#pragma comment(lib, "shlwapi.lib")
 #pragma warning(disable : 4101) // unreferenced local variable
 #else
 #include <fnmatch.h>
@@ -81,6 +80,10 @@ char *vfile;              // file name to bpls
 std::string start;        // dimension spec starting points
 std::string count;        // dimension spec counts
 std::string format;       // format string for one data element (e.g. %6.2f)
+std::string
+    transport_params; // Transport parameters (e.g. "Library=stdio,verbose=3")
+std::string engine_name;   // Engine name (e.g. "BP5")
+std::string engine_params; // Engine parameters (e.g. "SelectSteps=0:5:2")
 
 // Flags from arguments or defaults
 bool dump; // dump data not just list info(flag == 1)
@@ -145,8 +148,6 @@ void display_help()
         "-a\n"
         "  --regexp    | -e           Treat masks as extended regular "
         "expressions\n"
-        "  --plot      | -p           Dumps the histogram information that can "
-        "be read by gnuplot\n"
         "  --output    | -o <path>    Print to a file instead of stdout\n"
         /*
            "  --xml    | -x            # print as xml instead of ascii text\n"
@@ -170,12 +171,13 @@ void display_help()
         "file\n"
         "  --decomp    | -D           Show decomposition of variables as layed "
         "out in file\n"
-        /*
-           "  --time    | -t N [M]      # print data for timesteps N..M only (or
-           only N)\n"
-           "                              default is to print all available
-           timesteps\n"
-         */
+        "  --transport-parameters | -T         Specify File transport "
+        "parameters\n"
+        "                                      e.g. \"Library=stdio\"\n"
+        "  --engine               | -E <name>  Specify ADIOS Engine\n"
+        "  --engine-params        | -P string  Specify ADIOS Engine "
+        "Parameters\n"
+        "                                      e.g. \"SelectSteps=0:n:2\""
         "\n"
         "  Examples for slicing:\n"
         "  -s \"0,0,0\"   -c \"1,99,1\":  Print 100 elements (of the 2nd "
@@ -403,11 +405,28 @@ bool introspectAsBPDir(const std::string &name) noexcept
     char patch = buffer[34];
     bool isBigEndian = static_cast<bool>(buffer[36]);
     uint8_t BPVersion = static_cast<uint8_t>(buffer[37]);
-    bool isActive = static_cast<bool>(buffer[38]);
-
-    printf("ADIOS-BP Version %d %s - ADIOS v%c.%c.%c %s\n", BPVersion,
-           (isBigEndian ? "Big Endian" : "Little Endian"), major, minor, patch,
-           (isActive ? "- active" : ""));
+    bool isActive = false;
+    if (BPVersion == 4)
+    {
+        isActive = static_cast<bool>(buffer[38]);
+        printf("ADIOS-BP Version %d %s - ADIOS v%c.%c.%c %s\n", BPVersion,
+               (isBigEndian ? "Big Endian" : "Little Endian"), major, minor,
+               patch, (isActive ? "- active" : ""));
+    }
+    else if (BPVersion == 5)
+    {
+        uint8_t minversion = static_cast<uint8_t>(buffer[38]);
+        isActive = static_cast<bool>(buffer[39]);
+        printf("ADIOS-BP Version %d.%d %s - ADIOS v%c.%c.%c %s\n", BPVersion,
+               minversion, (isBigEndian ? "Big Endian" : "Little Endian"),
+               major, minor, patch, (isActive ? "- active" : ""));
+    }
+    else
+    {
+        printf("ADIOS-BP Version %d %s - ADIOS v%c.%c.%c %s\n", BPVersion,
+               (isBigEndian ? "Big Endian" : "Little Endian"), major, minor,
+               patch, (isActive ? "- active" : ""));
+    }
 
     return true;
 }
@@ -591,6 +610,16 @@ int bplsMain(int argc, char *argv[])
         "Print version information (add -verbose for additional"
         " information)");
     arg.AddBooleanArgument("-V", &show_version, "");
+    arg.AddArgument(
+        "--transport-parameters", argT::SPACE_ARGUMENT, &transport_params,
+        "| -T string    Specify File transport parameters manually");
+    arg.AddArgument("-T", argT::SPACE_ARGUMENT, &transport_params, "");
+    arg.AddArgument("--engine", argT::SPACE_ARGUMENT, &engine_name,
+                    "| -E string    Specify ADIOS Engine manually");
+    arg.AddArgument("-E", argT::SPACE_ARGUMENT, &engine_name, "");
+    arg.AddArgument("--engine-params", argT::SPACE_ARGUMENT, &engine_params,
+                    "| -P string    Specify ADIOS Engine Parameters manually");
+    arg.AddArgument("-P", argT::SPACE_ARGUMENT, &engine_params, "");
 
     if (!arg.Parse())
     {
@@ -975,7 +1004,7 @@ int doList_vars(core::Engine *fp, core::IO *io)
                 if (longopt || dump)
                 {
                     fprintf(outf, "  attr   = ");
-                    if (entry.typeName == DataType::Compound)
+                    if (entry.typeName == DataType::Struct)
                     {
                         // not supported
                     }
@@ -998,7 +1027,7 @@ int doList_vars(core::Engine *fp, core::IO *io)
             }
             else
             {
-                if (entry.typeName == DataType::Compound)
+                if (entry.typeName == DataType::Struct)
                 {
                     // not supported
                 }
@@ -1215,7 +1244,8 @@ int printVariableInfo(core::Engine *fp, core::IO *io,
         if (longopt && !timestep)
         {
             fprintf(outf, " = ");
-            print_data(&variable->m_Value, 0, adiosvartype, false);
+            auto mm = variable->MinMax();
+            print_data(&mm.second, 0, adiosvartype, false);
         }
         fprintf(outf, "\n");
 
@@ -1503,10 +1533,28 @@ int doList(const char *path)
     if (verbose > 1)
         printf("\nADIOS Open: read header info from %s\n", path);
 
-    if (!adios2sys::SystemTools::FileExists(path))
+    std::string tpl = helper::LowerCase(transport_params);
+    bool remoteFile = (tpl.find("awssdk") != std::string::npos);
+    if (remoteFile)
     {
-        fprintf(stderr, "\nError: input path %s does not exist\n", path);
-        return 4;
+        if (engine_name.empty())
+        {
+            fprintf(
+                stderr,
+                "\nError: For remote file access you must specify the engine "
+                "explicitly with -E parameter, e.g. -E bp5 or -E bp4 or -E "
+                "bp3.\nVirtual engines like BPFile or FileStream do not know "
+                "which engine to use.\n");
+            return 8;
+        }
+    }
+    else
+    {
+        if (!adios2sys::SystemTools::FileExists(path))
+        {
+            fprintf(stderr, "\nError: input path %s does not exist\n", path);
+            return 4;
+        }
     }
 
     // initialize BP reader
@@ -1514,7 +1562,7 @@ int doList(const char *path)
         adios_verbose = 3; // print info lines
     if (verbose > 2)
         adios_verbose = 4; // print debug lines
-    sprintf(init_params, "verbose=%d", adios_verbose);
+    snprintf(init_params, sizeof(init_params), "verbose=%d", adios_verbose);
     if (hidden_attrs)
         strcat(init_params, ";show_hidden_attrs");
 
@@ -1526,7 +1574,29 @@ int doList(const char *path)
         io.SetParameter("StreamReader", "true");
     }
     core::Engine *fp = nullptr;
-    std::vector<std::string> engineList = getEnginesList(path);
+
+    if (!transport_params.empty())
+    {
+        auto p = helper::BuildParametersMap(transport_params, '=', ',');
+        io.AddTransport("File", p);
+    }
+
+    std::vector<std::string> engineList;
+    if (engine_name.empty())
+    {
+        engineList = getEnginesList(path);
+    }
+    else
+    {
+        engineList.push_back(engine_name);
+    }
+
+    if (!engine_params.empty())
+    {
+        auto p = helper::BuildParametersMap(engine_params, '=', ',');
+        io.SetParameters(p);
+    }
+
     for (auto &engineName : engineList)
     {
         if (verbose > 2)
@@ -1903,7 +1973,7 @@ int readVar(core::Engine *fp, core::IO *io, core::Variable<T> *variable)
 
     // Absolute step is needed to access Shape of variable in a step
     // and also for StepSelection
-    size_t absstep = relative_to_absolute_step(variable, stepStart);
+    size_t absstep = relative_to_absolute_step(fp, variable, stepStart);
 
     // Get the shape of the variable for the starting step
     Dims shape;
@@ -2915,10 +2985,12 @@ int print_dataset(const void *data, const DataType vartype, uint64_t *s,
         {
             if (!noindex && tdims > 0)
             {
-                sprintf(idxstr, "    (%*" PRIu64, ndigits[0], ids[0]);
+                snprintf(idxstr, sizeof(idxstr), "    (%*" PRIu64, ndigits[0],
+                         ids[0]);
                 for (i = 1; i < tdims; i++)
                 {
-                    sprintf(buf, ",%*" PRIu64, ndigits[i], ids[i]);
+                    snprintf(buf, sizeof(buf), ",%*" PRIu64, ndigits[i],
+                             ids[i]);
                     strcat(idxstr, buf);
                 }
                 strcat(idxstr, ")    ");
@@ -2996,9 +3068,16 @@ void print_endline(void)
 }
 
 template <class T>
-size_t relative_to_absolute_step(core::Variable<T> *variable,
+size_t relative_to_absolute_step(core::Engine *fp, core::Variable<T> *variable,
                                  const size_t relstep)
 {
+    auto minBlocks = fp->MinBlocksInfo(*variable, relstep);
+
+    if (minBlocks)
+    {
+        return minBlocks->Step;
+    }
+
     const std::map<size_t, std::vector<size_t>> &indices =
         variable->m_AvailableStepBlockIndexOffsets;
     auto itStep = indices.begin();
@@ -3033,19 +3112,25 @@ Dims get_global_array_signature(core::Engine *fp, core::IO *io,
 
         if (minBlocks)
         {
-            delete minBlocks;
             for (size_t step = 0; step < nsteps; step++)
             {
-                minBlocks = fp->MinBlocksInfo(*variable, step);
+                if (step > 0)
+                {
+                    minBlocks = fp->MinBlocksInfo(*variable, step);
+                }
                 if (minBlocks->Shape)
                 {
                     for (size_t k = 0; k < ndim; k++)
                     {
+                        size_t n =
+                            (minBlocks->WasLocalValue
+                                 ? reinterpret_cast<size_t>(minBlocks->Shape)
+                                 : minBlocks->Shape[k]);
                         if (firstStep)
                         {
-                            dims[k] = minBlocks->Shape[k];
+                            dims[k] = n;
                         }
-                        else if (dims[k] != minBlocks->Shape[k])
+                        else if (dims[k] != n)
                         {
                             dims[k] = 0;
                         }
@@ -3054,34 +3139,36 @@ Dims get_global_array_signature(core::Engine *fp, core::IO *io,
                 }
                 delete minBlocks;
             }
-            return dims;
         }
-        const std::map<size_t, std::vector<size_t>> &indices =
-            variable->m_AvailableStepBlockIndexOffsets;
-        auto itStep = indices.begin();
-
-        for (size_t step = 0; step < nsteps; step++)
+        else
         {
-            const size_t absstep = itStep->first;
-            Dims d = variable->Shape(absstep - 1);
-            if (d.empty())
-            {
-                continue;
-            }
+            const std::map<size_t, std::vector<size_t>> &indices =
+                variable->m_AvailableStepBlockIndexOffsets;
+            auto itStep = indices.begin();
 
-            for (size_t k = 0; k < ndim; k++)
+            for (size_t step = 0; step < nsteps; step++)
             {
-                if (firstStep)
+                const size_t absstep = itStep->first;
+                Dims d = variable->Shape(absstep - 1);
+                if (d.empty())
                 {
-                    dims[k] = d[k];
+                    continue;
                 }
-                else if (dims[k] != d[k])
+
+                for (size_t k = 0; k < ndim; k++)
                 {
-                    dims[k] = 0;
+                    if (firstStep)
+                    {
+                        dims[k] = d[k];
+                    }
+                    else if (dims[k] != d[k])
+                    {
+                        dims[k] = 0;
+                    }
                 }
+                firstStep = false;
+                ++itStep;
             }
-            firstStep = false;
-            ++itStep;
         }
     }
     return dims;
@@ -3120,26 +3207,29 @@ std::pair<size_t, Dims> get_local_array_signature(core::Engine *fp,
                 firstBlock = false;
             }
         }
-        std::vector<typename core::Variable<T>::BPInfo> blocks =
-            fp->BlocksInfo(*variable, fp->CurrentStep());
-        if (!blocks.empty())
+        else
         {
-            nblocks = blocks.size();
-            bool firstBlock = true;
-            for (size_t j = 0; j < nblocks; j++)
+            std::vector<typename core::Variable<T>::BPInfo> blocks =
+                fp->BlocksInfo(*variable, fp->CurrentStep());
+            if (!blocks.empty())
             {
-                for (size_t k = 0; k < ndim; k++)
+                nblocks = blocks.size();
+                bool firstBlock = true;
+                for (size_t j = 0; j < nblocks; j++)
                 {
-                    if (firstBlock)
+                    for (size_t k = 0; k < ndim; k++)
                     {
-                        dims[k] = blocks[j].Count[k];
+                        if (firstBlock)
+                        {
+                            dims[k] = blocks[j].Count[k];
+                        }
+                        else if (dims[k] != blocks[j].Count[k])
+                        {
+                            dims[k] = 0;
+                        }
                     }
-                    else if (dims[k] != blocks[j].Count[k])
-                    {
-                        dims[k] = 0;
-                    }
+                    firstBlock = false;
                 }
-                firstBlock = false;
             }
         }
     }
@@ -3155,14 +3245,16 @@ std::pair<size_t, Dims> get_local_array_signature(core::Engine *fp,
         if (minBlocksInfo)
         {
             dims.resize(minBlocksInfo->Dims);
-            delete minBlocksInfo;
             size_t RelStep = 0;
             for (RelStep = 0; RelStep < variable->m_AvailableStepsCount;
                  RelStep++)
             {
-                minBlocksInfo = fp->MinBlocksInfo(*variable, RelStep);
+                if (RelStep > 0)
+                {
+                    minBlocksInfo = fp->MinBlocksInfo(*variable, RelStep);
+                }
 
-                auto coreBlocksInfo = minBlocksInfo->BlocksInfo;
+                auto &coreBlocksInfo = minBlocksInfo->BlocksInfo;
                 if (firstStep)
                 {
                     nblocks = coreBlocksInfo.size();
@@ -3195,40 +3287,42 @@ std::pair<size_t, Dims> get_local_array_signature(core::Engine *fp,
                 firstStep = false;
             }
         }
-
-        std::map<size_t, std::vector<typename core::Variable<T>::BPInfo>>
-            allblocks = fp->AllStepsBlocksInfo(*variable);
-
-        for (auto &blockpair : allblocks)
+        else
         {
-            std::vector<typename adios2::core::Variable<T>::BPInfo> &blocks =
-                blockpair.second;
-            const size_t blocksSize = blocks.size();
-            if (firstStep)
-            {
-                nblocks = blocksSize;
-            }
-            else if (nblocks != blocksSize)
-            {
-                nblocks = 0;
-            }
+            std::map<size_t, std::vector<typename core::Variable<T>::BPInfo>>
+                allblocks = fp->AllStepsBlocksInfo(*variable);
 
-            for (size_t j = 0; j < blocksSize; j++)
+            for (auto &blockpair : allblocks)
             {
-                for (size_t k = 0; k < ndim; k++)
+                std::vector<typename adios2::core::Variable<T>::BPInfo>
+                    &blocks = blockpair.second;
+                const size_t blocksSize = blocks.size();
+                if (firstStep)
                 {
-                    if (firstBlock)
-                    {
-                        dims[k] = blocks[j].Count[k];
-                    }
-                    else if (dims[k] != blocks[j].Count[k])
-                    {
-                        dims[k] = 0;
-                    }
+                    nblocks = blocksSize;
                 }
-                firstBlock = false;
+                else if (nblocks != blocksSize)
+                {
+                    nblocks = 0;
+                }
+
+                for (size_t j = 0; j < blocksSize; j++)
+                {
+                    for (size_t k = 0; k < ndim; k++)
+                    {
+                        if (firstBlock)
+                        {
+                            dims[k] = blocks[j].Count[k];
+                        }
+                        else if (dims[k] != blocks[j].Count[k])
+                        {
+                            dims[k] = 0;
+                        }
+                    }
+                    firstBlock = false;
+                }
+                firstStep = false;
             }
-            firstStep = false;
         }
     }
     return std::make_pair(nblocks, dims);
@@ -3251,8 +3345,8 @@ void print_decomp(core::Engine *fp, core::IO *io, core::Variable<T> *variable)
     // first step
     if (minBlocksInfo)
     {
-        delete minBlocksInfo;
         size_t laststep = minBlocksInfo->Step; // used relative last step above
+        delete minBlocksInfo;
         int ndigits_nsteps = ndigits(laststep);
         if (variable->m_ShapeID == ShapeID::GlobalValue ||
             variable->m_ShapeID == ShapeID::LocalValue)
@@ -3340,20 +3434,26 @@ void print_decomp(core::Engine *fp, core::IO *io, core::Variable<T> *variable)
 
                     for (size_t k = 0; k < ndim; k++)
                     {
-                        if (blocks[j].Count[k])
+                        size_t c =
+                            (minBlocksInfo->WasLocalValue
+                                 ? reinterpret_cast<size_t>(blocks[j].Count)
+                                 : blocks[j].Count[k]);
+
+                        if (c)
                         {
                             if (variable->m_ShapeID == ShapeID::GlobalArray)
                             {
-                                fprintf(outf, "%*zu:%*zu", ndigits_dims[k],
-                                        blocks[j].Start[k], ndigits_dims[k],
-                                        blocks[j].Start[k] +
-                                            blocks[j].Count[k] - 1);
+                                size_t s = (minBlocksInfo->WasLocalValue
+                                                ? reinterpret_cast<size_t>(
+                                                      blocks[j].Start)
+                                                : blocks[j].Start[k]);
+                                fprintf(outf, "%*zu:%*zu", ndigits_dims[k], s,
+                                        ndigits_dims[k], s + c - 1);
                             }
                             else
                             {
                                 // blockStart is empty vector for LocalArrays
-                                fprintf(outf, "0:%*zu", ndigits_dims[k],
-                                        blocks[j].Count[k] - 1);
+                                fprintf(outf, "0:%*zu", ndigits_dims[k], c - 1);
                             }
                         }
                         else
@@ -3387,10 +3487,28 @@ void print_decomp(core::Engine *fp, core::IO *io, core::Variable<T> *variable)
                     fprintf(outf, "\n");
                     if (dump)
                     {
-                        readVarBlock(
-                            fp, io, variable, RelStep, j,
-                            Dims(blocks[j].Count, blocks[j].Count + ndim),
-                            Dims(blocks[j].Start, blocks[j].Start + ndim));
+                        Dims s, c;
+                        if (variable->m_ShapeID == ShapeID::GlobalArray)
+                        {
+                            if (minBlocksInfo->WasLocalValue)
+                            {
+                                c = {reinterpret_cast<size_t>(blocks[j].Count)};
+                                s = {reinterpret_cast<size_t>(blocks[j].Start)};
+                            }
+                            else
+                            {
+                                c = Dims(blocks[j].Count,
+                                         blocks[j].Count + ndim);
+                                s = Dims(blocks[j].Start,
+                                         blocks[j].Start + ndim);
+                            }
+                        }
+                        else
+                        {
+                            c = Dims(blocks[j].Count, blocks[j].Count + ndim);
+                            s = Dims(0, ndim);
+                        }
+                        readVarBlock(fp, io, variable, RelStep, j, c, s);
                     }
                 }
             }

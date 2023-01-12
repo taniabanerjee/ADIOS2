@@ -22,39 +22,6 @@ namespace core
 {
 
 template <class T>
-Dims Variable<T>::DoShape(const size_t step) const
-{
-    CheckRandomAccess(step, "Shape");
-
-    if (m_Engine)
-    {
-        // see if the engine implements Variable Shape inquiry
-        auto ShapePtr = m_Engine->VarShape(*this, step);
-        if (ShapePtr)
-        {
-            return *ShapePtr;
-        }
-    }
-    if (m_FirstStreamingStep && step == adios2::EngineCurrentStep)
-    {
-        return m_Shape;
-    }
-
-    if (m_Engine != nullptr && m_ShapeID == ShapeID::GlobalArray)
-    {
-        const size_t stepInput =
-            !m_FirstStreamingStep ? m_Engine->CurrentStep() : step;
-
-        const auto it = m_AvailableShapes.find(stepInput + 1);
-        if (it != m_AvailableShapes.end())
-        {
-            return it->second;
-        }
-    }
-    return m_Shape;
-}
-
-template <class T>
 Dims Variable<T>::DoCount() const
 {
     auto lf_Step = [&]() -> size_t {
@@ -98,6 +65,7 @@ Dims Variable<T>::DoCount() const
             {
                 D[i] = DimsPtr[i];
             }
+            delete MVI;
             return D;
         }
 
@@ -240,85 +208,6 @@ Variable<T>::DoAllStepsBlocksInfo() const
     }
 
     return m_Engine->AllRelativeStepsBlocksInfo(*this);
-}
-
-template <class T>
-void Variable<T>::CheckRandomAccess(const size_t step,
-                                    const std::string hint) const
-{
-    if (!m_FirstStreamingStep && step != DefaultSizeT)
-    {
-        helper::Throw<std::invalid_argument>(
-            "Core", "Variable", "CheckRandomAccess",
-            "can't pass a step input in "
-            "streaming (BeginStep/EndStep)"
-            "mode for variable " +
-                m_Name + ", in call to Variable<T>::" + hint);
-    }
-}
-
-// Span functions
-template <class T>
-Span<T>::Span(Engine &engine, const size_t size)
-: m_Engine(engine), m_Size(size)
-{
-}
-
-template <class T>
-size_t Span<T>::Size() const noexcept
-{
-    return m_Size;
-}
-
-template <class T>
-T *Span<T>::Data() const noexcept
-{
-    return m_Engine.BufferData<T>(m_BufferIdx, m_PayloadPosition);
-}
-
-template <class T>
-T &Span<T>::At(const size_t position)
-{
-    if (position > m_Size)
-    {
-        helper::Throw<std::invalid_argument>(
-            "Core", "Variable", "At",
-            "position " + std::to_string(position) +
-                " is out of bounds for span of size " + std::to_string(m_Size));
-    }
-
-    return (*this)[position];
-}
-
-template <class T>
-const T &Span<T>::At(const size_t position) const
-{
-    if (position > m_Size)
-    {
-        helper::Throw<std::invalid_argument>(
-            "Core", "Variable", "At",
-            "position " + std::to_string(position) +
-                " is out of bounds for span of size " + std::to_string(m_Size) +
-                " , in call to const T& Span<T>::At");
-    }
-
-    return (*this)[position];
-}
-
-template <class T>
-T &Span<T>::operator[](const size_t position)
-{
-    T &data = *m_Engine.BufferData<T>(m_BufferIdx,
-                                      m_PayloadPosition + position * sizeof(T));
-    return data;
-}
-
-template <class T>
-const T &Span<T>::operator[](const size_t position) const
-{
-    const T &data = *m_Engine.BufferData<T>(
-        m_BufferIdx, m_PayloadPosition + position * sizeof(T));
-    return data;
 }
 
 } // end namespace core

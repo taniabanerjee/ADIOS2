@@ -205,11 +205,12 @@ private:
 
     void DoClose(const int transportIndex = -1) final;
 
-    template <class T>
-    void GetSyncCommon(Variable<T> &variable, T *data);
+    void GetSyncCommon(VariableBase &variable, void *data);
 
-    template <class T>
-    void GetDeferredCommon(Variable<T> &variable, T *data);
+    void GetDeferredCommon(VariableBase &variable, void *data);
+
+    void DoGetStructSync(VariableStruct &, void *);
+    void DoGetStructDeferred(VariableStruct &, void *);
 
     template <class T>
     void ReadVariableBlocks(Variable<T> &variable);
@@ -236,9 +237,11 @@ private:
 
     void InstallMetaMetaData(format::BufferSTL MetaMetadata);
     void InstallMetadataForTimestep(size_t Step);
-    void ReadData(const size_t WriterRank, const size_t Timestep,
-                  const size_t StartOffset, const size_t Length,
-                  char *Destination);
+    std::pair<double, double>
+    ReadData(adios2::transportman::TransportMan &FileManager,
+             const size_t maxOpenFiles, const size_t WriterRank,
+             const size_t Timestep, const size_t StartOffset,
+             const size_t Length, char *Destination);
 
     struct WriterMapStruct
     {
@@ -252,6 +255,15 @@ private:
     std::map<uint64_t, WriterMapStruct> m_WriterMap;
     // step -> writermap index (for all steps)
     std::vector<uint64_t> m_WriterMapIndex;
+
+    void DestructorClose(bool Verbose) noexcept;
+
+    /* Communicator connecting ranks on each Compute Node.
+       Only used to calculate the number of threads available for reading */
+    helper::Comm m_NodeComm;
+    helper::Comm singleComm;
+    unsigned int m_Threads;
+    std::vector<transportman::TransportMan> fileManagers; // manager per thread
 };
 
 } // end namespace engine

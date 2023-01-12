@@ -157,7 +157,6 @@ void WriteAggRead1D8(const std::string substreams)
             bpWriter.Put(var_u64, currentTestData.U64.data());
             bpWriter.Put(var_r32, currentTestData.R32.data());
             bpWriter.Put(var_r64, currentTestData.R64.data());
-            bpWriter.PerformPuts();
 
             bpWriter.EndStep();
         }
@@ -475,7 +474,6 @@ void WriteAggRead2D4x2(const std::string substreams)
             bpWriter.Put(var_u64, currentTestData.U64.data());
             bpWriter.Put(var_r32, currentTestData.R32.data());
             bpWriter.Put(var_r64, currentTestData.R64.data());
-            bpWriter.PerformPuts();
 
             bpWriter.EndStep();
         }
@@ -1004,7 +1002,10 @@ INSTANTIATE_TEST_SUITE_P(Substreams, BPWriteAggregateReadTest,
 
 int main(int argc, char **argv)
 {
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 
     int result;
     ::testing::InitGoogleTest(&argc, argv);

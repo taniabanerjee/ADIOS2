@@ -197,7 +197,7 @@ void BPSteps1D(const size_t ghostCells)
 #if ADIOS2_USE_MPI
     adios2::ADIOS adios(MPI_COMM_WORLD);
 #else
-    adios2::ADIOS adios(true);
+    adios2::ADIOS adios;
 #endif
     {
         adios2::IO io = adios.DeclareIO("WriteIO");
@@ -286,11 +286,13 @@ void BPSteps1D(const size_t ghostCells)
         adios2::Engine bpReader = io.Open(fname, adios2::Mode::Read);
         while (bpReader.BeginStep() == adios2::StepStatus::OK)
         {
+            const size_t step = bpReader.CurrentStep();
 
             auto var_i8 = io.InquireVariable<int8_t>("i8");
             EXPECT_TRUE(var_i8);
             ASSERT_EQ(var_i8.ShapeID(), adios2::ShapeID::GlobalArray);
             ASSERT_EQ(var_i8.Shape()[0], mpiSize * Nx);
+            ASSERT_EQ(var_i8.Min(), static_cast<int8_t>(step));
 
             auto var_i16 = io.InquireVariable<int16_t>("i16");
             EXPECT_TRUE(var_i16);
@@ -354,7 +356,6 @@ void BPSteps1D(const size_t ghostCells)
             EXPECT_EQ(CR32.size(), mpiSize * Nx);
             EXPECT_EQ(CR64.size(), mpiSize * Nx);
 
-            const size_t step = bpReader.CurrentStep();
             EXPECT_EQ(I8.front(), static_cast<int8_t>(step));
             EXPECT_EQ(I16.front(), static_cast<int16_t>(step));
             EXPECT_EQ(I32.front(), static_cast<int32_t>(step));
@@ -950,7 +951,10 @@ INSTANTIATE_TEST_SUITE_P(ghostCells, BPWriteMemSelReadVector,
 int main(int argc, char **argv)
 {
 #if ADIOS2_USE_MPI
-    MPI_Init(nullptr, nullptr);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
 #endif
 
     int result;

@@ -13,13 +13,16 @@
 #include "adios2/core/IO.h"
 #include "adios2/helper/adiosFunctions.h" //CheckIndexRange
 #include "adios2/helper/adiosMath.h"      // SetWithinLimit
+#include "adios2/helper/adiosMemory.h"    // NdCopy
 #include "adios2/toolkit/format/buffer/chunk/ChunkV.h"
 #include "adios2/toolkit/format/buffer/malloc/MallocV.h"
 #include "adios2/toolkit/transport/file/FileFStream.h"
 #include <adios2-perfstubs-interface.h>
 
 #include <ctime>
+#include <iomanip> // setw
 #include <iostream>
+#include <memory> // make_shared
 
 namespace adios2
 {
@@ -33,8 +36,8 @@ using namespace adios2::format;
 BP5Writer::BP5Writer(IO &io, const std::string &name, const Mode mode,
                      helper::Comm comm)
 : Engine("BP5Writer", io, name, mode, std::move(comm)), m_BP5Serializer(),
-  m_FileDataManager(m_Comm), m_FileMetadataManager(m_Comm),
-  m_FileMetadataIndexManager(m_Comm), m_FileMetaMetadataManager(m_Comm),
+  m_FileDataManager(io, m_Comm), m_FileMetadataManager(io, m_Comm),
+  m_FileMetadataIndexManager(io, m_Comm), m_FileMetaMetadataManager(io, m_Comm),
   m_Profiler(m_Comm)
 {
     m_EngineStart = Now();
@@ -42,6 +45,7 @@ BP5Writer::BP5Writer(IO &io, const std::string &name, const Mode mode,
     m_IO.m_ReadStreaming = false;
 
     Init();
+    m_IsOpen = true;
 }
 
 StepStatus BP5Writer::BeginStep(StepMode mode, const float timeoutSeconds)
@@ -69,6 +73,16 @@ StepStatus BP5Writer::BeginStep(StepMode mode, const float timeoutSeconds)
         }
     }
 
+    if ((m_WriterStep == 0) && m_Parameters.UseOneTimeAttributes)
+    {
+        const auto &attributes = m_IO.GetAttributes();
+
+        for (const auto &attributePair : attributes)
+        {
+            m_BP5Serializer.OnetimeMarshalAttribute(*(attributePair.second));
+        }
+    }
+
     if (m_Parameters.AsyncWrite)
     {
         m_AsyncWriteLock.lock();
@@ -77,6 +91,7 @@ StepStatus BP5Writer::BeginStep(StepMode mode, const float timeoutSeconds)
         TimePoint wait_start = Now();
         if (m_WriteFuture.valid())
         {
+            m_Profiler.Start("WaitOnAsync");
             m_WriteFuture.get();
             m_Comm.Barrier();
             AsyncWriteDataCleanup();
@@ -85,12 +100,17 @@ StepStatus BP5Writer::BeginStep(StepMode mode, const float timeoutSeconds)
             {
                 WriteMetadataFileIndex(m_LatestMetaDataPos,
                                        m_LatestMetaDataSize);
-                std::cout << "BeginStep, wait on async write was = "
-                          << wait.count() << " time since EndStep was = "
-                          << m_LastTimeBetweenSteps.count()
-                          << " expect next one to be = "
-                          << m_ExpectedTimeBetweenSteps.count() << std::endl;
+                if (m_Parameters.verbose > 0)
+                {
+                    std::cout << "BeginStep, wait on async write was = "
+                              << wait.count() << " time since EndStep was = "
+                              << m_LastTimeBetweenSteps.count()
+                              << " expect next one to be = "
+                              << m_ExpectedTimeBetweenSteps.count()
+                              << std::endl;
+                }
             }
+            m_Profiler.Stop("WaitOnAsync");
         }
     }
 
@@ -413,7 +433,22 @@ void BP5Writer::WriteMetadataFileIndex(uint64_t MetaDataPos,
 
 void BP5Writer::NotifyEngineAttribute(std::string name, DataType type) noexcept
 {
-    m_MarshalAttributesNecessary = true;
+    helper::Throw<std::invalid_argument>(
+        "BP5Writer", "Engine", "ThrowUp",
+        "Engine does not support NotifyEngineAttribute");
+}
+
+void BP5Writer::NotifyEngineAttribute(std::string name, AttributeBase *Attr,
+                                      void *data) noexcept
+{
+    if (!m_Parameters.UseOneTimeAttributes)
+    {
+        m_MarshalAttributesNecessary = true;
+        return;
+    }
+
+    m_BP5Serializer.OnetimeMarshalAttribute(*Attr);
+    m_MarshalAttributesNecessary = false;
 }
 
 void BP5Writer::MarshalAttributes()
@@ -495,6 +530,8 @@ void BP5Writer::EndStep()
     m_BetweenStepPairs = false;
     PERFSTUBS_SCOPED_TIMER("BP5Writer::EndStep");
     m_Profiler.Start("endstep");
+
+    m_Profiler.Start("close_ts");
     MarshalAttributes();
 
     // true: advances step
@@ -503,9 +540,9 @@ void BP5Writer::EndStep()
 
     /* TSInfo includes NewMetaMetaBlocks, the MetaEncodeBuffer, the
      * AttributeEncodeBuffer and the data encode Vector */
-    /* the first */
 
     m_ThisTimestepDataSize += TSInfo.DataBuffer->Size();
+    m_Profiler.Stop("close_ts");
 
     m_Profiler.Start("AWD");
     // TSInfo destructor would delete the DataBuffer so we need to save it
@@ -518,44 +555,120 @@ void BP5Writer::EndStep()
     WriteData(databuf);
     m_Profiler.Stop("AWD");
 
-    std::vector<char> MetaBuffer = m_BP5Serializer.CopyMetadataToContiguous(
-        TSInfo.NewMetaMetaBlocks, TSInfo.MetaEncodeBuffer,
-        TSInfo.AttributeEncodeBuffer, m_ThisTimestepDataSize, m_StartDataPos);
-
-    size_t LocalSize = MetaBuffer.size();
-    std::vector<size_t> RecvCounts = m_Comm.GatherValues(LocalSize, 0);
-
-    std::vector<char> *RecvBuffer = new std::vector<char>;
-    if (m_Comm.Rank() == 0)
+    /*
+     * Two-step metadata aggregation
+     */
+    m_Profiler.Start("meta_lvl1");
+    std::vector<char> MetaBuffer;
+    core::iovec m{TSInfo.MetaEncodeBuffer->Data(),
+                  TSInfo.MetaEncodeBuffer->m_FixedSize};
+    core::iovec a{nullptr, 0};
+    if (TSInfo.AttributeEncodeBuffer)
     {
-        uint64_t TotalSize = 0;
-        for (auto &n : RecvCounts)
-            TotalSize += n;
-        RecvBuffer->resize(TotalSize);
+        a = {TSInfo.AttributeEncodeBuffer->Data(),
+             TSInfo.AttributeEncodeBuffer->m_FixedSize};
     }
+    MetaBuffer = m_BP5Serializer.CopyMetadataToContiguous(
+        TSInfo.NewMetaMetaBlocks, {m}, {a}, {m_ThisTimestepDataSize},
+        {m_StartDataPos});
 
-    m_Profiler.Start("meta_gather");
-    m_Comm.GathervArrays(MetaBuffer.data(), LocalSize, RecvCounts.data(),
-                         RecvCounts.size(), RecvBuffer->data(), 0);
-    m_Profiler.Stop("meta_gather");
-
-    if (m_Comm.Rank() == 0)
-    {
-        std::vector<format::BP5Base::MetaMetaInfoBlock> UniqueMetaMetaBlocks;
-        std::vector<uint64_t> DataSizes;
-        std::vector<core::iovec> AttributeBlocks;
-        auto Metadata = m_BP5Serializer.BreakoutContiguousMetadata(
-            RecvBuffer, RecvCounts, UniqueMetaMetaBlocks, AttributeBlocks,
-            DataSizes, m_WriterDataPos);
-        WriteMetaMetadata(UniqueMetaMetaBlocks);
-        m_LatestMetaDataPos = m_MetaDataPos;
-        m_LatestMetaDataSize = WriteMetadata(Metadata, AttributeBlocks);
-        if (!m_Parameters.AsyncWrite)
+    if (m_Aggregator->m_Comm.Size() > 1)
+    { // level 1
+        m_Profiler.Start("meta_gather1");
+        size_t LocalSize = MetaBuffer.size();
+        std::vector<size_t> RecvCounts =
+            m_Aggregator->m_Comm.GatherValues(LocalSize, 0);
+        std::vector<char> RecvBuffer;
+        if (m_Aggregator->m_Comm.Rank() == 0)
         {
-            WriteMetadataFileIndex(m_LatestMetaDataPos, m_LatestMetaDataSize);
+            uint64_t TotalSize = 0;
+            for (auto &n : RecvCounts)
+                TotalSize += n;
+            RecvBuffer.resize(TotalSize);
+            /*std::cout << "MD Lvl-1: rank " << m_Comm.Rank() << " gather "
+                      << TotalSize << " bytes from aggregator group"
+                      << std::endl;*/
         }
-    }
-    delete RecvBuffer;
+        m_Aggregator->m_Comm.GathervArrays(MetaBuffer.data(), LocalSize,
+                                           RecvCounts.data(), RecvCounts.size(),
+                                           RecvBuffer.data(), 0);
+        m_Profiler.Stop("meta_gather1");
+        if (m_Aggregator->m_Comm.Rank() == 0)
+        {
+            std::vector<format::BP5Base::MetaMetaInfoBlock>
+                UniqueMetaMetaBlocks;
+            std::vector<uint64_t> DataSizes;
+            std::vector<uint64_t> WriterDataPositions;
+            std::vector<core::iovec> AttributeBlocks;
+            auto Metadata = m_BP5Serializer.BreakoutContiguousMetadata(
+                RecvBuffer, RecvCounts, UniqueMetaMetaBlocks, AttributeBlocks,
+                DataSizes, WriterDataPositions);
+
+            MetaBuffer.clear();
+            MetaBuffer = m_BP5Serializer.CopyMetadataToContiguous(
+                UniqueMetaMetaBlocks, Metadata, AttributeBlocks, DataSizes,
+                WriterDataPositions);
+        }
+    } // level 1
+    m_Profiler.Stop("meta_lvl1");
+    m_Profiler.Start("meta_lvl2");
+    // level 2
+    if (m_Aggregator->m_Comm.Rank() == 0)
+    {
+        std::vector<char> RecvBuffer;
+        std::vector<char> *buf;
+        std::vector<size_t> RecvCounts;
+        size_t LocalSize = MetaBuffer.size();
+        if (m_CommAggregators.Size() > 1)
+        {
+            m_Profiler.Start("meta_gather2");
+            RecvCounts = m_CommAggregators.GatherValues(LocalSize, 0);
+            if (m_CommAggregators.Rank() == 0)
+            {
+                uint64_t TotalSize = 0;
+                for (auto &n : RecvCounts)
+                    TotalSize += n;
+                RecvBuffer.resize(TotalSize);
+                /*std::cout << "MD Lvl-2: rank " << m_Comm.Rank() << " gather "
+                          << TotalSize << " bytes from aggregator group"
+                          << std::endl;*/
+            }
+
+            m_CommAggregators.GathervArrays(
+                MetaBuffer.data(), LocalSize, RecvCounts.data(),
+                RecvCounts.size(), RecvBuffer.data(), 0);
+            buf = &RecvBuffer;
+            m_Profiler.Stop("meta_gather2");
+        }
+        else
+        {
+            buf = &MetaBuffer;
+            RecvCounts.push_back(LocalSize);
+        }
+
+        if (m_CommAggregators.Rank() == 0)
+        {
+            std::vector<format::BP5Base::MetaMetaInfoBlock>
+                UniqueMetaMetaBlocks;
+            std::vector<uint64_t> DataSizes;
+            std::vector<core::iovec> AttributeBlocks;
+            m_WriterDataPos.resize(0);
+            auto Metadata = m_BP5Serializer.BreakoutContiguousMetadata(
+                *buf, RecvCounts, UniqueMetaMetaBlocks, AttributeBlocks,
+                DataSizes, m_WriterDataPos);
+            assert(m_WriterDataPos.size() ==
+                   static_cast<size_t>(m_Comm.Size()));
+            WriteMetaMetadata(UniqueMetaMetaBlocks);
+            m_LatestMetaDataPos = m_MetaDataPos;
+            m_LatestMetaDataSize = WriteMetadata(Metadata, AttributeBlocks);
+            if (!m_Parameters.AsyncWrite)
+            {
+                WriteMetadataFileIndex(m_LatestMetaDataPos,
+                                       m_LatestMetaDataSize);
+            }
+        }
+    } // level 2
+    m_Profiler.Stop("meta_lvl2");
 
     if (m_Parameters.AsyncWrite)
     {
@@ -647,6 +760,8 @@ void BP5Writer::InitParameters()
             m_Parameters.BufferChunkSize = k * m_Parameters.DirectIOAlignOffset;
         }
     }
+
+    m_BP5Serializer.m_StatsLevel = m_Parameters.StatsLevel;
 }
 
 uint64_t BP5Writer::CountStepsInMetadataIndex(format::BufferSTL &bufferSTL)
@@ -926,6 +1041,13 @@ void BP5Writer::InitAggregator()
         m_Aggregator =
             static_cast<aggregator::MPIAggregator *>(&m_AggregatorTwoLevelShm);
     }
+
+    /* comm for Aggregators only.
+     *  We are only interested in the chain of rank 0s
+     */
+    int color = m_Aggregator->m_Comm.Rank();
+    m_CommAggregators =
+        m_Comm.Split(color, 0, "creating level 2 chain of aggregators at Open");
 }
 
 void BP5Writer::InitTransports()
@@ -1432,6 +1554,28 @@ void BP5Writer::Flush(const int transportIndex) {}
 
 void BP5Writer::PerformDataWrite() { FlushData(false); }
 
+void BP5Writer::DestructorClose(bool Verbose) noexcept
+{
+    if (Verbose)
+    {
+        std::cerr << "BP5 Writer \"" << m_Name
+                  << "\" Destroyed without a prior Close()." << std::endl;
+        std::cerr << "This may result in corrupt output." << std::endl;
+    }
+    // close metadata index file
+    UpdateActiveFlag(false);
+    m_IsOpen = false;
+}
+
+BP5Writer::~BP5Writer()
+{
+    if (m_IsOpen)
+    {
+        DestructorClose(m_FailVerbose);
+    }
+    m_IsOpen = false;
+}
+
 void BP5Writer::DoClose(const int transportIndex)
 {
     PERFSTUBS_SCOPED_TIMER("BP5Writer::Close");
@@ -1450,11 +1594,13 @@ void BP5Writer::DoClose(const int transportIndex)
     Seconds wait(0.0);
     if (m_WriteFuture.valid())
     {
+        m_Profiler.Start("WaitOnAsync");
         m_AsyncWriteLock.lock();
         m_flagRush = true;
         m_AsyncWriteLock.unlock();
         m_WriteFuture.get();
         wait += Now() - wait_start;
+        m_Profiler.Stop("WaitOnAsync");
     }
 
     m_FileDataManager.CloseFiles(transportIndex);
@@ -1472,15 +1618,17 @@ void BP5Writer::DoClose(const int transportIndex)
     if (m_Parameters.AsyncWrite)
     {
         // wait until all process' writing thread completes
+        m_Profiler.Start("WaitOnAsync");
         wait_start = Now();
         m_Comm.Barrier();
         AsyncWriteDataCleanup();
         wait += Now() - wait_start;
-        if (m_Comm.Rank() == 0)
+        if (m_Comm.Rank() == 0 && m_Parameters.verbose > 0)
         {
             std::cout << "Close waited " << wait.count()
                       << " seconds on async threads" << std::endl;
         }
+        m_Profiler.Stop("WaitOnAsync");
     }
 
     if (m_Comm.Rank() == 0)
@@ -1581,6 +1729,95 @@ size_t BP5Writer::DebugGetDataBufferSize() const
     return m_BP5Serializer.DebugGetDataBufferSize();
 }
 
+void BP5Writer::PutCommon(VariableBase &variable, const void *values, bool sync)
+{
+    if (!m_BetweenStepPairs)
+    {
+        BeginStep(StepMode::Update);
+    }
+
+    // if the user buffer is allocated on the GPU always use sync mode
+    if (variable.GetMemorySpace(values) != MemorySpace::Host)
+        sync = true;
+
+    size_t *Shape = NULL;
+    size_t *Start = NULL;
+    size_t *Count = NULL;
+    size_t DimCount = variable.m_Count.size();
+
+    if (variable.m_ShapeID == ShapeID::GlobalArray)
+    {
+        Shape = variable.m_Shape.data();
+        Count = variable.m_Count.data();
+        Start = variable.m_Start.data();
+    }
+    else if (variable.m_ShapeID == ShapeID::LocalArray)
+    {
+        Count = variable.m_Count.data();
+    }
+
+    size_t ObjSize;
+    if (variable.m_Type == DataType::Struct)
+    {
+        ObjSize = variable.m_ElementSize;
+    }
+    else
+    {
+        ObjSize = helper::GetDataTypeSize(variable.m_Type);
+    }
+
+    if (!sync)
+    {
+        /* If arrays is small, force copying to internal buffer to aggregate
+         * small writes */
+        size_t n = helper::GetTotalSize(variable.m_Count) * ObjSize;
+        if (n < m_Parameters.MinDeferredSize)
+        {
+            sync = true;
+        }
+    }
+
+    if (!variable.m_MemoryCount.empty())
+    {
+        int DimCount = variable.m_Count.size();
+        std::vector<size_t> ZeroDims(DimCount);
+        // get a temporary span then fill with memselection now
+        format::BufferV::BufferPos bp5span(0, 0, 0);
+        m_BP5Serializer.Marshal((void *)&variable, variable.m_Name.c_str(),
+                                variable.m_Type, variable.m_ElementSize,
+                                DimCount, Shape, Count, Start, nullptr, false,
+                                &bp5span);
+        void *ptr =
+            m_BP5Serializer.GetPtr(bp5span.bufferIdx, bp5span.posInBuffer);
+
+        const bool sourceRowMajor = helper::IsRowMajor(m_IO.m_HostLanguage);
+
+        helper::NdCopy(
+            (const char *)values, helper::CoreDims(ZeroDims),
+            variable.m_MemoryCount, sourceRowMajor, false, (char *)ptr,
+            variable.m_MemoryStart, variable.m_Count, sourceRowMajor, false,
+            ObjSize, helper::CoreDims(), helper::CoreDims(), helper::CoreDims(),
+            helper::CoreDims(), false /* safemode */, MemorySpace::Host);
+    }
+    else
+    {
+        if (variable.m_Type == DataType::String)
+        {
+            std::string &source = *(std::string *)values;
+            void *p = &(source[0]);
+            m_BP5Serializer.Marshal((void *)&variable, variable.m_Name.c_str(),
+                                    variable.m_Type, variable.m_ElementSize,
+                                    DimCount, Shape, Count, Start, &p, sync,
+                                    nullptr);
+        }
+        else
+            m_BP5Serializer.Marshal((void *)&variable, variable.m_Name.c_str(),
+                                    variable.m_Type, variable.m_ElementSize,
+                                    DimCount, Shape, Count, Start, values, sync,
+                                    nullptr);
+    }
+}
+
 #define declare_type(T)                                                        \
     void BP5Writer::DoPut(Variable<T> &variable,                               \
                           typename Variable<T>::Span &span,                    \
@@ -1617,6 +1854,16 @@ ADIOS2_FOREACH_STDTYPE_1ARG(declare_type)
 
 ADIOS2_FOREACH_PRIMITVE_STDTYPE_2ARGS(declare_type)
 #undef declare_type
+
+void BP5Writer::DoPutStructSync(VariableStruct &variable, const void *data)
+{
+    PutCommon(variable, data, true);
+}
+
+void BP5Writer::DoPutStructDeferred(VariableStruct &variable, const void *data)
+{
+    PutCommon(variable, data, false);
+}
 
 } // end namespace engine
 } // end namespace core

@@ -15,9 +15,12 @@
 
 int main(int argc, char **argv)
 {
-    MPI_Init(&argc, &argv);
+    int provided;
 
-    adios2_adios *adios = adios2_init(MPI_COMM_WORLD, adios2_debug_mode_on);
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+
+    adios2_adios *adios = adios2_init_mpi(MPI_COMM_WORLD);
     if (!adios)
     {
         fprintf(stderr, "adios2_init() failed\n");

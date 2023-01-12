@@ -24,12 +24,15 @@ int main(int argc, char *argv[])
     int rank = 0;
     int nproc = 1;
 #if ADIOS2_USE_MPI
-    MPI_Init(&argc, &argv);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &nproc);
-    adios2_adios *adiosH = adios2_init(MPI_COMM_WORLD, adios2_debug_mode_on);
+    adios2_adios *adiosH = adios2_init_mpi(MPI_COMM_WORLD);
 #else
-    adios2_adios *adiosH = adios2_init(adios2_debug_mode_on);
+    adios2_adios *adiosH = adios2_init_serial();
 #endif
 
     char engineName[32] = "BPFile";

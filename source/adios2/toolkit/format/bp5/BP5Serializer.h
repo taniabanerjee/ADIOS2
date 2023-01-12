@@ -64,8 +64,31 @@ public:
                  size_t ElemSize, size_t DimCount, const size_t *Shape,
                  const size_t *Count, const size_t *Offsets, const void *Data,
                  bool Sync, BufferV::BufferPos *span);
+    /*
+     * BP5 has two attribute marshalling methods.  The first,
+     * MarshallAttribute(), creates new MetaMetadata whenever a new
+     * attribute gets marshalled, and produces AttributeData that
+     * contains all extant attributes (so that only the most recent
+     * need be installed to the Deserializer).  The second,
+     * OnetimeMarshalAttribute(), produces MetaMetadata only on the
+     * first timestep, and produces AttributeData that contains only
+     * the attributes that were created or modified on that step (that
+     * is, each timesteps attribute data only contains the delta from
+     * the prior step).  Therefore for timestep X to have the right
+     * attributes *all* attribute data created prior to timestep X
+     * needs to be provided to the Deserializer (not just the most
+     * recent, as with the other approach).  The first approach is
+     * generally more space efficient and convenient for engines,
+     * provided that attributes are few and new attributes are rare.
+     * However, it performs very poorly if, for example, new
+     * attributes are produced on every timestep.  In the latter case,
+     * OnetimeMarshalAttribute() is by far better.
+     */
     void MarshalAttribute(const char *Name, const DataType Type,
                           size_t ElemSize, size_t ElemCount, const void *Data);
+    void OnetimeMarshalAttribute(const core::AttributeBase &baseAttr);
+    void OnetimeMarshalAttribute(const char *Name, const DataType Type,
+                                 size_t ElemCount, const void *Data);
 
     /*
      *  InitStep must be called with an appropriate BufferV subtype before a
@@ -87,16 +110,23 @@ public:
     TimestepInfo CloseTimestep(int timestep, bool forceCopyDeferred = false);
     void PerformPuts(bool forceCopyDeferred = false);
 
+    /*
+     * internal use  This calculates statistics on data that isn't available
+     * until it's ready to be written to disk
+     */
+    void ProcessDeferredMinMax();
+
     core::Engine *m_Engine = NULL;
 
     std::vector<char> CopyMetadataToContiguous(
-        const std::vector<MetaMetaInfoBlock> NewmetaMetaBlocks,
-        const format::Buffer *MetaEncodeBuffer,
-        const format::Buffer *AttributeEncodeBuffer, uint64_t DataSize,
-        uint64_t WriterDataPos) const;
+        const std::vector<BP5Base::MetaMetaInfoBlock> NewMetaMetaBlocks,
+        const std::vector<core::iovec> &MetaEncodeBuffers,
+        const std::vector<core::iovec> &AttributeEncodeBuffers,
+        const std::vector<uint64_t> &DataSizes,
+        const std::vector<uint64_t> &WriterDataPositions) const;
 
     std::vector<core::iovec> BreakoutContiguousMetadata(
-        std::vector<char> *Aggregate, const std::vector<size_t> Counts,
+        std::vector<char> &Aggregate, const std::vector<size_t> Counts,
         std::vector<MetaMetaInfoBlock> &UniqueMetaMetaBlocks,
         std::vector<core::iovec> &AttributeBlocks,
         std::vector<uint64_t> &DataSizes,
@@ -146,6 +176,9 @@ private:
         int AttributeSize = 0;
     };
 
+    FMFormat GenericAttributeFormat = NULL;
+    std::vector<FMFormat> NewStructFormats;
+
     struct DeferredExtern
     {
         size_t MetaOffset;
@@ -155,6 +188,20 @@ private:
         size_t AlignReq;
     };
     std::vector<DeferredExtern> DeferredExterns;
+
+    struct DeferredSpanMinMax
+    {
+        const BufferV::BufferPos Data;
+        const size_t ElemCount;
+        const DataType Type;
+        const MemorySpace MemSpace;
+        const size_t MetaOffset;
+        const size_t MinMaxOffset;
+        const size_t BlockNum;
+    };
+    std::vector<DeferredSpanMinMax> DefSpanMinMax;
+
+    BP5AttrStruct *PendingAttrs = nullptr;
 
     FFSWriterMarshalBase Info;
     void *MetadataBuf = NULL;

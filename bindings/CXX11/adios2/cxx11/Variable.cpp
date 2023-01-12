@@ -38,6 +38,12 @@ namespace adios2
     }                                                                          \
                                                                                \
     template <>                                                                \
+    MemorySpace Variable<T>::GetMemorySpace()                                  \
+    {                                                                          \
+        return m_Variable->m_MemSpace;                                         \
+    }                                                                          \
+                                                                               \
+    template <>                                                                \
     void Variable<T>::SetShape(const Dims &shape)                              \
     {                                                                          \
         helper::CheckForNullptr(m_Variable,                                    \
@@ -162,11 +168,11 @@ namespace adios2
                                      const Params &parameters)                 \
     {                                                                          \
         helper::CheckForNullptr(m_Variable,                                    \
-                                "in call to Variable<T>::AddOperator");        \
+                                "in call to Variable<T>::AddOperation");       \
         if (!op)                                                               \
         {                                                                      \
             throw std::invalid_argument("ERROR: invalid operator, in call to " \
-                                        "Variable<T>::AddOperator");           \
+                                        "Variable<T>::AddOperation");          \
         }                                                                      \
         auto params = op.Parameters();                                         \
         for (const auto &p : parameters)                                       \
@@ -180,6 +186,8 @@ namespace adios2
     size_t Variable<T>::AddOperation(const std::string &type,                  \
                                      const Params &parameters)                 \
     {                                                                          \
+        helper::CheckForNullptr(m_Variable,                                    \
+                                "in call to Variable<T>::AddOperation");       \
         return m_Variable->AddOperation(type, parameters);                     \
     }                                                                          \
                                                                                \

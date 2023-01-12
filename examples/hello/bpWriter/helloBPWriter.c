@@ -39,7 +39,10 @@ int main(int argc, char *argv[])
     int rank, size;
 
 #if ADIOS2_USE_MPI
-    MPI_Init(&argc, &argv);
+    int provided;
+
+    // MPI_THREAD_MULTIPLE is only required if you enable the SST MPI_DP
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 #else
@@ -60,9 +63,9 @@ int main(int argc, char *argv[])
     }
 
 #if ADIOS2_USE_MPI
-    adios2_adios *adios = adios2_init(MPI_COMM_WORLD, adios2_debug_mode_on);
+    adios2_adios *adios = adios2_init_mpi(MPI_COMM_WORLD);
 #else
-    adios2_adios *adios = adios2_init(adios2_debug_mode_on);
+    adios2_adios *adios = adios2_init_serial();
 #endif
 
     check_handler(adios, "adios");

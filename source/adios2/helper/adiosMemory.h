@@ -18,6 +18,7 @@
 /// \endcond
 
 #include "adios2/common/ADIOSTypes.h"
+#include "adios2/helper/adiosType.h"
 
 namespace adios2
 {
@@ -39,30 +40,23 @@ template <class T>
 void InsertToBuffer(std::vector<char> &buffer, const T *source,
                     const size_t elements = 1) noexcept;
 
-#ifdef ADIOS2_HAVE_CUDA
 /*
  * Copies data from a GPU buffer to a specific location in the adios buffer
  */
 template <class T>
 void CopyFromGPUToBuffer(std::vector<char> &dest, size_t &position,
-                         const T *source, const size_t elements = 1) noexcept;
+                         const T *source, MemorySpace memSpace,
+                         const size_t elements = 1) noexcept;
 template <class T>
-void CudaMemCopyToBuffer(char *dest, size_t position, const T *GPUbuffer,
-                         const size_t size) noexcept;
+void CopyFromGPUToBuffer(char *dest, size_t position, const T *GPUbuffer,
+                         MemorySpace memSpace, const size_t size) noexcept;
 
 /*
  * Copies data from a specific location in the adios buffer to a GPU buffer
  */
 template <class T>
-void CudaMemCopyFromBuffer(T *GPUbuffer, size_t position, const char *source,
-                           const size_t size) noexcept;
-
-/**
- * Wrapper around cudaMemcpy needed for isolating CUDA interface dependency
- */
-void MemcpyGPUToBuffer(void *dst, const char *GPUbuffer, size_t byteCount);
-void MemcpyBufferToGPU(char *GPUbuffer, const char *src, size_t byteCount);
-#endif
+void CopyFromBufferToGPU(T *GPUbuffer, size_t position, const char *source,
+                         MemorySpace memSpace, const size_t size) noexcept;
 
 /**
  * Copies data to a specific location in the buffer updating position
@@ -185,7 +179,7 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
                           const bool isRowMajor = true,
                           const bool reverseDimensions = false,
                           const bool endianReverse = false,
-                          const bool isGPU = false);
+                          const MemorySpace memSpace = MemorySpace::Host);
 
 template <class T>
 void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
@@ -195,12 +189,12 @@ void ClipContiguousMemory(T *dest, const Dims &destStart, const Dims &destCount,
                           const bool isRowMajor = true,
                           const bool reverseDimensions = false,
                           const bool endianReverse = false,
-                          const bool isGPU = false);
+                          const MemorySpace memSpace = MemorySpace::Host);
 
 template <class T>
 void CopyContiguousMemory(const char *src, const size_t stride, T *dest,
                           const bool endianReverse = false,
-                          const bool isGPU = false);
+                          const MemorySpace memSpace = MemorySpace::Host);
 
 /**
  * Clips a vector returning the sub-vector between start and end (end is
@@ -253,12 +247,14 @@ void Resize(std::vector<T> &vec, const size_t dataSize, const std::string hint,
  *                 stack/simulated stack which has more overhead for the algm.
  */
 
-int NdCopy(const char *in, const Dims &inStart, const Dims &inCount,
+int NdCopy(const char *in, const CoreDims &inStart, const CoreDims &inCount,
            const bool inIsRowMajor, const bool inIsLittleEndian, char *out,
-           const Dims &outStart, const Dims &outCount, const bool outIsRowMajor,
-           const bool outIsLittleEndian, const int typeSize,
-           const Dims &inMemStart = Dims(), const Dims &inMemCount = Dims(),
-           const Dims &outMemStart = Dims(), const Dims &outMemCount = Dims(),
+           const CoreDims &outStart, const CoreDims &outCount,
+           const bool outIsRowMajor, const bool outIsLittleEndian,
+           const int typeSize, const CoreDims &inMemStart = CoreDims(),
+           const CoreDims &inMemCount = CoreDims(),
+           const CoreDims &outMemStart = CoreDims(),
+           const CoreDims &outMemCount = CoreDims(),
            const bool safeMode = false,
            MemorySpace MemSpace = MemorySpace::Host);
 
