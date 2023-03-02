@@ -691,9 +691,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // MPI_Barrier(MPI_COMM_WORLD);
         // start = MPI_Wtime();
-        GPTLstart("mgard decompress");
-        mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
-        GPTLstop("mgard decompress");
+        //GPTLstart("mgard decompress");
+        //mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
+        //GPTLstop("mgard decompress");
         // MPI_Barrier(MPI_COMM_WORLD);
         // end = MPI_Wtime();
         // if (my_rank == 0)
@@ -701,8 +701,10 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
         // }
         GPTLstart("Lagrange");
-        optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
-        GPTLstop("Lagrange");
+        //optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
+        // dataIn should contain decompressed data
+        optim.computeLagrangeParameters(reinterpret_cast<const double *>(dataIn), blockCount);
+				GPTLstop("Lagrange");
         bufferOutOffset += mgardBufferSize;
 
         // dump((void *)dataIn, blockCount, "forg", my_rank);

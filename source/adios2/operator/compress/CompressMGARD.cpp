@@ -143,8 +143,13 @@ size_t CompressMGARD::Operate(const char *dataIn, const Dims &blockStart,
     size_t sizeOut =
         helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type));
     void *compressedData = bufferOut + bufferOutOffset;
+    mgard_x::Config config;
+    config.adjust_shape = true;
+    config.compress_with_dryrun = true;
+    config.lossless = mgard_x::lossless_type::Huffman_LZ4;
+    //config.log_level |= mgard_x::log::INFO | mgard_x::log::TIME;
     mgard_x::compress(mgardDim, mgardType, mgardCount, tolerance, s,
-                      errorBoundType, dataIn, compressedData, sizeOut, true);
+                      errorBoundType, dataIn, compressedData, sizeOut, config, true);
 
     bufferOutOffset += sizeOut;
 
