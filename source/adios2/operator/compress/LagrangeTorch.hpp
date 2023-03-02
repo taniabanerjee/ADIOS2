@@ -10,9 +10,9 @@ class LagrangeTorch : public LagrangeOptimizer
 {
     public:
         // Constructor
-        LagrangeTorch(const char* species, const char* precision);
+        LagrangeTorch(const char* species, const char* precision, torch::DeviceType device);
         LagrangeTorch(size_t planeOffset, size_t nodeOffset,
-            size_t p, size_t n, size_t vx, size_t vy, const uint8_t species, const uint8_t precision);
+            size_t p, size_t n, size_t vx, size_t vy, const uint8_t species, const uint8_t precision, torch::DeviceType device);
 
         // Destructor
         ~LagrangeTorch();
@@ -56,8 +56,10 @@ class LagrangeTorch : public LagrangeOptimizer
         at::Tensor myVthTorch;
         at::Tensor myVth2Torch;
         at::Tensor myLagrangesTorch;
-        static at::TensorOptions ourGPUOptions;
-        static at::TensorOptions ourCPUOptions;
+        // static at::TensorOptions ourOptions;
+        // static at::TensorOptions ourCPUOptions;
+        at::TensorOptions myOption;
+        torch::DeviceType device;
 };
 
 #endif

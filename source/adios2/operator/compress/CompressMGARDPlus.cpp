@@ -161,7 +161,9 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             auto t = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
-            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            // TODO: hard-coded device
+            // at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64);
             auto idx = at::randint(8, {dims[2]}, opt);
             const at::Scalar start = 0;
             const at::Scalar last = dims[2]-1;
@@ -619,8 +621,24 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     }
 #endif
 
+    // Pytorch options
+    Options options;
+    options.device = torch::kCUDA;
+    // The following not working correctly
+    /*
+    if (torch::cuda::is_available()) {
+        std::cout << "CUDA is not available. Using CPU." << std::endl;
+        options.device = torch::kCPU;
+    }
+    */
+   if (!atoi(get_param(m_Parameters, "use_cuda", "1").c_str()))
+   {
+        std::cout << "Using CPU." << std::endl;
+        options.device = torch::kCPU;
+   }
+
     // Instantiate LagrangeTorch
-    LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str());
+    LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -629,9 +647,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     size_t bufferOutOffset = 0;
     const uint8_t bufferVersion = pq_yes ? 1 : 2;
 
-    // Pytorch options
-    Options options;
-    options.device = torch::kCUDA;
     options.use_ddp = atoi(get_param(m_Parameters, "use_ddp", "0").c_str());
     options.batch_size = atoi(get_param(m_Parameters, "batch_size", "128").c_str());
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
@@ -661,7 +676,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 #if 0
         if (leb > 0 && ueb > 0) {
             size_t offset = 0;
-            auto perm_diff = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA);
+            auto perm_diff = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(options.device);
             m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, perm_diff, {0, 0, 0, 0}, blockCount, type, bufferOut+offset, vx, vy, pd_omax_b, pd_omin_b)).c_str();
             // std::cout << "came here 1" << std::endl;
         }
@@ -1063,7 +1078,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                         }
                     }
                 }
-                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(torch::kCUDA);
+                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(options.device);
                 resNodes =  nrmse_index[0].sizes()[0];
             }
             using namespace torch::indexing;
@@ -1245,7 +1260,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         std::vector<torch::Tensor> encode_vector;
         for (auto &batch : *loader)
         {
-            auto data = batch.data.to(torch::kCUDA);
+            auto data = batch.data.to(options.device);
             auto _encode = module.run_method("encode", data).toTensor();
             // std::cout << "_encode.sizes = " << _encode.sizes() << std::endl;
             _encode = _encode.to(torch::kCPU);
@@ -1295,7 +1310,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         for (int i = 0; i < numObjs; i += options.batch_size)
         {
             auto batch = encode.slice(0, i, i + options.batch_size < numObjs ? i + options.batch_size : numObjs);
-            batch = batch.to(torch::kCUDA);
+            batch = batch.to(options.device);
             auto _decode = module.run_method("decode", batch).toTensor();
             _decode = _decode.to(torch::kCPU);
             decode_vector.push_back(_decode);
@@ -1368,7 +1383,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                         }
                     }
                 }
-                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(torch::kCUDA);
+                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(options.device);
                 resNodes = nrmse_index[0].sizes()[0];
             }
             using namespace torch::indexing;
@@ -1532,6 +1547,15 @@ Dims CompressMGARDPlus::GetBlockDims(const char *bufferIn, size_t bufferInOffset
 
 size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffset, const size_t sizeIn, char *dataOut)
 {
+    // Pytorch options
+    Options options;
+    options.device = torch::kCUDA;
+    if (!atoi(get_param(m_Parameters, "use_cuda", "1").c_str()))
+    {
+        std::cout << "Using CPU." << std::endl;
+        options.device = torch::kCPU;
+    }
+
     // Do NOT remove even if the buffer version is updated. Data might be still
     // in lagacy formats. This function must be kept for backward compatibility.
     // If a newer buffer format is implemented, create another function, e.g.
@@ -1573,7 +1597,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision);
+    LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
     double *doubleData = reinterpret_cast<double *>(dataOut);
     dataOut = optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
 
