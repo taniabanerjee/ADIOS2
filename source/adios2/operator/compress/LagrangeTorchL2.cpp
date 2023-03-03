@@ -298,9 +298,9 @@ int LagrangeTorchL2::computeLagrangeParameters(
     A = at::transpose(A, 0, 1);
     auto U = torch::zeros({nodes,myVxCount*myVyCount,4}, ourGPUOptions);
     for (int index=0; index<nodes; ++index) {
-        U[index] = std::get<1>(at::svd(A[index], false, false));
+        U[index] = std::get<0>(torch::linalg::svd(at::transpose(A[index], 0, 1), false));
     }
-    std::cout << "U shape" << U.sizes() << std::endl;
+    // std::cout << "U shape" << U.sizes() << std::endl;
     // std::cout << "A shape after transpose " << A.sizes() << std::endl;
     auto b_constant = torch::zeros({4,nodes}, ourGPUOptions);
     b_constant[0] = D_torch_sum;
@@ -309,48 +309,53 @@ int LagrangeTorchL2::computeLagrangeParameters(
     b_constant[3] = Rpara_torch*D_torch_sum;
     // std::cout << "b_constant shape " << b_constant.sizes() << std::endl;
     b_constant = at::transpose(b_constant, 0, 1);
+    auto UT = at::transpose(U, 1, 2);
+    // std::cout << "UT shape" << UT.sizes() << std::endl;
+    auto rdata = recon_data.reshape({nodes, myVxCount*myVyCount, 1});
+    auto odata = orig_data.reshape({nodes, myVxCount*myVyCount, 1});
+    auto diff = odata - rdata;
+    diff = diff.reshape({nodes, myVxCount*myVyCount, 1});
+    // std::cout << "diff shape" << diff.sizes() << std::endl;
+    auto outputs = rdata + at::bmm(U, at::bmm(UT, diff));
+    std::cout << "outputs shape 1" << outputs.sizes() << std::endl;
+    outputs = at::squeeze(outputs, 2);
+    outputs = outputs.reshape({1, nodes, myVxCount, myVyCount});
+    std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
+#if 0
     int batchSize = 128;
     int numBatches = nodes/batchSize + (nodes%batchSize == 0? 0 : 1);
     for (int batch = 0; batch < numBatches; ++batch) {
         int startIndex = batch*batchSize;
         int endIndex = (batch < numBatches-1) ? (batch + 1)*batchSize : nodes;
-        auto A_batch = A.index({Slice({startIndex,endIndex}), Slice(None), Slice(None)});
-        std::cout << "A_batch shape " << A_batch.sizes() << std::endl;
-        auto b_batch = b_constant.index({Slice({startIndex,endIndex}), Slice(None)});
-        b_batch = b_batch.reshape({batchSize, b_constant.sizes()[1], 1});
-        std::cout << "b_batch shape " << b_batch.sizes() << std::endl;
-        auto AT = at::transpose(A_batch, 1, 2);
-        std::cout << "AT shape after transpose " << AT.sizes() << std::endl;
-        auto inv_A_AT = at::inverse(at::bmm(A_batch, AT));
-        std::cout << "inv_A_AT shape " << inv_A_AT.sizes() << std::endl;
-        auto eye_gpu = at::eye(myVxCount*myVyCount, ourGPUOptions);
-        std::cout << "eye_gpu shape after transpose " << eye_gpu.sizes() << std::endl;
-        auto term1 = at::bmm(AT, inv_A_AT);
-        std::cout << "term1 shape " << term1.sizes() << std::endl;
-        auto term2 = at::bmm(at::bmm(AT, inv_A_AT), A_batch);
-        std::cout << "term2 shape " << term2.sizes() << std::endl;
-        auto data = recondatain[iphi].index({Slice({startIndex,endIndex}), Slice(None), Slice(None)}).reshape({batchSize, myVxCount*myVyCount, 1});
+        std::cout << "start index " << startIndex << " end index " << endIndex << std::endl;
+        auto U_batch = U.index({Slice({startIndex,endIndex}), Slice(None), Slice(None)});
+        std::cout << "U_batch shape " << U_batch.sizes() << std::endl;
+        auto UT = at::transpose(U_batch, 1, 2);
+        std::cout << "UT shape after transpose " << UT.sizes() << std::endl;
+        auto data = recon_data.index({Slice({startIndex,endIndex}), Slice(None), Slice(None)}).reshape({batchSize, myVxCount*myVyCount, 1});
         std::cout << "recon shape " << data.sizes() << std::endl;
-        auto term3 = at::bmm((eye_gpu - at::bmm(at::bmm(AT, inv_A_AT), A_batch)), data);
-        std::cout << "term3 shape " << term3.sizes() << std::endl;
-        auto term5 = at::bmm(at::bmm(AT, inv_A_AT), b_batch);
-        std::cout << "term5 shape " << term5.sizes() << std::endl;
-        auto outputs = at::bmm((eye_gpu - at::bmm(at::bmm(AT, inv_A_AT), A_batch)), data) + at::bmm(at::bmm(AT, inv_A_AT), b_batch);
+        auto odata = orig_data.index({Slice({startIndex,endIndex}), Slice(None), Slice(None)}).reshape({batchSize, myVxCount*myVyCount, 1});
+        std::cout << "o shape " << odata.sizes() << std::endl;
+        auto diff = odata - data;
+        auto outputs = data + at::bmm(U_batch, at::bmm(UT, diff));
         std::cout << "outputs shape 1 " << outputs.sizes() << std::endl;
         outputs = at::squeeze(outputs, 2);
         std::cout << "outputs shape 2 " << outputs.sizes() << std::endl;
         tensors.push_back(outputs);
         // std::cout << "came here 4.5" << std::endl;
     }
-    myLagrangesTorch = at::squeeze(b_constant, 2);
-    unconverged_size += 1; // how many images are represented as is
-
-    GPTLstop("compute lambdas");
     at::Tensor combined = at::concat(tensors).reshape({1, nodes, myVxCount, myVyCount});
-    compareQoIs(recondatain, combined);
     std::cout << "Tensor output" << combined.sizes() << std::endl;
     auto combined_cont = combined.contiguous().cpu();
     std::vector<double> combinedVec(combined_cont.data_ptr<double>(), combined_cont.data_ptr<double>() + combined_cont.numel());
+#endif
+    std::cout << "b_constant shape " << b_constant.sizes() << std::endl;
+    myLagrangesTorch = b_constant;
+    unconverged_size += 1; // how many images are represented as is
+
+    GPTLstop("compute lambdas");
+    std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
+    compareQoIs(recondatain, outputs);
 #if 0
         std::ofstream myfile;
         std::string fname = "output_data_" + std::to_string(my_rank) + ".txt";
@@ -368,9 +373,9 @@ int LagrangeTorchL2::computeLagrangeParameters(
         myfile = fopen(fname.c_str(), "w");
         fprintf(myfile, "Start index: Plane %d Node %d Vx %d Vy %d\n", myPlaneOffset, myNodeOffset, 0, 0);
         fprintf(myfile, "Total counts: Plane %d Node %d Vx %d Vy %d\n", myPlaneCount, myNodeCount, myVxCount, myVyCount);
-        for (double d: combinedVec) {
-            fprintf(myfile, "%20.10f\n", d);
-        }
+        // for (double d: combinedVec) {
+            // fprintf(myfile, "%20.10f\n", d);
+        // }
         fclose(myfile);
 #endif
 
