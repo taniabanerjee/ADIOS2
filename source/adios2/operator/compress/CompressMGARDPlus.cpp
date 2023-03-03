@@ -698,7 +698,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 #endif
         // m_Parameters["tolerance"] = std::to_string(1e17+my_rank * 1e15);
         // std::cout << "tolerance " << m_Parameters["tolerance"] << std::endl;
-        displayGPUMemory("#1", my_rank);
+        // displayGPUMemory("#1", my_rank);
         CompressMGARD mgard(m_Parameters);
         // MPI_Barrier(MPI_COMM_WORLD);
         // double start = MPI_Wtime();
@@ -710,7 +710,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         myfile.open(fname.c_str());
         myfile << my_rank << " - mgard size:" << mgardBufferSize << " :num images " << blockCount[2] << std::endl;
         myfile.close();
-        displayGPUMemory("#2", my_rank);
+        // displayGPUMemory("#2", my_rank);
 
         // MPI_Barrier(MPI_COMM_WORLD);
         // double end = MPI_Wtime();
@@ -722,7 +722,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
 
         // MPI_Barrier(MPI_COMM_WORLD);
-        // start = MPI_Wtime();
+        // start = MPI_Wtime();q
         GPTLstart("mgard decompress");
         mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
         GPTLstop("mgard decompress");
@@ -732,11 +732,15 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // {
         // printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
         // }
-        displayGPUMemory("#3", my_rank);
+        // displayGPUMemory("#3", my_rank);
         GPTLstart("Lagrange");
+        c10::cuda::CUDACachingAllocator::emptyCache();
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
+        c10::cuda::CUDACachingAllocator::emptyCache();
+        // THCCachingAllocator_emptyCache();
+
         GPTLstop("Lagrange");
-        displayGPUMemory("#4", my_rank);
+        // displayGPUMemory("#4", my_rank);
         bufferOutOffset += mgardBufferSize;
 
         // dump((void *)dataIn, blockCount, "forg", my_rank);
@@ -1533,7 +1537,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
     // for your second double number and so on
 #endif
-    displayGPUMemory("#5", my_rank);
+    // displayGPUMemory("#5", my_rank);
     if (bufferVersion != 1)
     {
         size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["prec"].c_str());
@@ -1546,11 +1550,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     char *dataOut = new char[arraySize];
     size_t result = InverseOperate(bufferOut, bufferOutOffset, dataOut);
 #endif
-
-    char fname[80];
-    sprintf(fname, "mgardplus-timing.%d.txt", my_rank);
-    // GPTLpr_file(fname);
-    GPTLpr_summary_file(MPI_COMM_WORLD, "mgardplus-timing.summary.txt");
+    
+    // char fname[80];
+    // sprintf(fname, "mgardplus-timing.%d.txt", my_rank);
+    // // GPTLpr_file(fname);
+    // GPTLpr_summary_file(MPI_COMM_WORLD, "mgardplus-timing.summary.txt");
     return bufferOutOffset;
 }
 

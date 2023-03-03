@@ -64,7 +64,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
     // MPI_Barrier(MPI_COMM_WORLD);
     // start = MPI_Wtime();
     // std::cout << "came here 4.0" << std::endl;
-    displayGPUMemory("#A", my_rank);
+    // displayGPUMemory("#A", my_rank);
     GPTLstart("compute lambdas");
     int ii, i, j, k, l, m;
     auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
@@ -78,8 +78,9 @@ int LagrangeTorchL2::computeLagrangeParameters(
     auto V2_torch = myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
+    c10::cuda::CUDACachingAllocator::emptyCache();
 
-    displayGPUMemory("#B", my_rank);
+    // displayGPUMemory("#B", my_rank);
     int breg_index = 0;
     int iphi, idx;
     std::vector <at::Tensor> tensors;
@@ -89,22 +90,25 @@ int LagrangeTorchL2::computeLagrangeParameters(
     auto D_torch = (f0_f_torch * myVolumeTorch);
     auto D_torch_sum = D_torch.sum({1, 2});
     auto aD_torch = D_torch_sum*mySmallElectronCharge;
+    c10::cuda::CUDACachingAllocator::emptyCache();
 
-    displayGPUMemory("#C", my_rank);
+    // displayGPUMemory("#C", my_rank);
     // std::vector<double> U(nodes, 0);
     std::vector<double> Tperp(nodes, 0);
     auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
     auto U_torch_sum = U_torch.sum({1, 2})/D_torch_sum;
     auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
+    c10::cuda::CUDACachingAllocator::emptyCache();
 
-    displayGPUMemory("#D", my_rank);
+    // displayGPUMemory("#D", my_rank);
     std::vector<double> Tpara(nodes, 0);
     std::vector<double> Rpara(nodes, 0);
     auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
     auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1, 2}))/D_torch_sum/mySmallElectronCharge;
     auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
+    c10::cuda::CUDACachingAllocator::emptyCache();
 
-    displayGPUMemory("#E", my_rank);
+    // displayGPUMemory("#E", my_rank);
     auto b_constant = torch::zeros({4,nodes}, this->myOption);
     b_constant[0] = D_torch_sum;
     b_constant[1] = U_torch_sum*D_torch_sum;
@@ -120,7 +124,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
     }
     GPTLstop("compute lambdas");
 
-    displayGPUMemory("#F", my_rank);
+    // displayGPUMemory("#F", my_rank);
     // std::cout << "came here 4.1" << std::endl;
     auto recon_data = recondatain[iphi];
     auto orig_data = origdatain[iphi];
@@ -130,18 +134,21 @@ int LagrangeTorchL2::computeLagrangeParameters(
     A[1] = V2_torch.reshape({nodes,myVxCount*myVyCount});
     A[2] = V3_torch.reshape({nodes,myVxCount*myVyCount});
     A[3] = V4_torch.reshape({nodes,myVxCount*myVyCount});
+    c10::cuda::CUDACachingAllocator::emptyCache();
 
-    displayGPUMemory("#G", my_rank);
+    // displayGPUMemory("#G", my_rank);
     // std::cout << "A shape " << A.sizes() << std::endl;
     A = at::transpose(A, 0, 1);
     auto U = torch::zeros({nodes,myVxCount*myVyCount,4}, this->myOption);
     for (int index=0; index<nodes; ++index) {
         U[index] = std::get<0>(torch::linalg::svd(at::transpose(A[index], 0, 1), false));
     }
+    c10::cuda::CUDACachingAllocator::emptyCache();
+    
     // std::cout << "U shape" << U.sizes() << std::endl;
     // std::cout << "A shape after transpose " << A.sizes() << std::endl;
 
-    displayGPUMemory("#H", my_rank);
+    // displayGPUMemory("#H", my_rank);
     auto UT = at::transpose(U, 1, 2);
     // std::cout << "UT shape" << UT.sizes() << std::endl;
     auto rdata = recon_data.reshape({nodes, myVxCount*myVyCount, 1});
@@ -151,13 +158,14 @@ int LagrangeTorchL2::computeLagrangeParameters(
     // std::cout << "diff shape" << diff.sizes() << std::endl;
     auto outputs = rdata + at::bmm(U, at::bmm(UT, diff));
     // std::cout << "outputs shape 1" << outputs.sizes() << std::endl;
+    c10::cuda::CUDACachingAllocator::emptyCache();
     
-    displayGPUMemory("#I", my_rank);
+    // displayGPUMemory("#I", my_rank);
     outputs = at::squeeze(outputs, 2);
     outputs = outputs.reshape({1, nodes, myVxCount, myVyCount});
     // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
     // std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
-    displayGPUMemory("#J", my_rank);
+    // displayGPUMemory("#J", my_rank);
     compareQoIs(recondatain, outputs);
     return 0;
 }
