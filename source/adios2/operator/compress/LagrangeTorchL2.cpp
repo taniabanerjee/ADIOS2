@@ -17,6 +17,19 @@
 #include <gptlmpi.h>
 #include <stdio.h>
 
+#include <cuda.h>
+#include <cuda_runtime.h>
+
+static void displayGPUMemory(std::string msg, int rank)
+{
+	CUresult uRet;
+	size_t free1;
+	size_t total1;
+	uRet = cuMemGetInfo(&free1, &total1);
+	if (uRet == CUDA_SUCCESS)
+		printf("%d: %s FreeMemory = %d Mb in TotalMeory = %d Mb\n", rank, msg.c_str(), free1 / 1024 / 1024, total1 / 1024 / 1024);
+}
+
 
 // Define static class members
 // at::TensorOptions LagrangeTorchL2::ourGPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
