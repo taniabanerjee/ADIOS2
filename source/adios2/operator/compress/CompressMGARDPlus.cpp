@@ -13,6 +13,7 @@
 #include "CompressSZ.h"
 #include "CompressZFP.h"
 #include "LagrangeTorch.hpp"
+#include "LagrangeTorchL2.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 #include <cassert>
@@ -47,6 +48,19 @@
 #include <memory>
 #include <string>
 #include <cstdlib>
+
+#include <cuda.h>
+#include <cuda_runtime.h>
+
+static void displayGPUMemory(std::string msg, int rank)
+{
+	CUresult uRet;
+	size_t free1;
+	size_t total1;
+	uRet = cuMemGetInfo(&free1, &total1);
+	if (uRet == CUDA_SUCCESS)
+		printf("%d: %s FreeMemory = %d Mb in TotalMeory = %d Mb\n", rank, msg.c_str(), free1 / 1024 / 1024, total1 / 1024 / 1024);
+}
 
 template <class T>
 std::string
@@ -638,7 +652,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
    }
 
     // Instantiate LagrangeTorch
-    LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    // LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    LagrangeTorchL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -683,6 +698,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 #endif
         // m_Parameters["tolerance"] = std::to_string(1e17+my_rank * 1e15);
         // std::cout << "tolerance " << m_Parameters["tolerance"] << std::endl;
+        displayGPUMemory("#1", my_rank);
         CompressMGARD mgard(m_Parameters);
         // MPI_Barrier(MPI_COMM_WORLD);
         // double start = MPI_Wtime();
@@ -694,6 +710,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         myfile.open(fname.c_str());
         myfile << my_rank << " - mgard size:" << mgardBufferSize << " :num images " << blockCount[2] << std::endl;
         myfile.close();
+        displayGPUMemory("#2", my_rank);
 
         // MPI_Barrier(MPI_COMM_WORLD);
         // double end = MPI_Wtime();
@@ -715,9 +732,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // {
         // printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
         // }
+        displayGPUMemory("#3", my_rank);
         GPTLstart("Lagrange");
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
         GPTLstop("Lagrange");
+        displayGPUMemory("#4", my_rank);
         bufferOutOffset += mgardBufferSize;
 
         // dump((void *)dataIn, blockCount, "forg", my_rank);
@@ -1514,6 +1533,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
     // for your second double number and so on
 #endif
+    displayGPUMemory("#5", my_rank);
     if (bufferVersion != 1)
     {
         size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["prec"].c_str());
