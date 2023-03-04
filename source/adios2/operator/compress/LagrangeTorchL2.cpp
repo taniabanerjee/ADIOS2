@@ -108,25 +108,53 @@ int LagrangeTorchL2::computeLagrangeParameters(
     A[3] = V4_torch.reshape({nodes,myVxCount*myVyCount});
     // std::cout << "A shape " << A.sizes() << std::endl;
     A = at::transpose(A, 0, 1);
-    auto U = torch::zeros({nodes,myVxCount*myVyCount,4}, ourGPUOptions);
-    for (int index=0; index<nodes; ++index) {
-        U[index] = std::get<0>(torch::linalg::svd(at::transpose(A[index], 0, 1), false));
-    }
-    // std::cout << "U shape" << U.sizes() << std::endl;
-    // std::cout << "A shape after transpose " << A.sizes() << std::endl;
-    auto UT = at::transpose(U, 1, 2);
-    // std::cout << "UT shape" << UT.sizes() << std::endl;
+    // auto U = torch::zeros({nodes,myVxCount*myVyCount,4}, ourGPUOptions);
     auto rdata = recon_data.reshape({nodes, myVxCount*myVyCount, 1});
     auto odata = orig_data.reshape({nodes, myVxCount*myVyCount, 1});
+    auto outputs = torch::zeros({nodes, myVxCount, myVyCount}, ourGPUOptions);
+    for (int index=0; index<nodes; ++index) {
+        auto A_idx = A[index];
+        std::cout << "A_idx shape " << A_idx.sizes() << std::endl;
+        auto A_idx_T = at::transpose(A_idx, 0, 1);
+        std::cout << "A_idx_T shape " << A_idx_T.sizes() << std::endl;
+        auto Q = at::matmul(A_idx_T, at::inverse(at::matmul(A_idx, A_idx_T)));
+        std::cout << "Q shape " << Q.sizes() << std::endl;
+        auto U_idx = std::get<0>(torch::linalg::svd(A_idx_T, false));
+        std::cout << "U_idx shape " << U_idx.sizes() << std::endl;
+        auto U_idx_T = at::transpose(U_idx, 0, 1);
+        std::cout << "U_idx_T shape " << U_idx_T.sizes() << std::endl;
+        auto I = at::eye(myVxCount*myVyCount, ourGPUOptions);
+        // U[index] = U_idx;
+        // auto datadiff = odata[index] - rdata[index];
+        // std::cout << "data diff shape " << datadiff.sizes() << std::endl;
+        // auto temp = at::matmul(U_idx, at::matmul(U_idx_T, datadiff));
+        auto temp = I - at::matmul(U_idx, U_idx_T);
+        std::cout << "temp shape " << temp.sizes() << std::endl;
+        auto R = at::matmul(temp, rdata[index]);
+        std::cout << "R shape " << R.sizes() << std::endl;
+        // auto o_idx = rdata[index] + temp;
+        std::cout << "b shape " << b_constant[index].sizes() << std::endl;
+        auto b = b_constant[index].reshape({4, 1}).to(torch::kFloat32);
+        b = b.to(torch::kFloat64);
+        auto o_idx = R + at::matmul(Q, b);
+        std::cout << "o_idx shape " << o_idx.sizes() << std::endl;
+        outputs[index] = o_idx.reshape({myVxCount, myVyCount});
+    }
+#if 0
+    std::cout << "U shape" << U.sizes() << std::endl;
+    std::cout << "A shape after transpose " << A.sizes() << std::endl;
+    auto UT = at::transpose(U, 1, 2);
+    std::cout << "UT shape" << UT.sizes() << std::endl;
     auto diff = odata - rdata;
     diff = diff.reshape({nodes, myVxCount*myVyCount, 1});
-    // std::cout << "diff shape" << diff.sizes() << std::endl;
+    std::cout << "diff shape" << diff.sizes() << std::endl;
     auto outputs = rdata + at::bmm(U, at::bmm(UT, diff));
-    // std::cout << "outputs shape 1" << outputs.sizes() << std::endl;
+    std::cout << "outputs shape 1" << outputs.sizes() << std::endl;
     outputs = at::squeeze(outputs, 2);
+#endif
     outputs = outputs.reshape({1, nodes, myVxCount, myVyCount});
-    // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
-    // std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
+    std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
+    std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
     compareQoIs(recondatain, outputs);
     return 0;
 }
