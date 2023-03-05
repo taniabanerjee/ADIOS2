@@ -38,70 +38,15 @@ LagrangeTorchL2::~LagrangeTorchL2()
 {
 }
 
-int LagrangeTorchL2::computeLagrangeParameters(
-    const double* reconData, adios2::Dims blockCount)
+void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tensor &recondatain, at::Tensor &b_constant)
 {
-    int my_rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-    double start, end;
-    // MPI_Barrier(MPI_COMM_WORLD);
-    // start = MPI_Wtime();
-    // std::cout << "came here 4.0" << std::endl;
-    GPTLstart("compute lambdas");
-    int ii, i, j, k, l, m;
-    auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
-                  .permute({0, 2, 1, 3});
-    // std::cout << "recondatain sizes " << recondatain.sizes() << std::endl;
-    auto origdatain = myDataInTorch.reshape({1, blockCount[0]*blockCount[2], blockCount[1], blockCount[3]});
-    // std::cout << "myDataInTorch sizes " << myDataInTorch.sizes() << std::endl;
-    // std::cout << "origdatain sizes " << origdatain.sizes() << std::endl;
-    // recondatain = at::clamp(recondatain, at::Scalar(100));
-    int nodes = myNodeCount*myPlaneCount;
     auto V2_torch = myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
 
-    int breg_index = 0;
-    int iphi, idx;
-    std::vector <at::Tensor> tensors;
-    iphi = 0;
-    std::vector<double> D(nodes, 0);
-    auto f0_f_torch = origdatain[iphi];
-    auto D_torch = (f0_f_torch * myVolumeTorch);
-    auto D_torch_sum = D_torch.sum({1, 2});
-    auto aD_torch = D_torch_sum*mySmallElectronCharge;
-
-    // std::vector<double> U(nodes, 0);
-    std::vector<double> Tperp(nodes, 0);
-    auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
-    auto U_torch_sum = U_torch.sum({1, 2})/D_torch_sum;
-    auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
-
-    std::vector<double> Tpara(nodes, 0);
-    std::vector<double> Rpara(nodes, 0);
-    auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
-    auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1, 2}))/D_torch_sum/mySmallElectronCharge;
-    auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
-
-    auto b_constant = torch::zeros({4,nodes}, ourGPUOptions);
-    b_constant[0] = D_torch_sum;
-    b_constant[1] = U_torch_sum*D_torch_sum;
-    b_constant[2] = Tperp_torch*aD_torch;
-    b_constant[3] = Rpara_torch*D_torch_sum;
-    // std::cout << "b_constant shape " << b_constant.sizes() << std::endl;
-    b_constant = at::transpose(b_constant, 0, 1);
-    if (myPrecision == 1) {
-        myLagrangesTorch = b_constant.to(torch::kFloat32);
-        b_constant = (b_constant.to(torch::kFloat32)).to(torch::kFloat64);
-    }
-    else{
-        myLagrangesTorch = b_constant;
-    }
-    GPTLstop("compute lambdas");
     // std::cout << "came here 4.1" << std::endl;
     auto recon_data = recondatain[iphi];
-    auto orig_data = origdatain[iphi];
-    using namespace torch::indexing;
+    // using namespace torch::indexing;
     auto A = torch::zeros({4,nodes,myVxCount*myVyCount}, ourGPUOptions);
     A[0] = myVolumeTorch.reshape({nodes,myVxCount*myVyCount});
     A[1] = V2_torch.reshape({nodes,myVxCount*myVyCount});
@@ -138,5 +83,62 @@ int LagrangeTorchL2::computeLagrangeParameters(
     // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
     // std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
     compareQoIs(recondatain, outputs);
+}
+
+int LagrangeTorchL2::computeLagrangeParameters(
+    const double* reconData, adios2::Dims blockCount)
+{
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    double start, end;
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // start = MPI_Wtime();
+    // std::cout << "came here 4.0" << std::endl;
+    GPTLstart("compute lambdas");
+    int ii, i, j, k, l, m;
+    auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+                  .permute({0, 2, 1, 3});
+    // std::cout << "recondatain sizes " << recondatain.sizes() << std::endl;
+    auto origdatain = myDataInTorch.reshape({1, blockCount[0]*blockCount[2], blockCount[1], blockCount[3]});
+    // std::cout << "myDataInTorch sizes " << myDataInTorch.sizes() << std::endl;
+    // std::cout << "origdatain sizes " << origdatain.sizes() << std::endl;
+    // recondatain = at::clamp(recondatain, at::Scalar(100));
+    int nodes = myNodeCount*myPlaneCount;
+
+    int breg_index = 0;
+    int iphi, idx;
+    std::vector <at::Tensor> tensors;
+    iphi = 0;
+    std::vector<double> D(nodes, 0);
+    auto f0_f_torch = origdatain[iphi];
+    auto D_torch = (f0_f_torch * myVolumeTorch);
+    auto D_torch_sum = D_torch.sum({1, 2});
+    auto aD_torch = D_torch_sum*mySmallElectronCharge;
+
+    // std::vector<double> U(nodes, 0);
+    std::vector<double> Tperp(nodes, 0);
+    auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
+    auto U_torch_sum = U_torch.sum({1, 2})/D_torch_sum;
+    auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
+
+    std::vector<double> Tpara(nodes, 0);
+    std::vector<double> Rpara(nodes, 0);
+    auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
+    auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1, 2}))/D_torch_sum/mySmallElectronCharge;
+    auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
+
+    auto b_constant = torch::zeros({4,nodes}, ourGPUOptions);
+    b_constant[0] = D_torch_sum;
+    b_constant[1] = U_torch_sum*D_torch_sum;
+    b_constant[2] = Tperp_torch*aD_torch;
+    b_constant[3] = Rpara_torch*D_torch_sum;
+    // std::cout << "b_constant shape " << b_constant.sizes() << std::endl;
+    b_constant = at::transpose(b_constant, 0, 1);
+    if (myPrecision == 1) {
+        b_constant = (b_constant.to(torch::kFloat32)).to(torch::kFloat64);
+    }
+    myLagrangesTorch = b_constant;
+    GPTLstop("compute lambdas");
+    reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant);
     return 0;
 }
