@@ -55,6 +55,53 @@ LagrangeTorchL2::~LagrangeTorchL2()
 {
 }
 
+void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tensor &recondatain, at::Tensor &b_constant)
+{
+    auto V2_torch = myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
+    auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
+    auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
+
+    // std::cout << "came here 4.1" << std::endl;
+    auto recon_data = recondatain[iphi];
+    // using namespace torch::indexing;
+    auto A = torch::zeros({4,nodes,myVxCount*myVyCount}, this->myOption);
+    A[0] = myVolumeTorch.reshape({nodes,myVxCount*myVyCount});
+    A[1] = V2_torch.reshape({nodes,myVxCount*myVyCount});
+    A[2] = V3_torch.reshape({nodes,myVxCount*myVyCount});
+    A[3] = V4_torch.reshape({nodes,myVxCount*myVyCount});
+    // std::cout << "A shape " << A.sizes() << std::endl;
+    A = at::transpose(A, 0, 1);
+    // auto U = torch::zeros({nodes,myVxCount*myVyCount,4}, this->myOption);
+    auto rdata = recon_data.reshape({nodes, myVxCount*myVyCount, 1});
+    auto outputs = torch::zeros({nodes, myVxCount, myVyCount}, this->myOption);
+    for (int index=0; index<nodes; ++index) {
+        auto A_idx = A[index];
+        // std::cout << "A_idx shape " << A_idx.sizes() << std::endl;
+        auto A_idx_T = at::transpose(A_idx, 0, 1);
+        // std::cout << "A_idx_T shape " << A_idx_T.sizes() << std::endl;
+        auto Q = at::matmul(A_idx_T, at::inverse(at::matmul(A_idx, A_idx_T)));
+        // std::cout << "Q shape " << Q.sizes() << std::endl;
+        auto U_idx = std::get<0>(torch::linalg::svd(A_idx_T, false));
+        // std::cout << "U_idx shape " << U_idx.sizes() << std::endl;
+        auto U_idx_T = at::transpose(U_idx, 0, 1);
+        // std::cout << "U_idx_T shape " << U_idx_T.sizes() << std::endl;
+        auto I = at::eye(myVxCount*myVyCount, this->myOption);
+        auto temp = I - at::matmul(U_idx, U_idx_T);
+        // std::cout << "temp shape " << temp.sizes() << std::endl;
+        auto R = at::matmul(temp, rdata[index]);
+        // std::cout << "R shape " << R.sizes() << std::endl;
+        // std::cout << "b shape " << b_constant[index].sizes() << std::endl;
+        auto b = b_constant[index].reshape({4, 1});
+        auto o_idx = R + at::matmul(Q, b);
+        // std::cout << "o_idx shape " << o_idx.sizes() << std::endl;
+        outputs[index] = o_idx.reshape({myVxCount, myVyCount});
+    }
+    outputs = outputs.reshape({1, nodes, myVxCount, myVyCount});
+    // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
+    // std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
+    compareQoIs(recondatain, outputs);
+}
+
 int LagrangeTorchL2::computeLagrangeParameters(
     const double* reconData, adios2::Dims blockCount)
 {
@@ -75,9 +122,6 @@ int LagrangeTorchL2::computeLagrangeParameters(
     // std::cout << "origdatain sizes " << origdatain.sizes() << std::endl;
     // recondatain = at::clamp(recondatain, at::Scalar(100));
     int nodes = myNodeCount*myPlaneCount;
-    auto V2_torch = myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
-    auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
-    auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     c10::cuda::CUDACachingAllocator::emptyCache();
 
     // displayGPUMemory("#B", my_rank);
@@ -117,55 +161,10 @@ int LagrangeTorchL2::computeLagrangeParameters(
     // std::cout << "b_constant shape " << b_constant.sizes() << std::endl;
     b_constant = at::transpose(b_constant, 0, 1);
     if (myPrecision == 1) {
-        myLagrangesTorch = b_constant.to(torch::kFloat32);
+        b_constant = (b_constant.to(torch::kFloat32)).to(torch::kFloat64);
     }
-    else{
-        myLagrangesTorch = b_constant;
-    }
+    myLagrangesTorch = b_constant;
     GPTLstop("compute lambdas");
-
-    // displayGPUMemory("#F", my_rank);
-    // std::cout << "came here 4.1" << std::endl;
-    auto recon_data = recondatain[iphi];
-    auto orig_data = origdatain[iphi];
-    using namespace torch::indexing;
-    auto A = torch::zeros({4,nodes,myVxCount*myVyCount}, this->myOption);
-    A[0] = myVolumeTorch.reshape({nodes,myVxCount*myVyCount});
-    A[1] = V2_torch.reshape({nodes,myVxCount*myVyCount});
-    A[2] = V3_torch.reshape({nodes,myVxCount*myVyCount});
-    A[3] = V4_torch.reshape({nodes,myVxCount*myVyCount});
-    c10::cuda::CUDACachingAllocator::emptyCache();
-
-    // displayGPUMemory("#G", my_rank);
-    // std::cout << "A shape " << A.sizes() << std::endl;
-    A = at::transpose(A, 0, 1);
-    auto U = torch::zeros({nodes,myVxCount*myVyCount,4}, this->myOption);
-    for (int index=0; index<nodes; ++index) {
-        U[index] = std::get<0>(torch::linalg::svd(at::transpose(A[index], 0, 1), false));
-    }
-    c10::cuda::CUDACachingAllocator::emptyCache();
-    
-    // std::cout << "U shape" << U.sizes() << std::endl;
-    // std::cout << "A shape after transpose " << A.sizes() << std::endl;
-
-    // displayGPUMemory("#H", my_rank);
-    auto UT = at::transpose(U, 1, 2);
-    // std::cout << "UT shape" << UT.sizes() << std::endl;
-    auto rdata = recon_data.reshape({nodes, myVxCount*myVyCount, 1});
-    auto odata = orig_data.reshape({nodes, myVxCount*myVyCount, 1});
-    auto diff = odata - rdata;
-    diff = diff.reshape({nodes, myVxCount*myVyCount, 1});
-    // std::cout << "diff shape" << diff.sizes() << std::endl;
-    auto outputs = rdata + at::bmm(U, at::bmm(UT, diff));
-    // std::cout << "outputs shape 1" << outputs.sizes() << std::endl;
-    c10::cuda::CUDACachingAllocator::emptyCache();
-    
-    // displayGPUMemory("#I", my_rank);
-    outputs = at::squeeze(outputs, 2);
-    outputs = outputs.reshape({1, nodes, myVxCount, myVyCount});
-    // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
-    // std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
-    // displayGPUMemory("#J", my_rank);
-    compareQoIs(recondatain, outputs);
+    // reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant);
     return 0;
 }
