@@ -111,7 +111,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
     // MPI_Barrier(MPI_COMM_WORLD);
     // start = MPI_Wtime();
     // std::cout << "came here 4.0" << std::endl;
-    // displayGPUMemory("#A", my_rank);
+    if (my_rank == 0) displayGPUMemory("#A", my_rank);
     GPTLstart("compute_lambdas");
     int ii, i, j, k, l, m;
     auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
@@ -124,7 +124,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
     int nodes = myNodeCount*myPlaneCount;
     c10::cuda::CUDACachingAllocator::emptyCache();
 
-    // displayGPUMemory("#B", my_rank);
+    if (my_rank == 0) displayGPUMemory("#B", my_rank);
     int breg_index = 0;
     int iphi, idx;
     std::vector <at::Tensor> tensors;
@@ -136,7 +136,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
     auto aD_torch = D_torch_sum*mySmallElectronCharge;
     c10::cuda::CUDACachingAllocator::emptyCache();
 
-    // displayGPUMemory("#C", my_rank);
+    if (my_rank == 0) displayGPUMemory("#C", my_rank);
     // std::vector<double> U(nodes, 0);
     std::vector<double> Tperp(nodes, 0);
     auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
@@ -144,7 +144,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
     auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
     c10::cuda::CUDACachingAllocator::emptyCache();
 
-    // displayGPUMemory("#D", my_rank);
+    if (my_rank == 0) displayGPUMemory("#D", my_rank);
     std::vector<double> Tpara(nodes, 0);
     std::vector<double> Rpara(nodes, 0);
     auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
@@ -152,7 +152,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
     auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
     c10::cuda::CUDACachingAllocator::emptyCache();
 
-    // displayGPUMemory("#E", my_rank);
+    if (my_rank == 0) displayGPUMemory("#E", my_rank);
     auto b_constant = torch::zeros({4,nodes}, this->myOption);
     b_constant[0] = D_torch_sum;
     b_constant[1] = U_torch_sum*D_torch_sum;
