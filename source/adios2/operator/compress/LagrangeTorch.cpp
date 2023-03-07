@@ -496,7 +496,7 @@ int LagrangeTorch::computeLagrangeParameters(
 size_t LagrangeTorch::putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset, const char* precision)
 {
     auto datain = myLagrangesTorch.contiguous().cpu();
-    std::cout << "datain.type:" << datain.type() << std::endl;
+    // std::cout << "datain.type:" << datain.type() << std::endl;
     // (2023/03) FIXME: LagrangeTorchL2 returns float32
     datain = datain.to(torch::kFloat64);
     std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
