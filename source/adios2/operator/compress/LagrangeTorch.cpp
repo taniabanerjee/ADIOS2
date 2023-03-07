@@ -79,16 +79,16 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     auto datain = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(this->device)
                   .permute({0, 2, 1, 3});
     myDataInTorch = datain;
-    GPTLstart("read mesh file");
+    GPTLstart("read_mesh_file");
     readF0Params(meshFile);
-    GPTLstop("read mesh file");
+    GPTLstop("read_mesh_file");
     // MPI_Barrier(MPI_COMM_WORLD);
     // end = MPI_Wtime();
     // if (my_rank == 0) {
         // printf ("%d Time Taken for File Reading: %f\n", mySpecies, (end-start));
     // }
     start = MPI_Wtime();
-    GPTLstart("compute params");
+    GPTLstart("compute_params");
     setVolume();
     setVp();
     setMuQoi();
@@ -104,7 +104,7 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     // if (my_rank == 0) {
     //     printf ("%d Time Taken for QoI param Computation: %f\n", mySpecies, (end-start));
     // }
-    GPTLstop("compute params");
+    GPTLstop("compute_params");
 }
 
 void LagrangeTorch::getUnconvergedIndexes(at::Tensor &diff, std::vector<long>& unconvergedNodeIndex, std::map<long, long> &unconvergedMap)
@@ -244,7 +244,7 @@ int LagrangeTorch::computeLagrangeParameters(
     // start = MPI_Wtime();
     // std::cout << "came here 4.0" << std::endl;
     // displayGPUMemory("#A", my_rank);
-    GPTLstart("compute lambdas");
+    GPTLstart("compute_lambdas");
     int ii, i, j, k, l, m;
     auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(this->device)
                   .permute({0, 2, 1, 3});
@@ -476,7 +476,7 @@ int LagrangeTorch::computeLagrangeParameters(
     unconverged_size += unconverged_images*sizeof(int)*2; // plane and node indexes
     unconverged_size += 1; // how many images are represented as is
 
-    GPTLstop("compute lambdas");
+    GPTLstop("compute_lambdas");
     // displayGPUMemory("#I", my_rank);
     at::Tensor combined = at::concat(tensors).reshape({1, nodes, myVxCount, myVyCount});
     compareQoIs(recondatain, combined);

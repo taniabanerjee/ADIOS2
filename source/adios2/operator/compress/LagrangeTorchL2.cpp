@@ -112,7 +112,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
     // start = MPI_Wtime();
     // std::cout << "came here 4.0" << std::endl;
     // displayGPUMemory("#A", my_rank);
-    GPTLstart("compute lambdas");
+    GPTLstart("compute_lambdas");
     int ii, i, j, k, l, m;
     auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
                   .permute({0, 2, 1, 3});
@@ -164,7 +164,7 @@ int LagrangeTorchL2::computeLagrangeParameters(
         b_constant = (b_constant.to(torch::kFloat32)).to(torch::kFloat64);
     }
     myLagrangesTorch = b_constant;
-    GPTLstop("compute lambdas");
+    GPTLstop("compute_lambdas");
     // reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant);
     return 0;
 }

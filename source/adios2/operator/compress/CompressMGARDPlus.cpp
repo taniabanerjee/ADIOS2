@@ -723,9 +723,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         // MPI_Barrier(MPI_COMM_WORLD);
         // start = MPI_Wtime();q
-        GPTLstart("mgard decompress");
+        GPTLstart("mgard_decompress");
         mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
-        GPTLstop("mgard decompress");
+        GPTLstop("mgard_decompress");
         // MPI_Barrier(MPI_COMM_WORLD);
         // end = MPI_Wtime();
         // if (my_rank == 0)
