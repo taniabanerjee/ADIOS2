@@ -19,9 +19,12 @@ class LagrangeTorchL2 : public LagrangeTorch
         // Compute Lagrange Parameters
         int computeLagrangeParameters(const double* reconstructedData,
                 adios2::Dims blockCount);
+        size_t putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
+        char* setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
 
     private:
-        void reconstructAndCompareErrors(int nodes, int iphi, at::Tensor &recondatain, at::Tensor &b_constant);
+        at::Tensor reconstructAndCompareErrors(int nodes, int iphi, at::Tensor &recondatain, at::Tensor &b_constant);
+        size_t putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
 
     private:
         // Members
