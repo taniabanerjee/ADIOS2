@@ -38,7 +38,7 @@ LagrangeTorchL2::~LagrangeTorchL2()
 {
 }
 
-void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tensor &recondatain, at::Tensor &b_constant)
+at::Tensor LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tensor &recondatain, at::Tensor &b_constant)
 {
     auto V2_torch = myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
@@ -82,7 +82,8 @@ void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tenso
     outputs = outputs.reshape({1, nodes, myVxCount, myVyCount});
     // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
     // std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
-    compareQoIs(recondatain, outputs);
+    // compareQoIs(recondatain, outputs);
+    return outputs;
 }
 
 int LagrangeTorchL2::computeLagrangeParameters(
@@ -137,8 +138,97 @@ int LagrangeTorchL2::computeLagrangeParameters(
     if (myPrecision == 1) {
         b_constant = (b_constant.to(torch::kFloat32)).to(torch::kFloat64);
     }
-    myLagrangesTorch = b_constant;
+    myLagrangesTorch = b_constant.detach().clone();
     GPTLstop("compute lambdas");
-    reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant);
+    // reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant);
     return 0;
+}
+
+size_t LagrangeTorchL2::putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset, const char* precision)
+{
+    std::cout << "myLagrangesTorch sizes " << myLagrangesTorch.sizes() << std::endl;
+    auto datain = myLagrangesTorch.contiguous().cpu();
+    std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    myLagranges = datain_vec.data();
+    int i, count = 0;
+    int numObjs = myPlaneCount*myNodeCount;
+    if (!strcmp(precision, "single"))
+    {
+        for (i=0; i<numObjs*4; i++) {
+            *reinterpret_cast<float*>(
+                  bufferOut+bufferOutOffset+(count++)*sizeof(float)) =
+                      myLagranges[i];
+            std::cout << "Put value " << myLagranges[i] << " at i=" << i << std::endl;
+        }
+        return count * sizeof(float);
+    }
+    else {
+        for (i=0; i<numObjs*4; i++) {
+            *reinterpret_cast<double*>(
+                  bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+                      myLagranges[i];
+        }
+        return count * sizeof(double);
+    }
+}
+
+size_t LagrangeTorchL2::putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision)
+{
+    // TODO: after your algorithm is done, put the result into
+    // *reinterpret_cast<double*>(bufferOut+bufferOutOffset) for your       first
+    // double number *reinterpret_cast<double*>(bufferOut+bufferOutOff      set+8)
+    // for your second double number and so on
+    int intbytes = putLagrangeParameters(bufferOut, bufferOutOffset, precision);
+    int my_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    if (my_rank == 0) {
+        FILE* fp = fopen("PqMeshInfo.bin", "wb");
+        int str_length = myMeshFile.length();
+        printf("Mesh file %d %s\n", str_length, myMeshFile.c_str());
+        fwrite(&str_length, sizeof(int), 1, fp);
+        fwrite(myMeshFile.c_str(), sizeof(char), str_length, fp);
+        fclose(fp);
+    }
+    return intbytes;
+}
+
+char* LagrangeTorchL2::setDataFromCharBuffer(double* &reconData,
+    const char* bufferIn, size_t sizeOut)
+{
+    int i, count = 0;
+    std::cout << "Step 1: Extract b_constants" << std::endl;
+    myLagranges = new double[4*myNodeCount];
+    std::cout << "Nodes " << myNodeCount << std::endl;
+    for (i=0; i<4*myNodeCount; ++i) {
+        myLagranges[i] = *reinterpret_cast<const float*>(
+              bufferIn+(count++)*sizeof(float));
+        // std::cout << "extracted " << i << "th b_constant" << std::endl;
+        std::cout << "Get value " << myLagranges[i] << " at i=" << i << std::endl;
+    }
+    std::cout << "Step 2: Read mesh file name" << std::endl;
+    FILE* fp = fopen("PqMeshInfo.bin", "rb");
+    int str_length = 0;
+    fread(&str_length, sizeof(int), 1, fp);
+    char meshFile[str_length];
+    fread(meshFile, sizeof(char), str_length, fp);
+    fclose(fp);
+    std::cout << "Step 3: Compute mesh parameters" << std::endl;
+    readF0Params(std::string(meshFile, 0, str_length));
+    setVolume();
+    setVp();
+    setMuQoi();
+    setVth2();
+    std::cout << "Step 4: get reconstructed data" << std::endl;
+    auto recondatain = torch::from_blob((void *)reconData, {myPlaneCount, myVxCount, myNodeCount, myVyCount}, torch::kFloat64).to(torch::kCUDA)
+                  .permute({0, 2, 1, 3});
+    recondatain = at::clamp(recondatain, at::Scalar(100), at::Scalar(1e+50));
+    myLagrangesTorch =  torch::from_blob((void *)myLagranges, {myNodeCount, 4}, torch::kFloat64).to(torch::kCUDA);
+    int iphi = 0;
+    int nodes = myNodeCount*myPlaneCount;
+    std::cout << "Step 5: apply post processing and compute errors" << std::endl;
+    auto outputs = reconstructAndCompareErrors(nodes, iphi, recondatain, myLagrangesTorch);
+    // auto datain = outputs.contiguous().cpu();
+    // std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
+    // reconData = datain_vec.data();
+    return reinterpret_cast<char*>(reconData);
 }
