@@ -25,7 +25,7 @@ class LagrangeTorch : public LagrangeOptimizer
                 adios2::Dims blockCount);
         size_t getTableSize();
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
-        char* setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
+        void setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
         void compareQoIs(at::Tensor& reconData, at::Tensor& bregData);
 
     protected:

@@ -574,7 +574,7 @@ size_t LagrangeTorch::putResult(char* &bufferOut, size_t &bufferOutOffset, const
     return intbytes;
 }
 
-char* LagrangeTorch::setDataFromCharBuffer(double* &reconData,
+void LagrangeTorch::setDataFromCharBuffer(double* &reconData,
     const char* bufferIn, size_t sizeOut)
 {
     int i, count = 0;
@@ -610,7 +610,7 @@ char* LagrangeTorch::setDataFromCharBuffer(double* &reconData,
     auto datain = outputs.contiguous().cpu();
     std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
     reconData = datain_vec.data();
-    return reinterpret_cast<char*>(reconData);
+    return;
 }
 
 // Get all variables from mesh file pertaining to ions and electrons
@@ -742,12 +742,12 @@ void LagrangeTorch::compute_C_qois(int iphi, at::Tensor &density, at::Tensor &up
     auto tper = f0_f * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     tperp = tper.sum({1, 2})/density/mySmallElectronCharge;
     // std::cout << "Tperp compute_C_qois " << tperp.sizes() << std::endl;
-    auto en = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-upar_.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
+    auto en = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-upar_.reshape({nodes, 1})),2);
     auto T_par = ((f0_f * myVolumeTorch * en.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass));
     tpara = 2*T_par.sum({1, 2})/density/mySmallElectronCharge;
     // std::cout << "Tpara compute_C_qois " << tpara.sizes() << std::endl;
     n0 = density;
-    t0 = (2.0*tper.sum({1, 2}) + T_par.sum({1, 2}))/3.0;
+    t0 = (2.0*tperp + tpara)/3.0;
     return;
 }
 
