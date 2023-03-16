@@ -1576,7 +1576,7 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // data somehow to improve its accuracy :)
     LagrangeTorchL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision);
     double *doubleData = reinterpret_cast<double *>(dataOut);
-    dataOut = optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
+    optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
 
     return sizeOut;
 }
