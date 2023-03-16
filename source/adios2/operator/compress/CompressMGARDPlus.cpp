@@ -660,7 +660,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     uint8_t compression_method = atoi(m_Parameters["compression_method"].c_str());
     uint8_t pq_yes = atoi(m_Parameters["pq"].c_str());
     size_t bufferOutOffset = 0;
-    const uint8_t bufferVersion = pq_yes ? 1 : 2;
+    // const uint8_t bufferVersion = pq_yes ? 1 : 2;
+    const uint8_t bufferVersion = 1;
 
     options.use_ddp = atoi(get_param(m_Parameters, "use_ddp", "0").c_str());
     options.batch_size = atoi(get_param(m_Parameters, "batch_size", "128").c_str());
@@ -1538,7 +1539,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     // for your second double number and so on
 #endif
     if (my_rank == 0) displayGPUMemory("#5", my_rank);
-    if (bufferVersion != 1)
+    if (bufferVersion == 1)
     {
         size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["prec"].c_str());
         bufferOutOffset += ppsize;
@@ -1621,9 +1622,9 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
+    LagrangeTorchL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
     double *doubleData = reinterpret_cast<double *>(dataOut);
-    dataOut = optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
+    optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
 
     return sizeOut;
 }
@@ -1633,12 +1634,13 @@ size_t CompressMGARDPlus::InverseOperate(const char *bufferIn, const size_t size
     size_t bufferInOffset = 1; // skip operator type
     const uint8_t bufferVersion = GetParameter<uint8_t>(bufferIn, bufferInOffset);
     bufferInOffset += 2;
+    int bV = (int) bufferVersion;
 
-    if (bufferVersion == 1)
+    if (bV == 1)
     {
         return DecompressV1(bufferIn, bufferInOffset, sizeIn, dataOut);
     }
-    else if (bufferVersion == 2)
+    else if (bV == 2)
     {
         // TODO: if a Version 2 mgard buffer is being implemented, put it here
         // and keep the DecompressV1 routine for backward compatibility
