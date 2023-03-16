@@ -57,14 +57,14 @@ LagrangeOptimizer::LagrangeOptimizer(size_t planeOffset,
     myVxCount = vx;
     myVyCount = vy;
     myNumClusters = 256;
-    myLagrangeIndexesDensity = new int[myNodeCount];
-    myLagrangeIndexesUpara = new int[myNodeCount];
-    myLagrangeIndexesTperp = new int[myNodeCount];
-    myLagrangeIndexesRpara = new int[myNodeCount];
-    myDensityTable = new double[myNumClusters];
-    myUparaTable = new double[myNumClusters];
-    myTperpTable = new double[myNumClusters];
-    myRparaTable = new double[myNumClusters];
+    myLagrangeIndexesDensity = NULL;
+    myLagrangeIndexesUpara = NULL;
+    myLagrangeIndexesTperp = NULL;
+    myLagrangeIndexesRpara = NULL;
+    myDensityTable = NULL;
+    myUparaTable = NULL;
+    myTperpTable = NULL;
+    myRparaTable = NULL;
     myEpsilon = 100;
     useKMeansMPI = 0;
 }
@@ -925,9 +925,19 @@ size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
     return intbytes;
 }
 
-char* LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
+void LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     const char* bufferIn, size_t sizeOut)
 {
+    if (myLagrangeIndexesDensity == NULL) {
+        myLagrangeIndexesDensity = new int[myNodeCount];
+        myLagrangeIndexesUpara = new int[myNodeCount];
+        myLagrangeIndexesTperp = new int[myNodeCount];
+        myLagrangeIndexesRpara = new int[myNodeCount];
+        myDensityTable = new double[myNumClusters];
+        myUparaTable = new double[myNumClusters];
+        myTperpTable = new double[myNumClusters];
+        myRparaTable = new double[myNumClusters];
+    }
     size_t bufferOffset = getPQIndexes(bufferIn);
     FILE* fp = fopen("PqMeshInfo.bin", "rb");
     fread(&myNumClusters, sizeof(int), 1, fp);
@@ -987,7 +997,7 @@ char* LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
             }
         }
     }
-    return reinterpret_cast<char*>(reconData);
+    return;
 }
 
 char* LagrangeOptimizer::setDataFromCharBufferV1(double* &reconData,
@@ -1479,15 +1489,16 @@ void LagrangeOptimizer::readF0Params(const std::string meshFile)
 
 void LagrangeOptimizer::writeOutput(const char* varname, std::vector <double> &tensor)
 {
-    // Write ADIOS2 files from here
-    adios2::core::ADIOS adios("C++");
-    auto &io = adios.DeclareIO("SubIO");
-    auto *engine = &io.Open("out.bp", adios2::Mode::Write);
-
-    // Get grid_vol
-    auto var = io.InquireVariable<double>(varname);
-    engine->Put(*var, tensor.data());
-    engine->Close();
+    const char* filename = "out.bp";
+    adios2::core::ADIOS ad("C++");
+    auto &bpIO = ad.DeclareIO("SubIO");
+    auto bp_fdata = bpIO.DefineVariable<double>(
+      "i_f", {8, 16395, 39, 39}, {myPlaneOffset, myNodeOffset, 0, 0}, {myPlaneCount, myNodeCount, myVxCount, myVyCount}, adios2::ConstantDims);
+    // Engine derived class, spawned to start IO operations //
+    printf("write...%s\n", filename);
+    auto *bpFileWriter = &bpIO.Open(filename, adios2::Mode::Write);
+    bpFileWriter->Put<double>(bp_fdata, tensor.data());
+    bpFileWriter->Close();
 }
 
 void LagrangeOptimizer::setVolume(std::vector <double> &volume)
