@@ -45,7 +45,7 @@ class LagrangeOptimizer
         size_t putResultV1(char* &bufferOut, size_t &bufferOutOffset);
         size_t putResultV2(char* &bufferOut, size_t &bufferOutOffset);
         char* setDataFromCharBufferV1(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
-        char* setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
+        void setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
         void setDataFromCharBuffer2(double* &dataOut, const char* bufferIn, size_t bufferOffset, size_t bufferSize);
         void readCharBuffer(const char* bufferIn, size_t bufferOffset,
                 size_t bufferSize);
