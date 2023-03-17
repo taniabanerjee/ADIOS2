@@ -12,8 +12,8 @@
 #include "CompressMGARDPlus.h"
 #include "CompressSZ.h"
 #include "CompressZFP.h"
-#include "LagrangeTorch.hpp"
 #include "LagrangeTorchL2.hpp"
+#include "LagrangeOptimizerL2.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 #include <cassert>
@@ -653,7 +653,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
     // Instantiate LagrangeTorch
     // LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
-    LagrangeTorchL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    // LagrangeTorchL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    LagrangeOptimizerL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -1622,7 +1623,8 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    LagrangeTorchL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
+    // LagrangeTorchL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
+    LagrangeOptimizerL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
     double *doubleData = reinterpret_cast<double *>(dataOut);
     optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
 
