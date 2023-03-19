@@ -57,6 +57,7 @@ LagrangeTorchL2::~LagrangeTorchL2()
 
 void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tensor &recondatain, at::Tensor &b_constant, at::Tensor &outputs)
 {
+    GPTLstart("Acomp");
     auto V2_torch = myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
@@ -71,22 +72,33 @@ void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tenso
     A[3] = V4_torch.reshape({nodes,myVxCount*myVyCount});
     // std::cout << "A shape " << A.sizes() << std::endl;
     A = at::transpose(A, 0, 1);
+    GPTLstop("Acomp");
     // auto U = torch::zeros({nodes,myVxCount*myVyCount,4}, this->myOption);
     auto rdata = recon_data.reshape({nodes, myVxCount*myVyCount, 1});
     for (int index=0; index<nodes; ++index) {
+
+        GPTLstart("compute A-transpose");
         auto A_idx = A[index];
         // std::cout << "A_idx shape " << A_idx.sizes() << std::endl;
         auto A_idx_T = at::transpose(A_idx, 0, 1);
         // std::cout << "A_idx_T shape " << A_idx_T.sizes() << std::endl;
+        GPTLstop("compute A-transpose");
+        GPTLstart("Qcomp");
         auto Q = at::matmul(A_idx_T, at::inverse(at::matmul(A_idx, A_idx_T)));
+        GPTLstop("Qcomp");
         // std::cout << "Q shape " << Q.sizes() << std::endl;
+        GPTLstart("Ucomp");
         auto U_idx = std::get<0>(torch::linalg::svd(A_idx_T, false));
         // std::cout << "U_idx shape " << U_idx.sizes() << std::endl;
+        GPTLstop("Ucomp");
+        GPTLstart("compute UUT");
         auto U_idx_T = at::transpose(U_idx, 0, 1);
         // std::cout << "U_idx_T shape " << U_idx_T.sizes() << std::endl;
         auto I = at::eye(myVxCount*myVyCount, this->myOption);
         auto temp = I - at::matmul(U_idx, U_idx_T);
         // std::cout << "temp shape " << temp.sizes() << std::endl;
+        GPTLstop("compute UUT");
+        GPTLstart("compute reconstruction");
         auto R = at::matmul(temp, rdata[index]);
         // std::cout << "R shape " << R.sizes() << std::endl;
         // std::cout << "b shape " << b_constant[index].sizes() << std::endl;
@@ -94,6 +106,7 @@ void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tenso
         auto o_idx = R + at::matmul(Q, b);
         // std::cout << "o_idx shape " << o_idx.sizes() << std::endl;
         outputs[index] = o_idx.reshape({myVxCount, myVyCount});
+        GPTLstop("compute reconstruction");
     }
     outputs = outputs.reshape({1, nodes, myVxCount, myVyCount});
     // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
@@ -113,8 +126,8 @@ int LagrangeTorchL2::computeLagrangeParameters(
     if (my_rank == 0) displayGPUMemory("#A", my_rank);
     GPTLstart("compute_lambdas");
     int ii, i, j, k, l, m;
-    auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
-                  .permute({0, 2, 1, 3});
+    // auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+                  // .permute({0, 2, 1, 3});
     // std::cout << "recondatain sizes " << recondatain.sizes() << std::endl;
     auto origdatain = myDataInTorch.reshape({1, blockCount[0]*blockCount[2], blockCount[1], blockCount[3]});
     // std::cout << "myDataInTorch sizes " << myDataInTorch.sizes() << std::endl;
@@ -235,11 +248,13 @@ void LagrangeTorchL2::setDataFromCharBuffer(double* &reconData,
     fread(meshFile, sizeof(char), str_length, fp);
     fclose(fp);
     // std::cout << "Step 3: Compute mesh parameters" << std::endl;
+    GPTLstart("read meshfile, compute params");
     readF0Params(std::string(meshFile, 0, str_length));
     setVolume();
     setVp();
     setMuQoi();
     setVth2();
+    GPTLstop("read meshfile, compute params");
     // std::cout << "Step 4: get reconstructed data" << std::endl;
     auto recondatain = torch::from_blob((void *)reconData, {myPlaneCount, myVxCount, myNodeCount, myVyCount}, torch::kFloat64).to(torch::kCUDA)
                   .permute({0, 2, 1, 3});

@@ -721,13 +721,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // printf("%d Time taken for MGARD compression: %f\n", optim.getSpecies(), (end - start));
         // }
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
-        std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+        // std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+        std::vector<char> tmpDecompressBuffer;
 
         // MPI_Barrier(MPI_COMM_WORLD);
         // start = MPI_Wtime();q
-        GPTLstart("mgard_decompress");
-        mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
-        GPTLstop("mgard_decompress");
+        // GPTLstart("mgard_decompress");
+        // mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
+        // GPTLstop("mgard_decompress");
         // MPI_Barrier(MPI_COMM_WORLD);
         // end = MPI_Wtime();
         // if (my_rank == 0)
@@ -1555,8 +1556,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     
     // char fname[80];
     // sprintf(fname, "mgardplus-timing.%d.txt", my_rank);
-    // // GPTLpr_file(fname);
-    // GPTLpr_summary_file(MPI_COMM_WORLD, "mgardplus-timing.summary.txt");
+    // GPTLpr_file(fname);
+    GPTLpr_summary_file(MPI_COMM_WORLD, "mgardplus-timing.summary.txt");
     return bufferOutOffset;
 }
 
@@ -1573,6 +1574,7 @@ Dims CompressMGARDPlus::GetBlockDims(const char *bufferIn, size_t bufferInOffset
 
 size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffset, const size_t sizeIn, char *dataOut)
 {
+    GPTLstart("total");
     // Pytorch options
     Options options;
     options.device = torch::kCUDA;
@@ -1619,20 +1621,30 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // so on
 
     CompressMGARD mgard(m_Parameters);
+    GPTLstart("mgard decompress");
     size_t sizeOut = mgard.InverseOperate(bufferIn + bufferInOffset, mgardBufferSize, dataOut);
+    GPTLstop("mgard decompress");
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    // LagrangeTorchL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
-    LagrangeOptimizerL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
+    LagrangeTorchL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
+    // LagrangeOptimizerL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
     double *doubleData = reinterpret_cast<double *>(dataOut);
     optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
+    GPTLstop("total");
+    GPTLpr_summary_file(MPI_COMM_WORLD, "mgardplus-decompress-timing.summary.txt");
 
     return sizeOut;
 }
 
 size_t CompressMGARDPlus::InverseOperate(const char *bufferIn, const size_t sizeIn, char *dataOut)
 {
+    if (_isfirst == 1)
+    {
+        GPTLinitialize();
+        _isfirst = 0;
+    }
+
     size_t bufferInOffset = 1; // skip operator type
     const uint8_t bufferVersion = GetParameter<uint8_t>(bufferIn, bufferInOffset);
     bufferInOffset += 2;

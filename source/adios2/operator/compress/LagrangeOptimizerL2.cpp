@@ -51,9 +51,27 @@ LagrangeOptimizerL2::~LagrangeOptimizerL2()
 {
 }
 
-#if 0
 void LagrangeOptimizerL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tensor &recondatain, at::Tensor &b_constant, at::Tensor &outputs)
 {
+#if 0
+    std::vector <double> A (4*myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
+    std::vector <double> V4 (myNodeCount*myVxCount*myVyCount, 0);
+    #pragma omp parallel for default (none) \
+    shared(myNodeCount, myVxCount, myVyCount, myVolume, myVth, myVp, myMuQoi, myVth2, myParticleMass, V2, V3, V4) \
+    private (i, j, l, m)
+    for (k=0; k<4*myNodeCount*myVxCount*myVyCount; ++k) {
+        i = int(k/(myVxCount*myVyCount));
+        j = int (k%myVyCount);
+        l = int(k%(myVxCount*myVyCount));
+        m = int(l/myVyCount);
+        A[k]
+        V2[k] = myVolume[k] * myVth[i] * myVp[j];
+        V3[k] = myVolume[k] * 0.5 * myMuQoi[m] * myVth2[i] * myParticleMass;
+        V4[k] = myVolume[k] * pow(myVp[j],2) * myVth2[i] * myParticleMass;
+    }
+
     auto V2_torch = myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
@@ -96,8 +114,9 @@ void LagrangeOptimizerL2::reconstructAndCompareErrors(int nodes, int iphi, at::T
     // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
     // std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
     // compareQoIs(recondatain, outputs);
-}
 #endif
+    return;
+}
 
 int LagrangeOptimizerL2::computeLagrangeParameters(
     const double* reconData, adios2::Dims blockCount)
@@ -109,6 +128,7 @@ int LagrangeOptimizerL2::computeLagrangeParameters(
     start = MPI_Wtime();
     int ii, i, j, k, l, m;
     GPTLstart("compute_lambdas");
+#if 0
     std::vector<double> i_g(myLocalElements);
     int lindex, rindex;
     for (int i = 0; i < myPlaneCount; i++)
@@ -134,6 +154,7 @@ int LagrangeOptimizerL2::computeLagrangeParameters(
         }
     }
     reconData = i_g.data();
+#endif
     myLagranges = new double[4*myNodeCount];
     std::vector <double> V2 (myNodeCount*myVxCount*myVyCount, 0);
     std::vector <double> V3 (myNodeCount*myVxCount*myVyCount, 0);
