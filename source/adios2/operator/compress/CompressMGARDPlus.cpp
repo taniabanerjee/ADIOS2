@@ -12,7 +12,8 @@
 #include "CompressMGARDPlus.h"
 #include "CompressSZ.h"
 #include "CompressZFP.h"
-#include "LagrangeTorch.hpp"
+#include "LagrangeTorchL2.hpp"
+#include "LagrangeOptimizerL2.hpp"
 #include "adios2/core/Engine.h"
 #include "adios2/helper/adiosFunctions.h"
 #include <cassert>
@@ -47,6 +48,19 @@
 #include <memory>
 #include <string>
 #include <cstdlib>
+
+#include <cuda.h>
+#include <cuda_runtime.h>
+
+static void displayGPUMemory(std::string msg, int rank)
+{
+	CUresult uRet;
+	size_t free1;
+	size_t total1;
+	uRet = cuMemGetInfo(&free1, &total1);
+	if (uRet == CUDA_SUCCESS)
+		printf("%d: %s FreeMemory = %d Mb in TotalMeory = %d Mb\n", rank, msg.c_str(), free1 / 1024 / 1024, total1 / 1024 / 1024);
+}
 
 template <class T>
 std::string
@@ -161,7 +175,9 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             auto t = torch::from_blob((void *)data, {dims[0], dims[1], dims[2], dims[3]}, torch::kFloat64)
                     .permute({0, 2, 1, 3})
                     .reshape({-1, dims[1], dims[3]});
-            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            // TODO: hard-coded device
+            // at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
+            at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64);
             auto idx = at::randint(8, {dims[2]}, opt);
             const at::Scalar start = 0;
             const at::Scalar last = dims[2]-1;
@@ -619,19 +635,35 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     }
 #endif
 
+    // Pytorch options
+    Options options;
+    options.device = torch::kCUDA;
+    // The following not working correctly
+    /*
+    if (torch::cuda::is_available()) {
+        std::cout << "CUDA is not available. Using CPU." << std::endl;
+        options.device = torch::kCPU;
+    }
+    */
+   if (!atoi(get_param(m_Parameters, "use_cuda", "1").c_str()))
+   {
+        std::cout << "Using CPU." << std::endl;
+        options.device = torch::kCPU;
+   }
+
     // Instantiate LagrangeTorch
-    LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str());
+    // LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    // LagrangeTorchL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    LagrangeOptimizerL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
     uint8_t compression_method = atoi(m_Parameters["compression_method"].c_str());
     uint8_t pq_yes = atoi(m_Parameters["pq"].c_str());
     size_t bufferOutOffset = 0;
-    const uint8_t bufferVersion = pq_yes ? 1 : 2;
+    // const uint8_t bufferVersion = pq_yes ? 1 : 2;
+    const uint8_t bufferVersion = 1;
 
-    // Pytorch options
-    Options options;
-    options.device = torch::kCUDA;
     options.use_ddp = atoi(get_param(m_Parameters, "use_ddp", "0").c_str());
     options.batch_size = atoi(get_param(m_Parameters, "batch_size", "128").c_str());
     options.iterations = atoi(get_param(m_Parameters, "nepoch", "100").c_str());
@@ -661,13 +693,14 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 #if 0
         if (leb > 0 && ueb > 0) {
             size_t offset = 0;
-            auto perm_diff = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA);
+            auto perm_diff = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(options.device);
             m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, perm_diff, {0, 0, 0, 0}, blockCount, type, bufferOut+offset, vx, vy, pd_omax_b, pd_omin_b)).c_str();
             // std::cout << "came here 1" << std::endl;
         }
 #endif
         // m_Parameters["tolerance"] = std::to_string(1e17+my_rank * 1e15);
         // std::cout << "tolerance " << m_Parameters["tolerance"] << std::endl;
+        if (my_rank == 0) displayGPUMemory("#1", my_rank);
         CompressMGARD mgard(m_Parameters);
         // MPI_Barrier(MPI_COMM_WORLD);
         // double start = MPI_Wtime();
@@ -679,6 +712,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         myfile.open(fname.c_str());
         myfile << my_rank << " - mgard size:" << mgardBufferSize << " :num images " << blockCount[2] << std::endl;
         myfile.close();
+        if (my_rank == 0) displayGPUMemory("#2", my_rank);
 
         // MPI_Barrier(MPI_COMM_WORLD);
         // double end = MPI_Wtime();
@@ -687,24 +721,31 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // printf("%d Time taken for MGARD compression: %f\n", optim.getSpecies(), (end - start));
         // }
         PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
-        std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+        // std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
+        std::vector<char> tmpDecompressBuffer;
 
         // MPI_Barrier(MPI_COMM_WORLD);
-        // start = MPI_Wtime();
-        //GPTLstart("mgard decompress");
-        //mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
-        //GPTLstop("mgard decompress");
+        // start = MPI_Wtime();q
+        // GPTLstart("mgard_decompress");
+        // mgard.InverseOperate(bufferOut + bufferOutOffset, mgardBufferSize, tmpDecompressBuffer.data());
+        // GPTLstop("mgard_decompress");
         // MPI_Barrier(MPI_COMM_WORLD);
         // end = MPI_Wtime();
         // if (my_rank == 0)
         // {
         // printf("%d Time taken for MGARD decompression: %f\n", optim.getSpecies(), (end - start));
         // }
+        if (my_rank == 0) displayGPUMemory("#3", my_rank);
         GPTLstart("Lagrange");
-        //optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
+        c10::cuda::CUDACachingAllocator::emptyCache();
+        // optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
         // dataIn should contain decompressed data
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(dataIn), blockCount);
-				GPTLstop("Lagrange");
+        c10::cuda::CUDACachingAllocator::emptyCache();
+        // THCCachingAllocator_emptyCache();
+
+        GPTLstop("Lagrange");
+        if (my_rank == 0) displayGPUMemory("#4", my_rank);
         bufferOutOffset += mgardBufferSize;
 
         // dump((void *)dataIn, blockCount, "forg", my_rank);
@@ -1065,7 +1106,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                         }
                     }
                 }
-                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(torch::kCUDA);
+                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(options.device);
                 resNodes =  nrmse_index[0].sizes()[0];
             }
             using namespace torch::indexing;
@@ -1247,7 +1288,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         std::vector<torch::Tensor> encode_vector;
         for (auto &batch : *loader)
         {
-            auto data = batch.data.to(torch::kCUDA);
+            auto data = batch.data.to(options.device);
             auto _encode = module.run_method("encode", data).toTensor();
             // std::cout << "_encode.sizes = " << _encode.sizes() << std::endl;
             _encode = _encode.to(torch::kCPU);
@@ -1297,7 +1338,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         for (int i = 0; i < numObjs; i += options.batch_size)
         {
             auto batch = encode.slice(0, i, i + options.batch_size < numObjs ? i + options.batch_size : numObjs);
-            batch = batch.to(torch::kCUDA);
+            batch = batch.to(options.device);
             auto _decode = module.run_method("decode", batch).toTensor();
             _decode = _decode.to(torch::kCPU);
             decode_vector.push_back(_decode);
@@ -1370,7 +1411,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
                         }
                     }
                 }
-                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(torch::kCUDA);
+                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(options.device);
                 resNodes = nrmse_index[0].sizes()[0];
             }
             using namespace torch::indexing;
@@ -1501,7 +1542,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     // double number *reinterpret_cast<double*>(bufferOut+bufferOutOffset+8)
     // for your second double number and so on
 #endif
-    if (bufferVersion != 1)
+    if (my_rank == 0) displayGPUMemory("#5", my_rank);
+    if (bufferVersion == 1)
     {
         size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["prec"].c_str());
         bufferOutOffset += ppsize;
@@ -1513,9 +1555,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     char *dataOut = new char[arraySize];
     size_t result = InverseOperate(bufferOut, bufferOutOffset, dataOut);
 #endif
-
-    char fname[80];
-    sprintf(fname, "mgardplus-timing.%d.txt", my_rank);
+    
+    // char fname[80];
+    // sprintf(fname, "mgardplus-timing.%d.txt", my_rank);
     // GPTLpr_file(fname);
     GPTLpr_summary_file(MPI_COMM_WORLD, "mgardplus-timing.summary.txt");
     return bufferOutOffset;
@@ -1534,6 +1576,16 @@ Dims CompressMGARDPlus::GetBlockDims(const char *bufferIn, size_t bufferInOffset
 
 size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffset, const size_t sizeIn, char *dataOut)
 {
+    GPTLstart("total");
+    // Pytorch options
+    Options options;
+    options.device = torch::kCUDA;
+    if (!atoi(get_param(m_Parameters, "use_cuda", "1").c_str()))
+    {
+        std::cout << "Using CPU." << std::endl;
+        options.device = torch::kCPU;
+    }
+
     // Do NOT remove even if the buffer version is updated. Data might be still
     // in lagacy formats. This function must be kept for backward compatibility.
     // If a newer buffer format is implemented, create another function, e.g.
@@ -1571,28 +1623,40 @@ size_t CompressMGARDPlus::DecompressV1(const char *bufferIn, size_t bufferInOffs
     // so on
 
     CompressMGARD mgard(m_Parameters);
+    GPTLstart("mgard decompress");
     size_t sizeOut = mgard.InverseOperate(bufferIn + bufferInOffset, mgardBufferSize, dataOut);
+    GPTLstop("mgard decompress");
     // TODO: the regular decompressed buffer is in dataOut, with the size of
     // sizeOut. Here you may want to do your magic to change the decompressed
     // data somehow to improve its accuracy :)
-    LagrangeTorch optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision);
+    LagrangeTorchL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
+    // LagrangeOptimizerL2 optim(planeOffset, nodeOffset, planeCount, nodeCount, vxCount, vyCount, species, precision, options.device);
     double *doubleData = reinterpret_cast<double *>(dataOut);
-    dataOut = optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
+    optim.setDataFromCharBuffer(doubleData, bufferIn + bufferInOffset + mgardBufferSize, sizeOut);
+    GPTLstop("total");
+    GPTLpr_summary_file(MPI_COMM_WORLD, "mgardplus-decompress-timing.summary.txt");
 
     return sizeOut;
 }
 
 size_t CompressMGARDPlus::InverseOperate(const char *bufferIn, const size_t sizeIn, char *dataOut)
 {
+    if (_isfirst == 1)
+    {
+        GPTLinitialize();
+        _isfirst = 0;
+    }
+
     size_t bufferInOffset = 1; // skip operator type
     const uint8_t bufferVersion = GetParameter<uint8_t>(bufferIn, bufferInOffset);
     bufferInOffset += 2;
+    int bV = (int) bufferVersion;
 
-    if (bufferVersion == 1)
+    if (bV == 1)
     {
         return DecompressV1(bufferIn, bufferInOffset, sizeIn, dataOut);
     }
-    else if (bufferVersion == 2)
+    else if (bV == 2)
     {
         // TODO: if a Version 2 mgard buffer is being implemented, put it here
         // and keep the DecompressV1 routine for backward compatibility
