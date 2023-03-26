@@ -57,14 +57,14 @@ LagrangeOptimizer::LagrangeOptimizer(size_t planeOffset,
     myVxCount = vx;
     myVyCount = vy;
     myNumClusters = 256;
-    myLagrangeIndexesDensity = new int[myNodeCount];
-    myLagrangeIndexesUpara = new int[myNodeCount];
-    myLagrangeIndexesTperp = new int[myNodeCount];
-    myLagrangeIndexesRpara = new int[myNodeCount];
-    myDensityTable = new double[myNumClusters];
-    myUparaTable = new double[myNumClusters];
-    myTperpTable = new double[myNumClusters];
-    myRparaTable = new double[myNumClusters];
+    myLagrangeIndexesDensity = NULL;
+    myLagrangeIndexesUpara = NULL;
+    myLagrangeIndexesTperp = NULL;
+    myLagrangeIndexesRpara = NULL;
+    myDensityTable = NULL;
+    myUparaTable = NULL;
+    myTperpTable = NULL;
+    myRparaTable = NULL;
     myEpsilon = 100;
     useKMeansMPI = 0;
 }
@@ -928,6 +928,16 @@ size_t LagrangeOptimizer::putResultV1(char* &bufferOut, size_t &bufferOutOffset)
 char* LagrangeOptimizer::setDataFromCharBuffer(double* &reconData,
     const char* bufferIn, size_t sizeOut)
 {
+    if (myLagrangeIndexesDensity == NULL) {
+        myLagrangeIndexesDensity = new int[myNodeCount];
+        myLagrangeIndexesUpara = new int[myNodeCount];
+        myLagrangeIndexesTperp = new int[myNodeCount];
+        myLagrangeIndexesRpara = new int[myNodeCount];
+        myDensityTable = new double[myNumClusters];
+        myUparaTable = new double[myNumClusters];
+        myTperpTable = new double[myNumClusters];
+        myRparaTable = new double[myNumClusters];
+    }
     size_t bufferOffset = getPQIndexes(bufferIn);
     FILE* fp = fopen("PqMeshInfo.bin", "rb");
     fread(&myNumClusters, sizeof(int), 1, fp);
