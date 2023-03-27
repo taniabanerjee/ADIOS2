@@ -300,6 +300,8 @@ if(ADIOS2_HAVE_MGARD)
   target_sources(adios2_core PRIVATE operator/compress/KmeansMPI.cpp)
   target_sources(adios2_core PRIVATE operator/compress/LagrangeOptimizer.cpp)
   target_sources(adios2_core PRIVATE operator/compress/LagrangeTorch.cpp)
+  target_sources(adios2_core PRIVATE operator/compress/LagrangeTorchL2.cpp)
+  target_sources(adios2_core PRIVATE operator/compress/LagrangeOptimizerL2.cpp)
   target_sources(adios2_core PRIVATE operator/compress/CompressMGARDPlus.cpp)
   target_sources(adios2_core PRIVATE operator/compress/CompressMGARD.cpp)
   target_link_libraries(adios2_core PRIVATE mgard::mgard)
@@ -451,7 +453,7 @@ install(TARGETS adios2_core ${maybe_adios2_core_mpi} ${maybe_adios2_core_cuda} $
 )
 
 find_package(OpenMP REQUIRED)
-target_link_libraries(adios2_core PUBLIC OpenMP::OpenMP_CXX)
+target_link_libraries(adios2_core PRIVATE OpenMP::OpenMP_CXX)
 
 find_package(Torch REQUIRED)
 message(STATUS TORCH_LIBRARIES:"${TORCH_LIBRARIES}")

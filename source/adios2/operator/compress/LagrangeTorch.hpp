@@ -10,9 +10,9 @@ class LagrangeTorch : public LagrangeOptimizer
 {
     public:
         // Constructor
-        LagrangeTorch(const char* species, const char* precision);
+        LagrangeTorch(const char* species, const char* precision, torch::DeviceType device);
         LagrangeTorch(size_t planeOffset, size_t nodeOffset,
-            size_t p, size_t n, size_t vx, size_t vy, const uint8_t species, const uint8_t precision);
+            size_t p, size_t n, size_t vx, size_t vy, const uint8_t species, const uint8_t precision, torch::DeviceType device);
 
         // Destructor
         ~LagrangeTorch();
@@ -25,9 +25,10 @@ class LagrangeTorch : public LagrangeOptimizer
                 adios2::Dims blockCount);
         size_t getTableSize();
         size_t putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
-        char* setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
+        void setDataFromCharBuffer(double* &dataOut, const char* bufferIn, size_t bufferTotalSize);
+        void compareQoIs(at::Tensor& reconData, at::Tensor& bregData);
 
-    private:
+    protected:
         // APIs
         void readF0Params(const std::string meshFile);
         void setVolume();
@@ -38,14 +39,13 @@ class LagrangeTorch : public LagrangeOptimizer
             at::Tensor &upara, at::Tensor &tperp,
             at::Tensor &tpara, at::Tensor &n0,
             at::Tensor &t0, at::Tensor &dataIn);
-        void compareQoIs(at::Tensor& reconData, at::Tensor& bregData);
         void compareErrorsPD(at::Tensor& dataIn, at::Tensor& reconData, at::Tensor& bregData, const char* etype, int rank);
         size_t putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset, const char* precision);
         void getUnconvergedIndexes(at::Tensor &diff, std::vector<long>& unconvergedNodeIndex, std::map<long, long> &unconvergedMap);
         int lambdaIterationsRound(int maxIter, double stepsize, at::Tensor &lambdas_torch, std::vector<long>& unconvergedNodeIndex, int nodes, at::Tensor &recon_torch, at::Tensor &orig_torch, at::Tensor &v_torch, at::Tensor &v2_torch, at::Tensor &v3_torch, at::Tensor &v4_torch, at::Tensor &d_torch, at::Tensor &u_torch, at::Tensor &t_torch, at::Tensor &r_torch, double DeB, double UeB, double TperpEB, double TparaEB, double PDeB);
 
 
-    private:
+    protected:
         // Members
         at::Tensor myDataInTorch;
         at::Tensor myGridVolumeTorch;
@@ -56,8 +56,10 @@ class LagrangeTorch : public LagrangeOptimizer
         at::Tensor myVthTorch;
         at::Tensor myVth2Torch;
         at::Tensor myLagrangesTorch;
-        static at::TensorOptions ourGPUOptions;
-        static at::TensorOptions ourCPUOptions;
+        // static at::TensorOptions ourOptions;
+        // static at::TensorOptions ourCPUOptions;
+        at::TensorOptions myOption;
+        torch::DeviceType device;
 };
 
 #endif

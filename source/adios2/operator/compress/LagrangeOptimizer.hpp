@@ -49,6 +49,8 @@ class LagrangeOptimizer
         void setDataFromCharBuffer2(double* &dataOut, const char* bufferIn, size_t bufferOffset, size_t bufferSize);
         void readCharBuffer(const char* bufferIn, size_t bufferOffset,
                 size_t bufferSize);
+        void compareQoIs(const double* reconData,
+            const double* bregData);
 
     protected:
         // APIs
@@ -67,8 +69,6 @@ class LagrangeOptimizer
             std::vector <double> &tpara, std::vector <double> &n0,
             std::vector <double> &t0, const double* dataIn);
         bool isConverged(std::vector <double> difflist, double eB, int count);
-        void compareQoIs(const double* reconData,
-            const double* bregData);
         void compareErrorsPD(const double* reconData, const double* bregData, int rank);
         void compareErrorsQoI(std::vector <double> &x,
             std::vector <double> &y, std::vector <double> &z,

@@ -16,21 +16,37 @@
 #include <gptl.h>
 #include <gptlmpi.h>
 
+#include <cuda.h>
+#include <cuda_runtime.h>
+
+static void displayGPUMemory(std::string msg, int rank)
+{
+	CUresult uRet;
+	size_t free1;
+	size_t total1;
+	uRet = cuMemGetInfo(&free1, &total1);
+	if (uRet == CUDA_SUCCESS)
+		printf("%d: %s FreeMemory = %d Mb in TotalMeory = %d Mb\n", rank, msg.c_str(), free1 / 1024 / 1024, total1 / 1024 / 1024);
+}
 
 // Define static class members
-at::TensorOptions LagrangeTorch::ourGPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
-at::TensorOptions LagrangeTorch::ourCPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
+// at::TensorOptions LagrangeTorch::ourGPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCUDA);
+// at::TensorOptions LagrangeTorch::ourCPUOptions = torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU);
 
-LagrangeTorch::LagrangeTorch(const char* species, const char* precision)
+LagrangeTorch::LagrangeTorch(const char* species, const char* precision, torch::DeviceType device)
   : LagrangeOptimizer(species, precision)
 {
+    this->device = device;
+    this->myOption = torch::TensorOptions().dtype(torch::kFloat64).device(device);
 }
 
 LagrangeTorch::LagrangeTorch(size_t planeOffset,
     size_t nodeOffset, size_t p, size_t n, size_t vx, size_t vy,
-    const uint8_t species, const uint8_t precision)
+    const uint8_t species, const uint8_t precision, torch::DeviceType device)
   : LagrangeOptimizer(planeOffset, nodeOffset, p, n, vx, vy, species, precision)
 {
+    this->device = device;
+    this->myOption = torch::TensorOptions().dtype(torch::kFloat64).device(device);
 }
 
 LagrangeTorch::~LagrangeTorch()
@@ -46,6 +62,7 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     myMeshFile = meshFile;
     double start, end;
     MPI_Barrier(MPI_COMM_WORLD);
+    torch::NoGradGuard no_grad;
     start = MPI_Wtime();
     int planeIndex = 0;
     int nodeIndex = 2;
@@ -59,19 +76,19 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     myVxCount = blockCount[velXIndex];
     myVyCount = blockCount[velYIndex];
     myLocalElements = myNodeCount * myPlaneCount * myVxCount * myVyCount;
-    auto datain = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+    auto datain = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]}, torch::kFloat64).to(this->device)
                   .permute({0, 2, 1, 3});
     myDataInTorch = datain;
-    GPTLstart("read mesh file");
+    GPTLstart("read_mesh_file");
     readF0Params(meshFile);
-    GPTLstop("read mesh file");
+    GPTLstop("read_mesh_file");
     // MPI_Barrier(MPI_COMM_WORLD);
     // end = MPI_Wtime();
     // if (my_rank == 0) {
         // printf ("%d Time Taken for File Reading: %f\n", mySpecies, (end-start));
     // }
     start = MPI_Wtime();
-    GPTLstart("compute params");
+    GPTLstart("compute_params");
     setVolume();
     setVp();
     setMuQoi();
@@ -87,7 +104,7 @@ void LagrangeTorch::computeParamsAndQoIs(const std::string meshFile,
     // if (my_rank == 0) {
     //     printf ("%d Time Taken for QoI param Computation: %f\n", mySpecies, (end-start));
     // }
-    GPTLstop("compute params");
+    GPTLstop("compute_params");
 }
 
 void LagrangeTorch::getUnconvergedIndexes(at::Tensor &diff, std::vector<long>& unconvergedNodeIndex, std::map<long, long> &unconvergedMap)
@@ -108,16 +125,17 @@ void LagrangeTorch::getUnconvergedIndexes(at::Tensor &diff, std::vector<long>& u
 
 int LagrangeTorch::lambdaIterationsRound(int maxIter, double stepsize, at::Tensor &lambdas_torch, std::vector<long>& unconvergedNodeIndex, int nodes, at::Tensor &recon_torch, at::Tensor &orig_torch, at::Tensor &v_torch, at::Tensor &v2_torch, at::Tensor &v3_torch, at::Tensor &v4_torch, at::Tensor &d_torch, at::Tensor &u_torch, at::Tensor &t_torch, at::Tensor &r_torch, double DeB, double UeB, double TperpEB, double TparaEB, double PDeB)
 {
+    torch::NoGradGuard no_grad;
     auto aD_torch = d_torch*mySmallElectronCharge;
-    auto gradients_torch = torch::zeros({nodes,4}, ourGPUOptions);
-    auto hessians_torch = torch::zeros({nodes,4,4}, ourGPUOptions);
-    auto L2_den = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
-    auto L2_upara = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
-    auto L2_tperp = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
-    auto L2_rpara = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
-    auto L2_pd = torch::zeros({nodes, maxIter+1}, ourGPUOptions);
+    auto gradients_torch = torch::zeros({nodes,4}, myOption);
+    auto hessians_torch = torch::zeros({nodes,4,4}, myOption);
+    auto L2_den = torch::zeros({nodes, maxIter+1}, myOption);
+    auto L2_upara = torch::zeros({nodes, maxIter+1}, myOption);
+    auto L2_tperp = torch::zeros({nodes, maxIter+1}, myOption);
+    auto L2_rpara = torch::zeros({nodes, maxIter+1}, myOption);
+    auto L2_pd = torch::zeros({nodes, maxIter+1}, myOption);
 
-    auto K = torch::zeros({nodes,myVxCount,myVyCount}, ourGPUOptions);
+    auto K = torch::zeros({nodes,myVxCount,myVyCount}, myOption);
     int count = 0;
     int converged = 0;
 
@@ -220,13 +238,15 @@ int LagrangeTorch::computeLagrangeParameters(
     int unconverged_images = 0;
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    torch::NoGradGuard no_grad;
     double start, end;
     // MPI_Barrier(MPI_COMM_WORLD);
     // start = MPI_Wtime();
     // std::cout << "came here 4.0" << std::endl;
-    GPTLstart("compute lambdas");
+    // displayGPUMemory("#A", my_rank);
+    GPTLstart("compute_lambdas");
     int ii, i, j, k, l, m;
-    auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+    auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(this->device)
                   .permute({0, 2, 1, 3});
     // std::cout << "recondatain sizes " << recondatain.sizes() << std::endl;
     auto origdatain = myDataInTorch.reshape({1, blockCount[0]*blockCount[2], blockCount[1], blockCount[3]});
@@ -241,6 +261,7 @@ int LagrangeTorch::computeLagrangeParameters(
     auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
 
+    // displayGPUMemory("#A1", my_rank);
     int breg_index = 0;
     int iphi, idx;
     std::vector <at::Tensor> tensors;
@@ -250,18 +271,21 @@ int LagrangeTorch::computeLagrangeParameters(
     auto D_torch = (f0_f_torch * myVolumeTorch);
     auto D_torch_sum = D_torch.sum({1, 2});
 
+    // displayGPUMemory("#A2", my_rank);
     std::vector<double> U(nodes, 0);
     std::vector<double> Tperp(nodes, 0);
     auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
     auto U_torch_sum = U_torch.sum({1, 2})/D_torch_sum;
     auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
 
+    // displayGPUMemory("#A3", my_rank);
     std::vector<double> Tpara(nodes, 0);
     std::vector<double> Rpara(nodes, 0);
     auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
     auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1, 2}))/D_torch_sum/mySmallElectronCharge;
     auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
 
+    // displayGPUMemory("#A4", my_rank);
     // std::cout << "came here 4.1" << std::endl;
     int count_unLag = 0;
     std::vector <int> node_unconv;
@@ -276,9 +300,10 @@ int LagrangeTorch::computeLagrangeParameters(
     double TparaEB = pow(maxTpara*1e-05, 2);
     double PDeB = pow(myMaxValue*1e-05, 2);
 
+    // displayGPUMemory("#A5", my_rank);
     std::vector<long> unconvergedNodeIndex;
     std::map<long, long> unconvergedMap;
-    auto lambdas_torch = torch::zeros({nodes,4}, ourGPUOptions);
+    auto lambdas_torch = torch::zeros({nodes,4}, myOption);
     auto recon_data = recondatain[iphi];
     auto orig_data = origdatain[iphi];
     int converged = lambdaIterationsRound(50, 1.0, lambdas_torch, unconvergedNodeIndex, nodes, recon_data, orig_data, myVolumeTorch, V2_torch, V3_torch, V4_torch, D_torch_sum, U_torch_sum, Tperp_torch, Rpara_torch, DeB, UeB, TperpEB, TparaEB, PDeB);
@@ -287,15 +312,18 @@ int LagrangeTorch::computeLagrangeParameters(
     int maxRound = 3;
     int maxIterArray[maxRound] {800, 1600};
     double stepSizeArray[maxRound] {0.1, 0.01};
+    // displayGPUMemory("#B", my_rank);
     while (converged == 0 && round <= maxRound)
     {
         std::cout << "All nodes did not converge on rank " << my_rank << " on round " << round << std::endl;
-        size_t vecIndex = 0;
+        size_t vecIndex = unconvergedNodeIndex.size();
+        /*
         for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
             std::cout << "Unconverged node (" << round << "): " << iphi << ", " << unconvergedNodeIndex[vecIndex] << std::endl;
         }
-        auto unodes = torch::from_blob((void*)unconvergedNodeIndex.data(), vecIndex, torch::kInt64).to(torch::kCUDA);
-        auto ltorch = torch::zeros({unconvergedNodeIndex.size(),4}, ourGPUOptions);
+        */
+        auto unodes = torch::from_blob((void*)unconvergedNodeIndex.data(), vecIndex, torch::kInt64).to(this->device);
+        auto ltorch = torch::zeros({unconvergedNodeIndex.size(),4}, myOption);
 
         using namespace torch::indexing;
         auto recon_plane = recondatain[iphi];
@@ -320,9 +348,11 @@ int LagrangeTorch::computeLagrangeParameters(
         lambdas_torch.index_put_({unodes, Slice(None)}, ltorch);
         round += 1;
     }
+    
+    // displayGPUMemory("#C", my_rank);
     // std::cout << "came here 4.3" << std::endl;
     using namespace torch::indexing;
-    auto K = torch::zeros({nodes,myVxCount,myVyCount}, ourGPUOptions);
+    auto K = torch::zeros({nodes,myVxCount,myVyCount}, myOption);
     if (myPrecision == 0) {
         auto l1 = lambdas_torch.index({Slice(None), 0}).reshape({nodes, 1, 1}) * myVolumeTorch;
         auto l2 = lambdas_torch.index({Slice(None), 1}).reshape({nodes, 1, 1}) * V2_torch;
@@ -352,6 +382,7 @@ int LagrangeTorch::computeLagrangeParameters(
         auto l4 = lambdas_torch_16.index({Slice(None), 3}).reshape({nodes, 1, 1}) * V4_torch;
         K = l1 + l2 + l3 + l4;
     }
+    // displayGPUMemory("#D", my_rank);
     auto outputs = recondatain[iphi]*at::exp(-K);
     // Check for any nans
     auto pda_isnan = at::isnan(outputs);
@@ -372,6 +403,8 @@ int LagrangeTorch::computeLagrangeParameters(
             unconvergedMap[unique_e[ii]] = 1;
         }
     }
+
+    // displayGPUMemory("#E", my_rank);
     // Check for any infs
     pda_isnan = at::isinf(outputs);
     isPDnan = pda_isnan.any().item<bool>();
@@ -389,6 +422,8 @@ int LagrangeTorch::computeLagrangeParameters(
             unconvergedMap[unique_e[ii]] = 1;
         }
     }
+
+    // displayGPUMemory("#F", my_rank);
     pda_isnan = at::isneginf(outputs);
     isPDnan = pda_isnan.any().item<bool>();
     if (isPDnan) {
@@ -405,6 +440,8 @@ int LagrangeTorch::computeLagrangeParameters(
             unconvergedMap[unique_e[ii]] = 1;
         }
     }
+
+    // displayGPUMemory("#G", my_rank);
     // Check for any very high values
     auto pos_outputs = at::abs(outputs);
     auto high = torch::argwhere(pos_outputs > 1e25);
@@ -422,6 +459,8 @@ int LagrangeTorch::computeLagrangeParameters(
             unconvergedMap[unique_e[ii]] = 1;
         }
     }
+
+    // displayGPUMemory("#H", my_rank);
     size_t vecIndex = 0;
     for (vecIndex=0; vecIndex<unconvergedNodeIndex.size(); ++vecIndex) {
         auto search = unconvergedMap.find(unconvergedNodeIndex[vecIndex]);
@@ -437,7 +476,8 @@ int LagrangeTorch::computeLagrangeParameters(
     unconverged_size += unconverged_images*sizeof(int)*2; // plane and node indexes
     unconverged_size += 1; // how many images are represented as is
 
-    GPTLstop("compute lambdas");
+    GPTLstop("compute_lambdas");
+    // displayGPUMemory("#I", my_rank);
     at::Tensor combined = at::concat(tensors).reshape({1, nodes, myVxCount, myVyCount});
     compareQoIs(recondatain, combined);
     // std::vector <double> combinedVec(combined.data_ptr<double>(), combined.data_ptr<double>() + combined.numel());
@@ -449,12 +489,16 @@ int LagrangeTorch::computeLagrangeParameters(
     else if (unconverged_images > 0) {
         std::cout << "Unconverged images " << unconverged_images << " and sizes " << unconverged_size << std::endl;
     }
+    // displayGPUMemory("#J", my_rank);
     return unconverged_size;
 }
 
 size_t LagrangeTorch::putLagrangeParameters(char* &bufferOut, size_t &bufferOutOffset, const char* precision)
 {
     auto datain = myLagrangesTorch.contiguous().cpu();
+    // std::cout << "datain.type:" << datain.type() << std::endl;
+    // (2023/03) FIXME: LagrangeTorchL2 returns float32
+    datain = datain.to(torch::kFloat64);
     std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
     myLagranges = datain_vec.data();
     if (!strcmp(precision, "single"))
@@ -530,7 +574,7 @@ size_t LagrangeTorch::putResult(char* &bufferOut, size_t &bufferOutOffset, const
     return intbytes;
 }
 
-char* LagrangeTorch::setDataFromCharBuffer(double* &reconData,
+void LagrangeTorch::setDataFromCharBuffer(double* &reconData,
     const char* bufferIn, size_t sizeOut)
 {
     int i, count = 0;
@@ -549,10 +593,10 @@ char* LagrangeTorch::setDataFromCharBuffer(double* &reconData,
     setVp();
     setMuQoi();
     setVth2();
-    auto recondatain = torch::from_blob((void *)reconData, {myPlaneCount, myVxCount, myNodeCount, myVyCount}, torch::kFloat64).to(torch::kCUDA)
+    auto recondatain = torch::from_blob((void *)reconData, {myPlaneCount, myVxCount, myNodeCount, myVyCount}, torch::kFloat64).to(this->device)
                   .permute({0, 2, 1, 3});
     recondatain = at::clamp(recondatain, at::Scalar(100), at::Scalar(1e+50));
-    myLagrangesTorch =  torch::from_blob((void *)myLagranges, {myNodeCount, 4}, torch::kFloat64).to(torch::kCUDA);
+    myLagrangesTorch =  torch::from_blob((void *)myLagranges, {myNodeCount, 4}, torch::kFloat64).to(this->device);
     auto V2_torch = myVolumeTorch * myVthTorch.reshape({myNodeCount,1,1}) * myVpTorch.reshape({1, 1, myVyCount});
     auto V3_torch = myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
     auto V4_torch = myVolumeTorch * at::pow(myVpTorch, at::Scalar(2)).reshape({1, myVyCount}) * myVth2Torch.reshape({myNodeCount,1,1}) * myParticleMass;
@@ -566,7 +610,7 @@ char* LagrangeTorch::setDataFromCharBuffer(double* &reconData,
     auto datain = outputs.contiguous().cpu();
     std::vector<double> datain_vec(datain.data_ptr<double>(), datain.data_ptr<double>() + datain.numel());
     reconData = datain_vec.data();
-    return reinterpret_cast<char*>(reconData);
+    return;
 }
 
 // Get all variables from mesh file pertaining to ions and electrons
@@ -607,20 +651,20 @@ void LagrangeTorch::readF0Params(const std::string meshFile)
     var_ev->SetSelection(adios2::Box<adios2::Dims>({0, myNodeOffset}, {evShape[0], myNodeCount}));
     engine->Get(*var_ev, myF0TEv);
     engine->Close();
-    myGridVolumeTorch = torch::from_blob((void *)myGridVolume.data(), {volumeShape[0], myNodeCount}, torch::kFloat64).to(torch::kCUDA);;
+    myGridVolumeTorch = torch::from_blob((void *)myGridVolume.data(), {volumeShape[0], myNodeCount}, torch::kFloat64).to(this->device);;
     // std::cout << "myGridVolumeTorch sizes " << myGridVolumeTorch.sizes() << std::endl;
-    myF0TEvTorch = torch::from_blob((void *)myF0TEv.data(), {evShape[0], myNodeCount}, torch::kFloat64).to(torch::kCUDA);;
+    myF0TEvTorch = torch::from_blob((void *)myF0TEv.data(), {evShape[0], myNodeCount}, torch::kFloat64).to(this->device);;
     // std::cout << "myF0TEvTorch sizes " << myF0TEvTorch.sizes() << std::endl;
 }
 
 void LagrangeTorch::setVolume()
 {
 #if 0
-    auto vp_vol_torch = torch::ones({myF0Nvp[0]*2+1}, ourGPUOptions);
+    auto vp_vol_torch = torch::ones({myF0Nvp[0]*2+1}, myOption);
     vp_vol_torch[0] = 0.5;
     vp_vol_torch[-1] = 0.5;
 
-    auto mu_vol_torch = torch::ones({myF0Nmu[0]+1}, ourGPUOptions);
+    auto mu_vol_torch = torch::ones({myF0Nmu[0]+1}, myOption);
     mu_vol_torch[0] = 0.5;
     mu_vol_torch[-1] = 0.5;
 
@@ -651,7 +695,7 @@ void LagrangeTorch::setVolume()
             mu_vp_vol.push_back(mu_vol[ii] * vp_vol[jj]);
         }
     }
-    auto mu_vp_vol_torch=torch::from_blob((void *)mu_vp_vol.data(), {myVxCount, myVyCount}, torch::kFloat64).to(torch::kCUDA);
+    auto mu_vp_vol_torch=torch::from_blob((void *)mu_vp_vol.data(), {myVxCount, myVyCount}, torch::kFloat64).to(this->device);
     auto f0_grid_vol = myGridVolumeTorch[mySpecies];
     myVolumeTorch = f0_grid_vol.reshape({myNodeCount,1,1}) * mu_vp_vol_torch.reshape({1,myVxCount,myVyCount});
     myVolumeTorch = at::tile(myVolumeTorch, {myPlaneCount, 1, 1});
@@ -664,13 +708,13 @@ void LagrangeTorch::setVp()
     for (int ii = -myF0Nvp[0]; ii<myF0Nvp[0]+1; ++ii) {
         myVp.push_back(ii*myF0Dvp[0]);
     }
-    myVpTorch = torch::from_blob((void *)myVp.data(), {myVyCount}, torch::kFloat64).to(torch::kCUDA);
+    myVpTorch = torch::from_blob((void *)myVp.data(), {myVyCount}, torch::kFloat64).to(this->device);
     return;
 }
 
 void LagrangeTorch::setMuQoi()
 {
-    auto mu = at::multiply(at::arange(myF0Nmu[0]+1, ourGPUOptions), at::Scalar(myF0Dsmu[0]));
+    auto mu = at::multiply(at::arange(myF0Nmu[0]+1, myOption), at::Scalar(myF0Dsmu[0]));
     myMuQoiTorch = at::pow(mu, 2);
     return;
 }
@@ -698,12 +742,12 @@ void LagrangeTorch::compute_C_qois(int iphi, at::Tensor &density, at::Tensor &up
     auto tper = f0_f * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass;
     tperp = tper.sum({1, 2})/density/mySmallElectronCharge;
     // std::cout << "Tperp compute_C_qois " << tperp.sizes() << std::endl;
-    auto en = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-upar_.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
+    auto en = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-upar_.reshape({nodes, 1})),2);
     auto T_par = ((f0_f * myVolumeTorch * en.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass));
     tpara = 2*T_par.sum({1, 2})/density/mySmallElectronCharge;
     // std::cout << "Tpara compute_C_qois " << tpara.sizes() << std::endl;
     n0 = density;
-    t0 = (2.0*tper.sum({1, 2}) + T_par.sum({1, 2}))/3.0;
+    t0 = (2.0*tperp + tpara)/3.0;
     return;
 }
 
@@ -720,6 +764,7 @@ void LagrangeTorch::compareQoIs(at::Tensor& reconData, at::Tensor& bregData)
     int iphi = 0;
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    torch::NoGradGuard no_grad;
     at::Tensor rdensity;
     at::Tensor rupara;
     at::Tensor rtperp;
