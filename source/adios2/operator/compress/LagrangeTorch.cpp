@@ -11,22 +11,28 @@
 #include "adios2/helper/adiosFunctions.h"
 #include <omp.h>
 #include <string_view>
+#ifdef USE_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
+#endif
 
 #include <gptl.h>
 #include <gptlmpi.h>
 
+#ifdef USE_CUDA
 #include <cuda.h>
 #include <cuda_runtime.h>
+#endif
 
 static void displayGPUMemory(std::string msg, int rank)
 {
+#ifdef USE_CUDA
 	CUresult uRet;
 	size_t free1;
 	size_t total1;
 	uRet = cuMemGetInfo(&free1, &total1);
 	if (uRet == CUDA_SUCCESS)
 		printf("%d: %s FreeMemory = %d Mb in TotalMeory = %d Mb\n", rank, msg.c_str(), free1 / 1024 / 1024, total1 / 1024 / 1024);
+#endif
 }
 
 // Define static class members

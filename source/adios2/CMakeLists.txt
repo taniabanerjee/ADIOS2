@@ -428,7 +428,7 @@ install(TARGETS adios2_core ${maybe_adios2_core_mpi} ${maybe_adios2_core_cuda} E
 )
 
 find_package(OpenMP REQUIRED)
-target_link_libraries(adios2_core PUBLIC OpenMP::OpenMP_CXX)
+target_link_libraries(adios2_core PRIVATE OpenMP::OpenMP_CXX)
 
 find_package(Torch REQUIRED)
 message(STATUS TORCH_LIBRARIES:"${TORCH_LIBRARIES}")

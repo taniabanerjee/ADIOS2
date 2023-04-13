@@ -28,10 +28,17 @@
 #include <iostream>
 #include <string>
 
+#ifdef USE_CUDA
 #include <c10d/FileStore.hpp>
 #include <c10d/ProcessGroupMPI.hpp>
 #include <c10d/ProcessGroupNCCL.hpp>
 #include <c10d/TCPStore.hpp>
+#else
+#include <torch/csrc/distributed/c10d/FileStore.hpp>
+#include <torch/csrc/distributed/c10d/ProcessGroupMPI.hpp>
+#include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
+#include <torch/csrc/distributed/c10d/TCPStore.hpp>
+#endif
 #include <torch/script.h> // One-stop header.
 #include <torch/torch.h>
 
@@ -49,17 +56,21 @@
 #include <string>
 #include <cstdlib>
 
+#ifdef USE_CUDA
 #include <cuda.h>
 #include <cuda_runtime.h>
+#endif
 
 static void displayGPUMemory(std::string msg, int rank)
 {
+#ifdef USE_CUDA
 	CUresult uRet;
 	size_t free1;
 	size_t total1;
 	uRet = cuMemGetInfo(&free1, &total1);
 	if (uRet == CUDA_SUCCESS)
 		printf("%d: %s FreeMemory = %d Mb in TotalMeory = %d Mb\n", rank, msg.c_str(), free1 / 1024 / 1024, total1 / 1024 / 1024);
+#endif
 }
 
 template <class T>
@@ -283,7 +294,7 @@ struct AutoencoderImpl : torch::nn::Module
 TORCH_MODULE(Autoencoder);
 
 void waitWork(std::shared_ptr<c10d::ProcessGroupNCCL> pg,
-              std::vector<c10::intrusive_ptr<c10d::ProcessGroup::Work>> works)
+              std::vector<c10::intrusive_ptr<c10d::Work>> works)
 {
     for (auto &work : works)
     {
@@ -324,7 +335,7 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
         if (options.use_ddp)
         {
             // Averaging the gradients of the parameters in all the processors
-            std::vector<c10::intrusive_ptr<::c10d::ProcessGroup::Work>> works;
+            std::vector<c10::intrusive_ptr<::c10d::Work>> works;
             for (auto &param : model->named_parameters())
             {
                 std::vector<torch::Tensor> tmp = {param.value().grad()};
@@ -734,9 +745,13 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // }
         if (my_rank == 0) displayGPUMemory("#3", my_rank);
         GPTLstart("Lagrange");
+#ifdef USE_CUDA
         c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
         optim.computeLagrangeParameters(reinterpret_cast<const double *>(tmpDecompressBuffer.data()), blockCount);
+#ifdef USE_CUDA
         c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
         // THCCachingAllocator_emptyCache();
 
         GPTLstop("Lagrange");

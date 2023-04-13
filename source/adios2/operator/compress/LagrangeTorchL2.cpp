@@ -11,23 +11,29 @@
 #include "adios2/helper/adiosFunctions.h"
 #include <omp.h>
 #include <string_view>
+#ifdef USE_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
+#endif
 
 #include <gptl.h>
 #include <gptlmpi.h>
 #include <stdio.h>
 
+#ifdef USE_CUDA
 #include <cuda.h>
 #include <cuda_runtime.h>
+#endif
 
 static void displayGPUMemory(std::string msg, int rank)
 {
+#ifdef USE_CUDA
 	CUresult uRet;
 	size_t free1;
 	size_t total1;
 	uRet = cuMemGetInfo(&free1, &total1);
 	if (uRet == CUDA_SUCCESS)
 		printf("%d: %s FreeMemory = %d Mb in TotalMeory = %d Mb\n", rank, msg.c_str(), free1 / 1024 / 1024, total1 / 1024 / 1024);
+#endif
 }
 
 
@@ -81,7 +87,7 @@ void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tenso
         // std::cout << "A_idx_T shape " << A_idx_T.sizes() << std::endl;
         auto Q = at::matmul(A_idx_T, at::inverse(at::matmul(A_idx, A_idx_T)));
         // std::cout << "Q shape " << Q.sizes() << std::endl;
-        auto U_idx = std::get<0>(torch::linalg::svd(A_idx_T, false));
+        auto U_idx = std::get<0>(torch::svd(A_idx_T, false, true));
         // std::cout << "U_idx shape " << U_idx.sizes() << std::endl;
         auto U_idx_T = at::transpose(U_idx, 0, 1);
         // std::cout << "U_idx_T shape " << U_idx_T.sizes() << std::endl;
@@ -122,7 +128,9 @@ int LagrangeTorchL2::computeLagrangeParameters(
     // std::cout << "origdatain sizes " << origdatain.sizes() << std::endl;
     // recondatain = at::clamp(recondatain, at::Scalar(100));
     int nodes = myNodeCount*myPlaneCount;
+#ifdef USE_CUDA
     c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
 
     if (my_rank == 0) displayGPUMemory("#B", my_rank);
     int breg_index = 0;
@@ -134,7 +142,9 @@ int LagrangeTorchL2::computeLagrangeParameters(
     auto D_torch = (f0_f_torch * myVolumeTorch);
     auto D_torch_sum = D_torch.sum({1, 2});
     auto aD_torch = D_torch_sum*mySmallElectronCharge;
+#ifdef USE_CUDA
     c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
 
     if (my_rank == 0) displayGPUMemory("#C", my_rank);
     // std::vector<double> U(nodes, 0);
@@ -142,7 +152,9 @@ int LagrangeTorchL2::computeLagrangeParameters(
     auto U_torch = (f0_f_torch * myVolumeTorch * myVthTorch.reshape({nodes,1,1}) * myVpTorch.reshape({1, 1, myVyCount}));
     auto U_torch_sum = U_torch.sum({1, 2})/D_torch_sum;
     auto Tperp_torch = ((f0_f_torch * myVolumeTorch * 0.5 * myMuQoiTorch.reshape({1,myVxCount,1}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1,2}))/D_torch_sum/mySmallElectronCharge;
+#ifdef USE_CUDA
     c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
 
     if (my_rank == 0) displayGPUMemory("#D", my_rank);
     std::vector<double> Tpara(nodes, 0);
@@ -150,7 +162,9 @@ int LagrangeTorchL2::computeLagrangeParameters(
     auto en_torch = 0.5*at::pow((myVpTorch.reshape({1, myVyCount})-U_torch_sum.reshape({nodes, 1})/myVthTorch.reshape({nodes, 1})),2);
     auto Tpara_torch = 2*((f0_f_torch * myVolumeTorch * en_torch.reshape({nodes, 1, myVyCount}) * myVth2Torch.reshape({nodes,1,1}) * myParticleMass).sum({1, 2}))/D_torch_sum/mySmallElectronCharge;
     auto Rpara_torch = mySmallElectronCharge*Tpara_torch + myVth2Torch * myParticleMass * at::pow((U_torch_sum/myVthTorch), 2);
+#ifdef USE_CUDA
     c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
 
     if (my_rank == 0) displayGPUMemory("#E", my_rank);
     auto b_constant = torch::zeros({4,nodes}, this->myOption);
