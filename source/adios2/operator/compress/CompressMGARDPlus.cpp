@@ -10,8 +10,10 @@
 
 #include "CompressMGARD.h"
 #include "CompressMGARDPlus.h"
+#ifdef USE_MGARDPLUS_EXTRA
 #include "CompressSZ.h"
 #include "CompressZFP.h"
+#endif
 #include "LagrangeTorch.hpp"
 #include "LagrangeTorchL2.hpp"
 #include "adios2/core/Engine.h"
@@ -765,6 +767,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // printf("%d MGARD compression org, compressed, ratio: %g %g %g\n", my_rank, nbytes_org, nbytes_compressed,
         // nbytes_org/nbytes_compressed);
     }
+#ifdef USE_MGARDPLUS_EXTRA
     else if (compression_method == 1)
     {
         CompressSZ sz(m_Parameters);
@@ -789,6 +792,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstop("Lagrange");
         bufferOutOffset += szBufferSize;
     }
+#endif
+#ifdef USE_MGARDPLUS_EXTRA
     else if (compression_method == 2)
     {
         m_Parameters["prec"] = "";
@@ -814,6 +819,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstop("Lagrange");
         bufferOutOffset += zfpBufferSize;
     }
+#endif
     else if (compression_method == 3)
     {
         // std::cout << "dim:" << blockStart.size();
