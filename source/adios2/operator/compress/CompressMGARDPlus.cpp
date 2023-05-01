@@ -573,39 +573,11 @@ double CompressMGARDPlus::getPDError(double eb, at::Tensor &orig, at::Tensor &de
     std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
     // std::cout << "Block Start " << blockStart << " " << blockCount << std::endl;
     size_t mgardBufferSize = mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut);
-    std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(blockCount, helper::GetDataTypeSize(type)));
-    mgard.InverseOperate(bufferOut, mgardBufferSize, tmpDecompressBuffer.data());
-    // apply MGARD operate.
     auto decompressed_residual_data =
-        torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], blockCount[2], blockCount[3]},
+        torch::from_blob((void *)diff_data.data(), {blockCount[0], blockCount[1], blockCount[2], blockCount[3]},
                          torch::kFloat64);
-    // pderror = at::sqrt(at::divide(at::pow((orig-decode-decompressed_residual_data),2).sum(), at::Scalar(perm_diff.numel()))).item().to<double>()/perm_diff.max().item().to<double>();
     auto diff = orig-decode-decompressed_residual_data;
     pderror = at::max(at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(vx*vy))), at::Scalar(pd_omax_b - pd_omin_b))).item().to<double>();
-#if 0
-    // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
-    if (resNodes > data_ceil)
-    {
-        recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
-    }
-    else
-    {
-        using namespace torch::indexing;
-        auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
-        // std::cout << "res sizes 1 " << res.sizes() << std::endl;
-        res.index_put_({Slice(None), nrmse_index[0], Slice(None), Slice(None)}, decompressed_residual_data);
-        // std::cout << "res sizes 2 " << res.sizes() << std::endl;
-        recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + res;
-    }
-    recon_data = recon_data.contiguous().cpu();
-    std::vector<double> recon_vec(recon_data.data_ptr<double>(),
-                                  recon_data.data_ptr<double>() + recon_data.numel());
-
-    // apply post processing
-    // recon_vec shape: (1, nmesh, nx, ny)
-    // // Return PD
-    double pderror = optim.computeLagrangeParametersE(recon_vec.data(), blockCount);
-#endif
     return pderror;
 }
 
@@ -653,8 +625,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
     // Instantiate LagrangeTorch
     // LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
-    // LagrangeTorchL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
-    LagrangeOptimizerL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    LagrangeTorchL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    // LagrangeOptimizerL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -1145,7 +1117,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
         CompressMGARD mgard(m_Parameters);
         size_t mgardBufferSize =
-            // mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, bC, type, bufferOut + offset);
             mgard.Operate(reinterpret_cast<char *>(diff_data.data()), {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut + offset);
         std::cout << my_rank << " - mgard size:" << mgardBufferSize << std::endl;
         // std::cout << "came here 2" << std::endl;
@@ -1156,21 +1127,9 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         myfile.close();
         GPTLstop("mgard");
 
-        GPTLstart("mgard-decomp");
-        PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
-
-        // use MGARD decompress
-        std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(bC, helper::GetDataTypeSize(type)));
-        mgard.InverseOperate(bufferOut + offset, mgardBufferSize, tmpDecompressBuffer.data());
-        // std::cout << "came here 3" << std::endl;
-        // std::cout << "mgard inverse is ready" << std::endl;
-        offset += mgardBufferSize;
-        GPTLstop("mgard-decomp");
-
         // reconstruct data from the residuals
         auto decompressed_residual_data =
-            // torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], bC[2], blockCount[3]},
-            torch::from_blob((void *)tmpDecompressBuffer.data(), {1, blockCount[1], bC[2], blockCount[3]},
+            torch::from_blob((void *)diff_data.data(), {1, blockCount[1], bC[2], blockCount[3]},
                              torch::kFloat64)
                 .permute({0, 2, 1, 3});
         // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
@@ -1253,267 +1212,6 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
         bufferOutOffset += offset;
     }
-#if 0
-    else if (compression_method == 4)
-    {
-        MPI_Barrier(MPI_COMM_WORLD);
-        double start = MPI_Wtime();
-        const char *mname = m_Parameters["ae"].c_str();
-        // std::cout << "Module name:" << mname;
-        torch::jit::script::Module module;
-        try
-        {
-            GPTLstart("load model");
-            // Deserialize the ScriptModule from a file using torch::jit::load().
-            module = torch::jit::load(mname);
-            GPTLstop("load model");
-        }
-        catch (const c10::Error &e)
-        {
-            std::cerr << "error loading the model\n";
-            return -1;
-        }
-
-        int latent_dim = atoi(get_param(m_Parameters, "latent_dim", "5").c_str());
-        ;
-        GPTLstart("prep");
-        auto ds = CustomDataset((double *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]});
-        auto dataset = ds.map(torch::data::transforms::Stack<>());
-        const size_t dataset_size = dataset.size().value();
-        auto loader = torch::data::make_data_loader<torch::data::samplers::SequentialSampler>(std::move(dataset),
-                                                                                              options.batch_size);
-        GPTLstop("prep");
-
-        GPTLstart("encode");
-        std::vector<torch::Tensor> encode_vector;
-        for (auto &batch : *loader)
-        {
-            auto data = batch.data.to(options.device);
-            auto _encode = module.run_method("encode", data).toTensor();
-            // std::cout << "_encode.sizes = " << _encode.sizes() << std::endl;
-            _encode = _encode.to(torch::kCPU);
-            encode_vector.push_back(_encode);
-        }
-        // encodes shape is (nmesh, latent_dim), where nmesh = number of total mesh nodes this process has
-        auto encode = torch::cat(encode_vector, 0);
-        GPTLstop("encode");
-        // std::cout << "encode.sizes = " << encode.sizes() << std::endl;
-
-        // Kmean
-        int offset = sizeof(int);
-        int numObjs = encode.size(0);
-        *reinterpret_cast<int *>(bufferOut) = latent_dim;
-        GPTLstart("kmean");
-        for (int i = 0; i < latent_dim; ++i)
-        {
-            // subselect each column from encode
-            float *pq_input = encode.slice(1, i, i + 1).contiguous().data_ptr<float>();
-            float pq_threshold = 0.0001;
-            int numClusters = 256;
-            float *clusters = new float[numClusters];
-            initClusterCenters(clusters, pq_input, numObjs, numClusters);
-            int *membership = new int[numObjs];
-            memset(membership, 0, numObjs * sizeof(int));
-            kmeans_float(pq_input, numObjs, numClusters, pq_threshold, membership, clusters);
-            // write PQ table
-            for (int j = 0; j < numClusters; ++j)
-                *reinterpret_cast<float *>(bufferOut + offset + j * sizeof(float)) = clusters[j];
-            offset += numClusters * sizeof(float);
-            // write indexes to bufferOutput
-            for (int j = 0; j < numObjs; ++j)
-                *reinterpret_cast<float *>(bufferOut + offset + j * sizeof(int)) = membership[j];
-            offset += numObjs * sizeof(int);
-            // write to decode input
-
-            // We update encode tensor directly
-            for (int j = 0; j < numObjs; ++j)
-                encode[j, i] = clusters[membership[j]];
-        }
-        // std::cout << "kmean is done " << std::endl;
-        GPTLstop("kmean");
-
-        // Decode
-        GPTLstart("decode");
-        std::vector<torch::Tensor> decode_vector;
-        for (int i = 0; i < numObjs; i += options.batch_size)
-        {
-            auto batch = encode.slice(0, i, i + options.batch_size < numObjs ? i + options.batch_size : numObjs);
-            batch = batch.to(options.device);
-            auto _decode = module.run_method("decode", batch).toTensor();
-            _decode = _decode.to(torch::kCPU);
-            decode_vector.push_back(_decode);
-        }
-        // All of decoded data: shape (nmesh, nx, ny)
-        auto decode = torch::cat(decode_vector, 0);
-        decode = decode.to(torch::kFloat64).reshape({-1, ds.nx, ds.ny});
-        // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
-        GPTLstop("decode");
-
-        // Un-normalize
-        GPTLstart("residual");
-        auto mu = ds.mu;
-        auto sig = ds.sig;
-        // std::cout << "mu.sizes = " << mu.sizes() << std::endl;
-        // std::cout << "sig.sizes = " << sig.sizes() << std::endl;
-        decode = decode * sig.reshape({-1, 1, 1});
-        decode = decode + mu.reshape({-1, 1, 1});
-        // std::cout << "decode.sizes = " << decode.sizes() << std::endl;
-
-        // forg and docode shape: (nmesh, nx, ny)
-        auto diff = ds.forg - decode;
-        // std::cout << "forg min,max = " << ds.forg.min().item<double>() << " " << ds.forg.max().item<double>()
-        // << std::endl;
-        // std::cout << "decode min,max = " << decode.min().item<double>() << " " << decode.max().item<double>()
-        // << std::endl;
-        // std::cout << "diff min,max = " << diff.min().item<double>() << " " << diff.max().item<double>() << std::endl;
-        // std::cout << "orig sizes = " << ds.forg.sizes() << " " << "decode sizes = " << decode.sizes() << std::endl;
-        double pd_max_b, pd_max_a;
-        double pd_min_b, pd_min_a;
-        double pd_omin_b;
-        double pd_omax_b;
-        pd_max_a = pd_max_b = ds.forg.max().item().to<double>();
-        pd_min_a = pd_min_b = ds.forg.min().item().to<double>();
-        MPI_Allreduce(&pd_min_b, &pd_omin_b, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
-        MPI_Allreduce(&pd_max_b, &pd_omax_b, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-        auto nrmse = at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(optim.getVxCount() * optim.getVyCount()))), at::Scalar(pd_omax_b - pd_omin_b));
-        auto nrmse_index = at::where((nrmse > ae_thresh));
-        int resNodes = nrmse_index[0].sizes()[0];
-        at::Tensor perm_diff;
-        at::Tensor recon_data;
-        int data_ceil = int(optim.getNodeCount() * 0.94);
-        Dims bC = blockCount;
-        if (resNodes > data_ceil)
-        {
-            perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
-            bC[2] = optim.getNodeCount();
-        }
-        else if (resNodes > data_ceil) {
-            recon_data = decode.reshape({1, -1, ds.nx, ds.ny});
-            perm_diff = diff.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
-            // perm_diff is never used later
-        }
-        else
-        {
-            if (resNodes < 4) {
-                std::vector<long> nrmse_vec(nrmse_index[0].data_ptr<long>(),
-                             nrmse_index[0].data_ptr<long>() + nrmse_index[0].numel());
-                // std::cout << "nrmse values torch " << nrmse_index[0] << std::endl;
-                // std::cout << "nrmse values vec " << nrmse_vec << std::endl;
-                auto nrmse_sorted_index = at::argsort(nrmse);
-                // std::cout << "nrmse sorted index " << nrmse_sorted_index << std::endl;
-                while (nrmse_vec.size() < 4) {
-                    for (int ii=0; ii<optim.getNodeCount(); ++ii) {
-                        int value = nrmse_sorted_index[ii].item().to<long>();
-                        if (std::find(nrmse_vec.begin(), nrmse_vec.end(), value) == nrmse_vec.end()){
-                            nrmse_vec.push_back(value);
-                            // std::cout << "found value " << value << std::endl;
-                            break;
-                        }
-                    }
-                }
-                nrmse_index[0] = torch::from_blob((void *)nrmse_vec.data(), {nrmse_vec.size()}, torch::kInt64).to(options.device);
-                resNodes = nrmse_index[0].sizes()[0];
-            }
-            using namespace torch::indexing;
-            auto diff_reduced = diff.index({nrmse_index[0], Slice(None), Slice(None)});
-            // std::cout << "nrmse index size " << nrmse_index[0].sizes() << " total nodes " << blockCount[2] << std::endl;
-            // std::endl; if (my_rank == 0) { std::cout << "nrmse indexes " << nrmse_index << std::endl; std::cout <<
-            // "nrmse values " << nrmse.index({nrmse_index[0]}) << std::endl; std::cout << "diff_reduced sizes " <<
-            // diff_reduced.sizes() << std::endl;
-            // }
-            perm_diff = diff_reduced.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3}).contiguous().cpu();
-            bC[2] = nrmse_index[0].sizes()[0];
-        }
-        // use MGARD to compress the residuals
-        std::vector<double> diff_data(perm_diff.data_ptr<double>(), perm_diff.data_ptr<double>() + perm_diff.numel());
-
-        // reserve space in output buffer to store MGARD buffer size
-        size_t offsetForDecompresedData = offset;
-        offset += sizeof(size_t);
-        // std::cout << "residual data is ready" << std::endl;
-        GPTLstop("residual");
-
-        if (resNodes > 0) {
-        // std::cout << "block Count orig " << blockCount << std::endl;
-        // std::cout << "block Count reduced " << bC << std::endl;
-        // apply MGARD operate.
-        GPTLstart("mgard");
-        // Make sure that the shape of the input and the output of MGARD is (1, nmesh, nx, ny)
-        CompressMGARD mgard(m_Parameters);
-        size_t mgardBufferSize =
-            mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, bC, type, bufferOut + offset);
-        std::cout << my_rank << " - mgard size:" << mgardBufferSize << " :num images " << bC[2] << std::endl;
-        GPTLstop("mgard");
-
-        GPTLstart("mgard-decomp");
-        PutParameter(bufferOut, offsetForDecompresedData, mgardBufferSize);
-
-        // use MGARD decompress
-        std::vector<char> tmpDecompressBuffer(helper::GetTotalSize(bC, helper::GetDataTypeSize(type)));
-        mgard.InverseOperate(bufferOut + offset, mgardBufferSize, tmpDecompressBuffer.data());
-        // std::cout << "mgard inverse is ready" << std::endl;
-        offset += mgardBufferSize;
-        GPTLstop("mgard-decomp");
-
-        // reconstruct data from the residuals
-        auto decompressed_residual_data =
-            torch::from_blob((void *)tmpDecompressBuffer.data(), {blockCount[0], blockCount[1], bC[2], blockCount[3]},
-                             torch::kFloat64).permute({0, 2, 1, 3});
-        // std::cout << "decompressed sizes " << decompressed_residual_data.sizes() << std::endl;
-        if (resNodes > data_ceil)
-        {
-            recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + decompressed_residual_data;
-        }
-        else
-        {
-            using namespace torch::indexing;
-            auto res = at::zeros({blockCount[0], blockCount[2], blockCount[1], blockCount[3]}, torch::kFloat64);
-            // std::cout << "res sizes 1 " << res.sizes() << std::endl;
-            res.index_put_({Slice(None), nrmse_index[0], Slice(None), Slice(None)}, decompressed_residual_data);
-            // std::cout << "res sizes 2 " << res.sizes() << std::endl;
-            recon_data = decode.reshape({1, -1, ds.nx, ds.ny}) + res;
-        }
-        // std::cout << "decode sizes " << decode.reshape({1, -1, ds.nx, ds.ny}).sizes() << std::endl;
-        recon_data = recon_data.permute({0, 2, 1, 3});
-        // auto recon_data = decode + diff;
-        // recon_data = recon_data.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3});
-        // std::cout << "recon data sizes " << recon_data.sizes() << std::endl;
-#if UF_DEBUG
-        auto recon_data_interm = decode.reshape({1, -1, ds.nx, ds.ny}) + diff;
-        recon_data_interm = recon_data_interm.contiguous().cpu();
-        auto datain_t = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]},
-                                         torch::kFloat64)
-                            .to(torch::kCPU)
-                            .permute({0, 2, 1, 3});
-        double pd_b = at::pow((datain_t - recon_data_interm), 2).sum().item().to<double>();
-        double pd_size_b, pd_size_a;
-        pd_max_a = pd_max_b = datain_t.max().item().to<double>();
-        pd_min_a = pd_min_b = datain_t.min().item().to<double>();
-        pd_size_a = pd_size_b = recon_data_interm.numel();
-        // get total error for recon
-        double pd_e_b;
-        double pd_s_b;
-        MPI_Allreduce(&pd_b, &pd_e_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        if (my_rank == 0)
-        {
-            std::cout << " PD error: " << sqrt(pd_e_b / pd_s_b) / (pd_omax_b - pd_omin_b) << std::endl;
-        }
-#endif
-        }
-        GPTLstart("Lagrange");
-        // recon_data shape (1, nmesh, nx, ny) and make it contiguous in memory
-        recon_data = recon_data.contiguous().cpu();
-        std::vector<double> recon_vec(recon_data.data_ptr<double>(),
-                                      recon_data.data_ptr<double>() + recon_data.numel());
-
-        // apply post processing
-        // recon_vec shape: (1, nmesh, nx, ny)
-        optim.computeLagrangeParameters(recon_vec.data(), blockCount);
-        GPTLstop("Lagrange");
-        bufferOutOffset += offset;
-    }
-#endif
     GPTLstop("total");
 
     // printf ("My compress rank %d, MGARD size %zu\n", my_rank, mgardBufferSize);
@@ -1543,11 +1241,11 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
     // for your second double number and so on
 #endif
     if (my_rank == 0) displayGPUMemory("#5", my_rank);
-    if (bufferVersion == 1)
-    {
-        size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["prec"].c_str());
-        bufferOutOffset += ppsize;
-    }
+    // if (bufferVersion == 1)
+    // {
+        // size_t ppsize = optim.putResult(bufferOut, bufferOutOffset, m_Parameters["prec"].c_str());
+        // bufferOutOffset += ppsize;
+    // }
 
 #ifdef UF_DEBUG
     int arraySize =

@@ -111,7 +111,7 @@ void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tenso
     outputs = outputs.reshape({1, nodes, myVxCount, myVyCount});
     // std::cout << "outputs shape 2" << outputs.sizes() << std::endl;
     // std::cout << "recondatain shape " << recondatain.sizes() << " outputs shape " << outputs.sizes() << std::endl;
-    // compareQoIs(recondatain, outputs);
+    compareQoIs(recondatain, outputs);
 }
 
 int LagrangeTorchL2::computeLagrangeParameters(
@@ -126,9 +126,9 @@ int LagrangeTorchL2::computeLagrangeParameters(
     if (my_rank == 0) displayGPUMemory("#A", my_rank);
     GPTLstart("compute_lambdas");
     int ii, i, j, k, l, m;
-    // auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
-                  // .permute({0, 2, 1, 3});
-    // std::cout << "recondatain sizes " << recondatain.sizes() << std::endl;
+    auto recondatain = torch::from_blob((void *)reconData, {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]}, torch::kFloat64).to(torch::kCUDA)
+                  .permute({0, 2, 1, 3});
+    std::cout << "recondatain sizes " << recondatain.sizes() << std::endl;
     auto origdatain = myDataInTorch.reshape({1, blockCount[0]*blockCount[2], blockCount[1], blockCount[3]});
     // std::cout << "myDataInTorch sizes " << myDataInTorch.sizes() << std::endl;
     // std::cout << "origdatain sizes " << origdatain.sizes() << std::endl;
@@ -179,8 +179,8 @@ int LagrangeTorchL2::computeLagrangeParameters(
     }
     myLagrangesTorch = b_constant.detach().clone();
     GPTLstop("compute_lambdas");
-    // auto outputs = torch::zeros({nodes, myVxCount, myVyCount}, this->myOption);
-    // reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant, outputs);
+    auto outputs = torch::zeros({nodes, myVxCount, myVyCount}, this->myOption);
+    reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant, outputs);
     return 0;
 }
 

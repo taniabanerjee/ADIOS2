@@ -249,23 +249,24 @@ size_t LagrangeOptimizerL2::putLagrangeParameters(char* &bufferOut, size_t &buff
 {
     int i, count = 0;
     int numObjs = myPlaneCount*myNodeCount;
-    if (!strcmp(precision, "single"))
-    {
-        for (i=0; i<numObjs*4; i++) {
-            *reinterpret_cast<float*>(
-                  bufferOut+bufferOutOffset+(count++)*sizeof(float)) =
-                      myLagranges[i];
-        }
-        return count * sizeof(float);
-    }
-    else {
-        for (i=0; i<numObjs*4; i++) {
-            *reinterpret_cast<double*>(
-                  bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
-                      myLagranges[i];
-        }
-        return count * sizeof(double);
-    }
+    // commented out the following lines temporarily for compression_method=3
+//     if (!strcmp(precision, "single"))
+//     {
+//         for (i=0; i<numObjs*4; i++) {
+//             *reinterpret_cast<float*>(
+//                   bufferOut+bufferOutOffset+(count++)*sizeof(float)) =
+//                       myLagranges[i];
+//         }
+//         return count * sizeof(float);
+//     }
+//     else {
+//         for (i=0; i<numObjs*4; i++) {
+//             *reinterpret_cast<double*>(
+//                   bufferOut+bufferOutOffset+(count++)*sizeof(double)) =
+//                       myLagranges[i];
+//         }
+//         return count * sizeof(double);
+//     }
 }
 
 size_t LagrangeOptimizerL2::putResult(char* &bufferOut, size_t &bufferOutOffset, const char* precision)
