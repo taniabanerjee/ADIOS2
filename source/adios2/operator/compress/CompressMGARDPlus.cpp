@@ -529,17 +529,19 @@ at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, ch
 {
     // double targetE = 0.09;
     double accuracy = 0.001;
-    double e = getPDError(uppereb, orig, decode, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
+    auto orig_gpu = orig.to(torch::kCUDA);
+    auto decode_gpu = decode.to(torch::kCUDA);
+    double e = getPDError(uppereb, orig_gpu, decode_gpu, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
     if (e < targetE) {
         std::cout << "Upper error bound " << uppereb << " error " << e << std::endl;
         return uppereb;
     }
-    e = getPDError(lowereb, orig, decode, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
+    e = getPDError(lowereb, orig_gpu, decode_gpu, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
     if (e > targetE) {
         std::cout << "Lower error bound " << lowereb << " error " << e << std::endl;
         return lowereb;
     }
-    int partitions = 10000;
+    int partitions = int (uppereb/lowereb);
     double error[partitions];
     int i;
     error[0] = lowereb;
@@ -548,7 +550,7 @@ at::Tensor &perm_diff, Dims blockStart, Dims blockCount, const DataType type, ch
     for (i=1; i<partitions-1; ++i) error[i] = lowereb + i*uppereb/partitions;
     while (low <= high) {
         mid = low + (high-low)/2;
-        e = getPDError(error[mid], orig, decode, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
+        e = getPDError(error[mid], orig_gpu, decode_gpu, perm_diff, blockStart, blockCount, type, bufferOut, vx, vy, pd_omax_b, pd_omin_b);
         // std::cout << "Mid " << mid << " error bound " << error[mid] << " error " << e << std::endl;
         if (e < targetE) {
             low = mid + 1;
@@ -575,7 +577,7 @@ double CompressMGARDPlus::getPDError(double eb, at::Tensor &orig, at::Tensor &de
     size_t mgardBufferSize = mgard.Operate(reinterpret_cast<char *>(diff_data.data()), blockStart, blockCount, type, bufferOut);
     auto decompressed_residual_data =
         torch::from_blob((void *)diff_data.data(), {blockCount[0], blockCount[1], blockCount[2], blockCount[3]},
-                         torch::kFloat64);
+                         torch::kFloat64).to(torch::kCUDA);
     auto diff = orig-decode-decompressed_residual_data;
     pderror = at::max(at::divide(at::sqrt(at::divide(at::pow(diff, 2).sum({1, 2}),at::Scalar(vx*vy))), at::Scalar(pd_omax_b - pd_omin_b))).item().to<double>();
     return pderror;
@@ -625,8 +627,8 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
 
     // Instantiate LagrangeTorch
     // LagrangeTorch optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
-    LagrangeTorchL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
-    // LagrangeOptimizerL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    // LagrangeTorchL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
+    LagrangeOptimizerL2 optim(m_Parameters["species"].c_str(), m_Parameters["prec"].c_str(), options.device);
     // Read ADIOS2 files end, use data for your algorithm
     optim.computeParamsAndQoIs(m_Parameters["meshfile"], blockStart, blockCount,
                                reinterpret_cast<const double *>(dataIn));
@@ -1108,9 +1110,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         if (resNodes > 0) {
         GPTLstart("find eb");
         if (leb > 0 && ueb > 0) {
-            // std::cout << "Rogue images " << rogue_images.sizes() << " Decoded images " << decoded_images.sizes() << " Diff dims " << perm_diff.sizes() << std::endl;
             m_Parameters["tolerance"] = std::to_string(binarySearchEB(leb, ueb, rogue_images, decoded_images, perm_diff, {0, 0, 0, 0}, {1, bC[1], bC[2], bC[3]}, type, bufferOut+offset, vx, vy, pd_omax_b, pd_omin_b, target_e)).c_str();
-            // std::cout << "came here 1" << std::endl;
         }
         GPTLstop("find eb");
         GPTLstart("mgard");
@@ -1154,46 +1154,18 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // auto recon_data = decode + diff;
         // recon_data = recon_data.reshape({1, -1, ds.nx, ds.ny}).permute({0, 2, 1, 3});
         // std::cout << "recon data sizes " << recon_data.sizes() << std::endl;
-#if UF_DEBUG
-        auto recon_data_interm = decode.reshape({1, -1, ds.nx, ds.ny}) + diff;
-        recon_data_interm = recon_data_interm.contiguous().cpu();
-        auto datain_t = torch::from_blob((void *)dataIn, {blockCount[0], blockCount[1], blockCount[2], blockCount[3]},
-                                         torch::kFloat64)
-                            .to(torch::kCPU)
-                            .permute({0, 2, 1, 3});
-        double pd_b = at::pow((datain_t - recon_data_interm), 2).sum().item().to<double>();
-        double pd_size_b, pd_size_a;
-        pd_max_a = pd_max_b = datain_t.max().item().to<double>();
-        pd_min_a = pd_min_b = datain_t.min().item().to<double>();
-        pd_size_a = pd_size_b = recon_data_interm.numel();
-        // get total error for recon
-        double pd_e_b;
-        double pd_s_b;
-        MPI_Allreduce(&pd_b, &pd_e_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        MPI_Allreduce(&pd_size_b, &pd_s_b, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        if (my_rank == 0)
-        {
-            std::cout << " PD error: " << sqrt(pd_e_b / pd_s_b) / (pd_omax_b - pd_omin_b) << std::endl;
-        }
-#endif
-        GPTLstart("Lagrange");
         // recon_data shape (1, nmesh, nx, ny) and make it contiguous in memory
+        GPTLstart("Lagrange");
         recon_data = recon_data.contiguous().cpu();
         std::vector<double> recon_vec(recon_data.data_ptr<double>(),
                                       recon_data.data_ptr<double>() + recon_data.numel());
 
-        // apply post processing
-        // recon_vec shape: (1, nmesh, nx, ny)
-        // int unconvsize = optim.computeLagrangeParameters(recon_vec.data(), blockCount);
+        c10::cuda::CUDACachingAllocator::emptyCache();
         int unconvsize = optim.computeLagrangeParameters(recon_vec.data(), {1, blockCount[1], blockCount[0]*blockCount[2], blockCount[3]});
         // std::cout << "came here 5" << std::endl;
+        c10::cuda::CUDACachingAllocator::emptyCache();
         GPTLstop("Lagrange");
         offset += unconvsize;
-        std::ofstream myfile;
-        std::string fname = "unconv-size-iter_" + std::to_string(my_rank) + ".txt";
-        myfile.open(fname.c_str());
-        myfile << my_rank << " - unconv size:" << unconvsize << std::endl;
-        myfile.close();
         bufferOutOffset += offset;
 
         // for (auto &batch : *loader)

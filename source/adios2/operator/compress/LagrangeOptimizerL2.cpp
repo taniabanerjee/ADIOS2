@@ -123,9 +123,9 @@ int LagrangeOptimizerL2::computeLagrangeParameters(
 {
     int my_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-    double start, end, start1;
-    MPI_Barrier(MPI_COMM_WORLD);
-    start = MPI_Wtime();
+    // double start, end, start1;
+    // MPI_Barrier(MPI_COMM_WORLD);
+    // start = MPI_Wtime();
     int ii, i, j, k, l, m;
     GPTLstart("compute_lambdas");
 #if 0

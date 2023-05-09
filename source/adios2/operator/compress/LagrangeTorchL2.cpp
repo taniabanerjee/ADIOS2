@@ -179,8 +179,8 @@ int LagrangeTorchL2::computeLagrangeParameters(
     }
     myLagrangesTorch = b_constant.detach().clone();
     GPTLstop("compute_lambdas");
-    auto outputs = torch::zeros({nodes, myVxCount, myVyCount}, this->myOption);
-    reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant, outputs);
+    // auto outputs = torch::zeros({nodes, myVxCount, myVyCount}, this->myOption);
+    // reconstructAndCompareErrors(nodes, iphi, recondatain, b_constant, outputs);
     return 0;
 }
 
