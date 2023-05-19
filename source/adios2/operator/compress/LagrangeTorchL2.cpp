@@ -88,7 +88,7 @@ void LagrangeTorchL2::reconstructAndCompareErrors(int nodes, int iphi, at::Tenso
         GPTLstop("Qcomp");
         // std::cout << "Q shape " << Q.sizes() << std::endl;
         GPTLstart("Ucomp");
-        auto U_idx = std::get<0>(torch::linalg::svd(A_idx_T, false));
+        auto U_idx = std::get<0>(torch::svd(A_idx_T, false, true));
         // std::cout << "U_idx shape " << U_idx.sizes() << std::endl;
         GPTLstop("Ucomp");
         GPTLstart("compute UUT");

@@ -10,8 +10,10 @@
 
 #include "CompressMGARD.h"
 #include "CompressMGARDPlus.h"
+#ifdef USE_MGARDPLUS_EXTRA
 #include "CompressSZ.h"
 #include "CompressZFP.h"
+#endif
 #include "LagrangeTorchL2.hpp"
 #include "LagrangeOptimizerL2.hpp"
 #include "adios2/core/Engine.h"
@@ -28,10 +30,17 @@
 #include <iostream>
 #include <string>
 
+#ifdef USE_TORCH111
 #include <c10d/FileStore.hpp>
 #include <c10d/ProcessGroupMPI.hpp>
 #include <c10d/ProcessGroupNCCL.hpp>
 #include <c10d/TCPStore.hpp>
+#else
+#include <torch/csrc/distributed/c10d/FileStore.hpp>
+#include <torch/csrc/distributed/c10d/ProcessGroupMPI.hpp>
+#include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
+#include <torch/csrc/distributed/c10d/TCPStore.hpp>
+#endif
 #include <torch/script.h> // One-stop header.
 #include <torch/torch.h>
 
@@ -178,7 +187,8 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             // TODO: hard-coded device
             // at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
             at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64);
-            auto idx = at::randint(8, {dims[2]}, opt);
+            auto idx = at::randint(dims[0], {dims[2]}, opt);
+            std::cout << "idx " << idx << std::endl;
             const at::Scalar start = 0;
             const at::Scalar last = dims[2]-1;
 
@@ -191,7 +201,7 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             using namespace torch::indexing;
             if (paradigm == 7) {
                 fdata = t.index({combine_idx, Slice(None), Slice(None)});
-                // std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
+                std::cout << "fdata " << fdata.sizes() << " " << paradigm << " " << dims[0] << std::endl;
             }
             else {
                 auto randidx = at::randperm(at::size(combine_idx, 0));
@@ -283,7 +293,7 @@ struct AutoencoderImpl : torch::nn::Module
 TORCH_MODULE(Autoencoder);
 
 void waitWork(std::shared_ptr<c10d::ProcessGroupNCCL> pg,
-              std::vector<c10::intrusive_ptr<c10d::ProcessGroup::Work>> works)
+              std::vector<c10::intrusive_ptr<c10d::Work>> works)
 {
     for (auto &work : works)
     {
@@ -324,7 +334,7 @@ void train(std::shared_ptr<c10d::ProcessGroupNCCL> pg, Autoencoder &model, DataL
         if (options.use_ddp)
         {
             // Averaging the gradients of the parameters in all the processors
-            std::vector<c10::intrusive_ptr<::c10d::ProcessGroup::Work>> works;
+            std::vector<c10::intrusive_ptr<::c10d::Work>> works;
             for (auto &param : model->named_parameters())
             {
                 std::vector<torch::Tensor> tmp = {param.value().grad()};
@@ -729,6 +739,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         // printf("%d MGARD compression org, compressed, ratio: %g %g %g\n", my_rank, nbytes_org, nbytes_compressed,
         // nbytes_org/nbytes_compressed);
     }
+#ifdef USE_MGARDPLUS_EXTRA
     else if (compression_method == 1)
     {
         CompressSZ sz(m_Parameters);
@@ -778,6 +789,7 @@ size_t CompressMGARDPlus::Operate(const char *dataIn, const Dims &blockStart, co
         GPTLstop("Lagrange");
         bufferOutOffset += zfpBufferSize;
     }
+#endif
     else if (compression_method == 3)
     {
         // std::cout << "dim:" << blockStart.size();
