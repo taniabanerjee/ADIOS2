@@ -188,7 +188,6 @@ class CustomDataset : public torch::data::datasets::Dataset<CustomDataset>
             // at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA);
             at::TensorOptions opt = torch::TensorOptions().dtype(torch::kInt64);
             auto idx = at::randint(dims[0], {dims[2]}, opt);
-            std::cout << "idx " << idx << std::endl;
             const at::Scalar start = 0;
             const at::Scalar last = dims[2]-1;
 
